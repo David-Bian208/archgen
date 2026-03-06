@@ -110,7 +110,7 @@ async def analyze_behavior(request: dict[str, str]):
     logger.info(f"收到分析请求：{description[:100]}...")
 
     try:
-        agent = get_agent()
+        agent = get_recorder_agent()
         result = agent.analyze(description)
 
         response = {
