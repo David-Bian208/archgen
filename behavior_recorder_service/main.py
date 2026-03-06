@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from api.endpoints import router as api_router
+from api.endpoints_v2 import router as api_v2_router
+from api.endpoints_v3 import router as api_v3_router
 from app.config import get_config
 
 # 配置日志
@@ -25,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="Behavior Recorder Service",
-    description="自闭症干预辅助系统 - 行为记录员微服务",
-    version="1.0.0",
+    title="Behavior Recorder Service V3.5",
+    description="自闭症干预辅助系统 - 决策支持系统",
+    version="3.5.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -50,7 +52,9 @@ else:
     logger.info("前端静态文件未找到，仅 API 可用")
 
 # 注册 API 路由
-app.include_router(api_router, prefix="/api")
+app.include_router(api_router, prefix="/api")  # V1.1 兼容
+app.include_router(api_v2_router, prefix="/api/v2")  # V2.0 引导式
+app.include_router(api_v3_router, prefix="/api/v3")  # V3.5 决策支持系统
 
 logger.info("FastAPI 应用初始化完成")
 

@@ -1,330 +1,173 @@
 """
-干预策略分析师 Agent
-基于 ABC 分析和功能假设，生成个性化的干预策略计划
-
-版本：V3.5
+干预规划器 V3.5
+基于诊断结果，生成个性化的阶梯式干预方案
 """
 
-import json
 import logging
-from typing import TypedDict, List
-from datetime import datetime
+from typing import Optional, Dict, Any
 
-from app.llm.base import LLMClient
+from app.knowledge import get_knowledge_base
 
 logger = logging.getLogger(__name__)
 
 
-class InterventionStrategy(TypedDict):
-    """干预策略结果类型"""
-    function: str
-    antecedent_strategies: List[str]
-    behavior_strategies: List[str]
-    consequence_strategies: List[str]
-    replacement_behavior: str
-    implementation_tips: List[str]
+class InterventionPlanner:
+    """干预规划器"""
 
-
-class DisengagementTask(TypedDict):
-    """任务脱离干预任务"""
-    task_name: str
-    anchor_behavior: str
-    step_by_step_plan: List[str]
-    success_criteria: str
-    fallback_plan: str
-
-
-class InterventionPlannerAgent:
-    """
-    干预策略分析师 Agent V3.5
-    
-    基于 ABC 分析和功能假设，生成针对性的干预策略：
-    1. 前因干预：调整环境，预防问题行为
-    2. 行为教学：教授替代行为
-    3. 后果管理：强化适当行为，消退问题行为
-    """
-
-    # 系统提示词
-    SYSTEM_PROMPT = (
-        "你是一名资深的应用行为分析 (ABA) 干预策略专家。"
-        "请基于提供的 ABC 分析和功能假设，生成具体、可操作的干预策略。"
-        "策略必须符合循证实践，适合家长在家庭环境中实施。"
-        "输出必须是严格的 JSON 格式，不要任何解释。"
-    )
-
-    # 干预策略生成提示词模板
-    STRATEGY_PROMPT_TEMPLATE = """基于以下行为分析，生成完整的干预策略计划：
-
-【行为分析】
-- 前因 (A): {antecedent}
-- 行为 (B): {behavior}
-- 后果 (C): {consequence}
-- 假设功能：{function}
-
-【功能定义】
-- escape (逃避): 为逃避/终止任务或情境
-- tangible (实物): 为获得物品、食物或活动
-- attention (关注): 为获得他人的注意（正负皆可）
-- automatic (自我刺激): 为自我刺激或感官调节
-
-请生成以下内容的 JSON：
-{{
-    "function": "{function}",
-    "antecedent_strategies": [3-5 条前因干预策略],
-    "behavior_strategies": [3-5 条行为教学策略],
-    "consequence_strategies": [3-5 条后果管理策略],
-    "replacement_behavior": "具体的替代行为描述",
-    "implementation_tips": [5-8 条实施建议]
-}}"""
-
-    # 任务脱离锚点建立提示词
-    DISENGAGEMENT_ANCHOR_TEMPLATE = """设计一个"任务脱离"干预的锚点建立计划：
-
-【背景】
-孩子当前功能：{function}
-目标行为：{target_behavior}
-当前挑战：{challenge}
-
-【锚点建立 H1 阶段要求】
-1. 选择一个高概率的锚点行为（孩子已经会做的、简单的行为）
-2. 设计从锚点行为到目标行为的渐进步骤
-3. 明确每个步骤的成功标准
-4. 制定fallback 计划（当孩子抗拒时）
-
-请输出 JSON：
-{{
-    "task_name": "任务脱离训练",
-    "anchor_behavior": "锚点行为描述",
-    "step_by_step_plan": ["步骤 1", "步骤 2", "步骤 3", ...],
-    "success_criteria": "成功标准描述",
-    "fallback_plan": "fallback 计划"
-}}"""
-
-    def __init__(self, llm_client: LLMClient):
-        """
-        初始化干预策略分析师 Agent
-
-        Args:
-            llm_client: LLM 客户端实例
-        """
-        self.llm = llm_client
+    def __init__(self):
+        """初始化规划器"""
+        self.knowledge_base = get_knowledge_base()
         logger.info("InterventionPlanner V3.5 初始化完成")
 
-    def generate_strategy(
-        self,
-        antecedent: str,
-        behavior: str,
-        consequence: str,
-        function: str
-    ) -> InterventionStrategy:
+    def generate_plan(self, matched_hypothesis_id: str, scenario_key: str) -> Optional[Dict[str, Any]]:
         """
-        生成干预策略
+        基于匹配的假设生成干预计划
 
         Args:
-            antecedent: 前因
-            behavior: 行为
-            consequence: 后果
-            function: 假设功能
+            matched_hypothesis_id: 匹配的假设 ID（如 "H1"）
+            scenario_key: 场景键（如 "task_disengagement"）
 
         Returns:
-            干预策略结果
+            干预计划字典，包含第一阶段详情
         """
-        logger.info(f"开始生成干预策略，功能={function}")
+        # 查找场景
+        scenario = None
+        for s in self.knowledge_base.data.get("scenarios", []):
+            if s.get("scene_key") == scenario_key:
+                scenario = s
+                break
 
-        user_prompt = self.STRATEGY_PROMPT_TEMPLATE.format(
-            antecedent=antecedent,
-            behavior=behavior,
-            consequence=consequence,
-            function=function
-        )
+        if not scenario:
+            logger.warning(f"未找到场景：{scenario_key}")
+            return None
 
-        try:
-            result = self.llm.generate_json(
-                system_prompt=self.SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                temperature=0.3,
-                max_tokens=1500,
-            )
+        # 查找假设
+        hypothesis = None
+        for h in scenario.get("competing_hypotheses", []):
+            if h.get("id") == matched_hypothesis_id:
+                hypothesis = h
+                break
 
-            # 验证必需字段
-            required_fields = [
-                "function",
-                "antecedent_strategies",
-                "behavior_strategies",
-                "consequence_strategies",
-                "replacement_behavior",
-                "implementation_tips"
-            ]
+        if not hypothesis:
+            logger.warning(f"未找到假设：{matched_hypothesis_id} in {scenario_key}")
+            return None
 
-            for field in required_fields:
-                if field not in result:
-                    logger.warning(f"缺少字段：{field}")
-                    if field == "function":
-                        result[field] = function
-                    elif field == "replacement_behavior":
-                        result[field] = "待确定"
-                    else:
-                        result[field] = []
+        # 获取干预计划
+        intervention_plan = hypothesis.get("intervention_plan")
+        if not intervention_plan:
+            logger.warning(f"假设 {matched_hypothesis_id} 无干预计划")
+            return None
 
-            logger.info(f"干预策略生成完成")
-            return result
+        # 提取第一阶段
+        phase_ladder = intervention_plan.get("phase_ladder", [])
+        if not phase_ladder:
+            logger.warning(f"干预计划无阶段梯")
+            return None
 
-        except Exception as e:
-            logger.error(f"策略生成失败：{e}")
-            # 返回基础模板
-            return self._get_fallback_strategy(function)
+        first_phase = phase_ladder[0]
 
-    def _get_fallback_strategy(self, function: str) -> InterventionStrategy:
-        """返回 fallback 策略模板"""
-        return {
-            "function": function,
-            "antecedent_strategies": [
-                "识别并记录行为触发因素",
-                "调整环境减少触发",
-                "建立可预测的日常流程"
-            ],
-            "behavior_strategies": [
-                "教授适当的沟通方式",
-                "使用视觉提示",
-                "练习替代行为"
-            ],
-            "consequence_strategies": [
-                "立即强化适当行为",
-                "保持一致的后果",
-                "避免意外强化问题行为"
-            ],
-            "replacement_behavior": "待评估后确定",
-            "implementation_tips": [
-                "保持耐心和一致性",
-                "从小步骤开始",
-                "记录进展",
-                "庆祝小成功",
-                "寻求专业支持"
-            ]
+        # 解析成功标准，提取小目标
+        success_criteria = first_phase.get("success_criteria", "")
+        mini_goal = self._parse_mini_goal(success_criteria)
+
+        # 构建返回结果
+        plan = {
+            "core_principle": intervention_plan.get("core_principle", ""),
+            "current_phase": first_phase,
+            "phase_name": first_phase.get("phase_name", ""),
+            "goal": first_phase.get("goal", ""),
+            "primary_strategy": first_phase.get("primary_strategy", ""),
+            "strategy_details": first_phase.get("strategy_details", ""),
+            "success_criteria": success_criteria,
+            "parent_observation_task": first_phase.get("parent_observation_task", ""),
+            "next_phase_preview": phase_ladder[1].get("goal", "") if len(phase_ladder) > 1 else "",
+            "data_tracking_suggestion": intervention_plan.get("data_tracking_suggestion", ""),
+            # V3.5 新增：小目标
+            "mini_goal": mini_goal,
+            "observation_tool": self._generate_observation_tool(first_phase),
         }
 
-    def create_disengagement_anchor(
-        self,
-        function: str,
-        target_behavior: str,
-        challenge: str
-    ) -> DisengagementTask:
+        logger.info(f"生成干预计划：{scenario_key} - {matched_hypothesis_id} - {first_phase.get('phase_name')}")
+        return plan
+
+    def _parse_mini_goal(self, success_criteria: str) -> str:
         """
-        创建任务脱离的锚点建立计划 (H1 阶段)
+        从成功标准中解析出小目标
 
         Args:
-            function: 行为功能
-            target_behavior: 目标行为
-            challenge: 当前挑战
+            success_criteria: 成功标准文本
 
         Returns:
-            任务脱离计划
+            格式化的小目标
         """
-        logger.info(f"创建任务脱离锚点计划，功能={function}")
+        # 尝试提取时间框架、行为、百分比
+        # 示例："连续 3 日，在自然情境的口头'密语'提示下，3 秒内独立做出正确动作的成功率 ≥ 80%。"
 
-        user_prompt = self.DISENGAGEMENT_ANCHOR_TEMPLATE.format(
-            function=function,
-            target_behavior=target_behavior,
-            challenge=challenge
-        )
+        time_frame = "1 周"
+        behavior = "目标行为"
+        percentage = "70%"
 
-        try:
-            result = self.llm.generate_json(
-                system_prompt=self.SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                temperature=0.3,
-                max_tokens=1000,
-            )
+        # 简单解析逻辑
+        if "连续" in success_criteria and "日" in success_criteria:
+            # 提取天数
+            import re
+            match = re.search(r'连续 (\d+) 日', success_criteria)
+            if match:
+                days = int(match.group(1))
+                time_frame = f"{days}天"
 
-            # 验证必需字段
-            required_fields = [
-                "task_name",
-                "anchor_behavior",
-                "step_by_step_plan",
-                "success_criteria",
-                "fallback_plan"
-            ]
+        if "成功率" in success_criteria:
+            # 提取百分比
+            match = re.search(r'(\d+)%', success_criteria)
+            if match:
+                percentage = f"{match.group(1)}%"
 
-            for field in required_fields:
-                if field not in result:
-                    logger.warning(f"缺少字段：{field}")
-                    if field == "task_name":
-                        result[field] = "任务脱离训练"
-                    elif field == "anchor_behavior":
-                        result[field] = "待确定"
-                    elif field == "step_by_step_plan":
-                        result[field] = ["逐步建立锚点"]
-                    elif field == "success_criteria":
-                        result[field] = "孩子能够独立完成目标行为"
-                    elif field == "fallback_plan":
-                        result[field] = "回到上一步骤，降低要求"
+        # 提取行为描述
+        if "独立" in success_criteria:
+            match = re.search(r'独立 (.*?) 的', success_criteria)
+            if match:
+                behavior = match.group(1)
+        elif "做出" in success_criteria:
+            match = re.search(r'做出 (.*?) ', success_criteria)
+            if match:
+                behavior = match.group(1)
 
-            logger.info(f"任务脱离锚点计划生成完成")
-            return result
+        return f"在{time_frame}内，实现{behavior}，成功率超过{percentage}。"
 
-        except Exception as e:
-            logger.error(f"锚点计划生成失败：{e}")
-            return self._get_fallback_disengagement_plan()
-
-    def _get_fallback_disengagement_plan(self) -> DisengagementTask:
-        """返回 fallback 任务脱离计划"""
-        return {
-            "task_name": "任务脱离训练",
-            "anchor_behavior": "选择一个孩子已经掌握的高概率行为",
-            "step_by_step_plan": [
-                "步骤 1: 建立锚点行为的稳定性",
-                "步骤 2: 在锚点行为后引入短暂的任务要求",
-                "步骤 3: 逐步延长任务时间",
-                "步骤 4: 增加任务难度",
-                "步骤 5: 泛化到不同情境"
-            ],
-            "success_criteria": "孩子能够在提示下完成任务并适当脱离",
-            "fallback_plan": "当孩子表现出抗拒时，回到上一步骤，降低要求，增加强化"
-        }
-
-    def analyze_and_plan(
-        self,
-        description: str,
-        abc_result: dict
-    ) -> dict:
+    def _generate_observation_tool(self, phase: dict) -> str:
         """
-        完整分析 + 规划流程
+        生成观察记录小工具建议
 
         Args:
-            description: 原始描述
-            abc_result: ABC 分析结果
+            phase: 阶段字典
 
         Returns:
-            完整的分析报告和干预计划
+            观察工具建议
         """
-        logger.info(f"开始完整分析 + 规划流程")
+        # 默认建议
+        tool = "在日历上画√/×：每天睡前，回想今天的目标行为，做到了画√，没做到画×。"
 
-        # 生成干预策略
-        strategy = self.generate_strategy(
-            antecedent=abc_result.get("antecedent", ""),
-            behavior=abc_result.get("behavior", ""),
-            consequence=abc_result.get("consequence", ""),
-            function=abc_result.get("hypothesized_function", "automatic")
-        )
+        # 根据观察任务定制
+        obs_task = phase.get("parent_observation_task", "")
+        if "记录" in obs_task:
+            tool = obs_task + " 简单版：在日历上画√/×即可。"
 
-        # 如果是逃避功能，创建任务脱离锚点计划
-        disengagement_task = None
-        if abc_result.get("hypothesized_function") == "escape":
-            disengagement_task = self.create_disengagement_anchor(
-                function="escape",
-                target_behavior=abc_result.get("behavior", ""),
-                challenge=abc_result.get("antecedent", "")
-            )
+        return tool
 
-        # 整合结果
-        result = {
-            "timestamp": datetime.now().isoformat(),
-            "original_description": description,
-            "abc_analysis": abc_result,
-            "intervention_strategy": strategy,
-            "disengagement_task": disengagement_task,
-            "status": "completed"
-        }
+    def gamify_strategy_description(self, strategy_details: str, child_nickname: str = "孩子") -> str:
+        """
+        对策略描述进行游戏化、亲子互动式语言改写
 
-        logger.info(f"完整分析 + 规划完成，status=completed")
-        return result
+        Args:
+            strategy_details: 原始策略描述
+            child_nickname: 孩子昵称
+
+        Returns:
+            游戏化后的策略描述
+        """
+        # V3.5 简化版：添加游戏化前缀和后缀
+        gamified = f"让我们和{child_nickname}一起玩一个特别的游戏吧！\n\n"
+        gamified += strategy_details
+        gamified += f"\n\n记住，这个游戏的关键是：让{child_nickname}在快乐中学习，每一次成功都值得庆祝！"
+
+        return gamified
