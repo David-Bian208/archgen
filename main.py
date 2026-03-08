@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from api.endpoints import router as api_router
 from api.endpoints_v2 import router as api_v2_router
 from api.endpoints_v3 import router as api_v3_router
+from api.endpoints_v4 import router as api_v4_router
 from app.config import get_config
 
 # 配置日志
@@ -27,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="记录观察助手 V3.9.2",
-    description="自闭症干预辅助系统 - 智能动态临床访谈",
-    version="3.9.2",
+    title="记录观察助手 V4.0",
+    description="自闭症干预辅助系统 - 确定性状态机引擎",
+    version="4.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -47,6 +48,7 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api")  # V1.1 兼容
 app.include_router(api_v2_router, prefix="/api/v2")  # V2.0 引导式
 app.include_router(api_v3_router, prefix="/api/v3")  # V3.5 决策支持系统
+app.include_router(api_v4_router, prefix="/api/v4")  # V4.0 确定性状态机
 
 # 挂载前端静态文件（如果存在）- 必须在 API 路由之后
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
