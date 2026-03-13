@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="记录观察助手 V4.0",
-    description="自闭症干预辅助系统 - 确定性状态机引擎",
-    version="4.0.0",
+    title="记录观察助手 V4.1",
+    description="自闭症干预辅助系统 - 确定性状态机引擎（紧急修复版：严格出口 + 假设锁定）",
+    version="4.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )

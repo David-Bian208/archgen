@@ -1,8 +1,8 @@
 <template>
   <div class="app-container">
     <header class="header">
-      <h1>📘 行为观察与干预支持指南 V3.9 Final</h1>
-      <p class="subtitle">从分析到决策支持</p>
+      <h1>📘 行为观察与干预支持指南 V4.5</h1>
+      <p class="subtitle">临床推理引擎 | 动态假设追踪 | 叙事性报告</p>
     </header>
 
     <main class="main-content">
@@ -69,7 +69,7 @@
               </div>
             </div>
 
-            <!-- 二、多角度理解（V3.9 Final） -->
+            <!-- 二、多角度理解（V4.1 严格出口 + 假设锁定） -->
             <div v-if="insightReport.clinical_differential" class="report-section clinical-differential">
               <h3>二、多角度理解</h3>
               <p>{{ insightReport.clinical_differential }}</p>
@@ -85,7 +85,7 @@
               </div>
             </div>
 
-            <!-- 四、我们可以这样开始（V3.9 Final） -->
+            <!-- 四、我们可以这样开始（V4.1 紧急修复版） -->
             <div v-if="interventionPlan && interventionPlan.four_step_plan" class="report-section intervention-plan-final">
               <h3>四、我们可以这样开始</h3>
               
@@ -115,7 +115,7 @@
                 </div>
               </div>
               
-              <!-- V3.9 Final 成功时刻记录卡 -->
+              <!-- V4.1 成功时刻记录卡 -->
               <div v-if="interventionPlan.observation_tool" class="observation-tool-final">
                 <h4>📋 您的"成功时刻"记录卡</h4>
                 <p>{{ interventionPlan.observation_tool }}</p>
@@ -175,7 +175,7 @@
     </main>
 
     <footer class="footer">
-      <p>Behavior Recorder V3.9 Final | 行为记录员封版</p>
+      <p>Behavior Recorder V4.5 | 临床推理引擎 | 动态假设追踪</p>
     </footer>
   </div>
 </template>
@@ -215,7 +215,7 @@ export default {
       this.scrollToBottom()
 
       try {
-        const response = await axios.post('/api/v3/chat', {
+        const response = await axios.post('/api/v4/chat', {
           session_id: this.sessionId,
           user_input: text,
         })
@@ -908,7 +908,7 @@ textarea:disabled {
   font-size: 0.98em;
 }
 
-/* V3.9.1 Final 四步结构样式 */
+/* V4.1 四步结构样式 */
 .v35-report .intervention-plan-final {
   background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
   border: 2px solid #4caf50;
@@ -981,7 +981,7 @@ textarea:disabled {
   color: #7b1fa2;
 }
 
-/* V3.9.1 Final 成功时刻记录卡 */
+/* V4.1 成功时刻记录卡 */
 .v35-report .observation-tool-final {
   background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
   border: 2px solid #ff9800;

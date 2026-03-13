@@ -1,0 +1,51 @@
+{
+  "version": "V4.5.1",
+  "codename": "临床推理引擎 + 自适应语义识别",
+  "release_date": "2026-03-10",
+  "features": [
+    "动态假设追踪",
+    "贝叶斯信念更新",
+    "主动鉴别提问",
+    "叙事性报告生成",
+    "多层级假设网络（13 个假设）",
+    "三层防御语义识别",
+    "未知表达自学习"
+  ],
+  "architecture": {
+    "data_pipeline": "V4.3 结构化评估框架（保留）",
+    "reasoning_layer": "V4.5 临床推理引擎（新增）",
+    "semantic_recognition": "三层防御机制（新增）",
+    "hypothesis_network": "3 层 13 假设",
+    "bayesian_update": true,
+    "narrative_generation": true,
+    "unknown_expression_learning": true
+  },
+  "api_version": "v4",
+  "frontend_version": "1.0.0",
+  "backend_components": [
+    "structured_assessor_v4.py",
+    "clinical_reasoning_engine.py",
+    "insight_analyzer.py",
+    "intervention_planner.py",
+    "unknown_expression_logger.py"
+  ],
+  "knowledge_files": [
+    "clinical_assessment_framework.json",
+    "hypothesis_network.json",
+    "behavior_hypotheses.json",
+    "intervention_patterns.json"
+  ],
+  "semantic_recognition_layers": {
+    "layer1": "精确匹配（硬编码关键词）",
+    "layer2": "正则模式匹配（语义模式）",
+    "layer3": "LLM 兜底识别（少样本学习）"
+  },
+  "changes_from_v45": [
+    "新增三层防御语义识别机制",
+    "新增 intervention_patterns.json 语义知识库",
+    "新增 unknown_expression_logger.py 未知表达日志",
+    "新增 review_unknown_expressions.py 审查工具",
+    "增强 _post_process_extraction 方法",
+    "版本号更新为 V4.5.1"
+  ]
+}

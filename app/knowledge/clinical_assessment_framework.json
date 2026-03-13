@@ -1,0 +1,202 @@
+{
+  "framework_version": "V4.3.0",
+  "name": "结构化临床评估框架",
+  "description": "定义行为观察评估所需的全部结构化字段与工作流",
+  
+  "workflow_stages": [
+    {
+      "id": "BACKGROUND",
+      "name": "背景信息",
+      "description": "儿童基本资料与环境推断",
+      "order": 1,
+      "fields": [
+        {
+          "field_id": "child_age",
+          "short_name": "年龄",
+          "prompt_question": "为了给您更合适的参考，可以告诉我孩子今年几岁吗？",
+          "hint": "例如：'5 岁'、'幼儿园大班'",
+          "data_type": "number",
+          "is_required": true,
+          "extraction_patterns": ["岁", "周岁", "年级", "大班", "中班", "小班"]
+        },
+        {
+          "field_id": "child_gender",
+          "short_name": "性别",
+          "prompt_question": "另外，可以告诉我孩子是男孩还是女孩吗？",
+          "hint": "这能帮助我更好地理解社交情境",
+          "data_type": "categorical",
+          "options": ["男孩", "女孩", "其他"],
+          "is_required": false,
+          "extraction_patterns": ["男孩", "女孩", "儿子", "女儿", "他", "她"]
+        },
+        {
+          "field_id": "inferred_setting",
+          "short_name": "推断环境",
+          "prompt_question": null,
+          "data_type": "inferred",
+          "options": ["家庭", "幼儿园", "普通小学课堂", "特教/融合环境", "社区/户外"],
+          "is_required": false,
+          "is_auto_inferred": true
+        }
+      ]
+    },
+    {
+      "id": "CORE_ABC",
+      "name": "核心行为序列",
+      "description": "行为分析的基本要素（ABC 三段式）",
+      "order": 2,
+      "fields": [
+        {
+          "field_id": "antecedent",
+          "short_name": "前因（情境）",
+          "prompt_question": "当时正在发生什么活动？在什么地方？",
+          "hint": "例如：'在教室小组活动时'、'做操排队时'、'写作业时'",
+          "data_type": "text",
+          "is_required": true,
+          "extraction_patterns": ["在", "时", "时候", "地方", "地点", "活动", "正在", "当"]
+        },
+        {
+          "field_id": "behavior_detail",
+          "short_name": "行为细节",
+          "prompt_question": "孩子具体做了什么，或者没做什么？",
+          "hint": "描述可观察的动作、语言、表情，如'发呆'、'不看老师'、'停下来'",
+          "data_type": "text",
+          "is_required": true,
+          "extraction_patterns": ["做", "说", "表现", "行为", "动作", "看", "听", "停", "发呆"]
+        },
+        {
+          "field_id": "immediate_consequence",
+          "short_name": "即时后果",
+          "prompt_question": "当孩子出现这个行为时，您或周围人第一时间是怎么回应的？",
+          "hint": "如'老师提醒他'、'我走过去看他'、'没人管他'",
+          "data_type": "text",
+          "is_required": true,
+          "extraction_patterns": ["后", "然后", "之后", "老师", "我", "提醒", "管", "理", "回应", "走到"]
+        }
+      ]
+    },
+    {
+      "id": "DIFFERENTIAL_CLUES",
+      "name": "功能鉴别线索",
+      "description": "用于区分行为可能功能的关键信息",
+      "order": 3,
+      "fields": [
+        {
+          "field_id": "pattern_with_prompt",
+          "short_name": "与提示的相关性",
+          "prompt_question": "如果有人提醒或示范，他能做好吗？",
+          "hint": "关键鉴别点：提示依赖 vs 其他功能",
+          "data_type": "text",
+          "is_required": false,
+          "extraction_patterns": ["提醒", "提示", "示范", "看", "教", "帮", "能", "会", "可以"],
+          "trigger_condition": {
+            "field": "behavior_detail",
+            "contains": ["不看", "没看", "眼神", "发呆", "走神", "迷茫"]
+          }
+        },
+        {
+          "field_id": "sensory_reactions",
+          "short_name": "感官反应",
+          "prompt_question": "当时孩子有没有表现出对声音、光线、触碰等特别敏感或躲避的样子？",
+          "hint": "如捂耳朵、眯眼睛、皱眉等",
+          "data_type": "text",
+          "is_required": false,
+          "extraction_patterns": ["捂", "耳朵", "皱眉", "吵", "亮", "难受", "不舒服", "躲", "避", "眯"]
+        },
+        {
+          "field_id": "escape_difficulty_clue",
+          "short_name": "任务难度/动机线索",
+          "prompt_question": "您觉得，当时那个活动或任务对孩子来说是有点难、无聊，还是他不喜欢？",
+          "hint": "评估是否逃避难度",
+          "data_type": "text",
+          "is_required": false,
+          "extraction_patterns": ["难", "不会", "不懂", "跟不上", "吃力", "累", "无聊", "不喜欢", "简单", "容易"]
+        }
+      ]
+    }
+  ],
+
+  "completion_rules": {
+    "required_fields_for_analysis": ["child_age", "antecedent", "behavior_detail", "immediate_consequence"],
+    "recommended_minimum_fields": 6,
+    "max_turns": 8,
+    "early_exit_conditions": [
+      {
+        "name": "strong_prompt_dependency",
+        "description": "检测到强提示依赖证据，可直接结束",
+        "condition": {
+          "field": "pattern_with_prompt",
+          "value_contains": ["能", "会", "可以", "需要...才"],
+          "required_fields_filled": ["child_age", "antecedent", "behavior_detail", "immediate_consequence", "pattern_with_prompt"]
+        }
+      },
+      {
+        "name": "strong_escape_difficulty",
+        "description": "检测到强逃避难度证据，可直接结束",
+        "condition": {
+          "field": "escape_difficulty_clue",
+          "value_contains": ["太难", "不会", "跟不上", "吃力"],
+          "required_fields_filled": ["child_age", "antecedent", "behavior_detail", "immediate_consequence", "escape_difficulty_clue"]
+        }
+      }
+    ]
+  },
+
+  "hypothesis_mapping": {
+    "prompt_dependency_positive": {
+      "hypothesis": "prompt_dependence",
+      "confidence_boost": 0.4,
+      "trigger_patterns": ["不看...就不", "看...就会", "提醒...就能", "需要...才", "要...才"]
+    },
+    "escape_difficulty_positive": {
+      "hypothesis": "escape_difficulty",
+      "confidence_boost": 0.35,
+      "trigger_patterns": ["太难", "不会", "跟不上", "吃力", "累", "不想做"]
+    },
+    "sensory_negative": {
+      "hypothesis": "sensory_escape",
+      "confidence_boost": -0.3,
+      "trigger_patterns": ["没有", "不是", "不"]
+    },
+    "attention_seeking": {
+      "hypothesis": "attention_seeking",
+      "confidence_boost": 0.25,
+      "trigger_patterns": ["要理", "要管", "要关注", "引起注意"]
+    }
+  },
+
+  "environment_inference_rules": [
+    {
+      "name": "kindergarten",
+      "environment": "幼儿园",
+      "conditions": {
+        "age_range": [3, 6],
+        "antecedent_keywords": ["老师", "幼儿园", "做操", "排队", "小组", "教室", "小朋友"]
+      }
+    },
+    {
+      "name": "elementary_school",
+      "environment": "普通小学课堂",
+      "conditions": {
+        "age_range": [7, 12],
+        "antecedent_keywords": ["上课", "教室", "作业", "老师", "同学", "课堂"]
+      }
+    },
+    {
+      "name": "home",
+      "environment": "家庭",
+      "conditions": {
+        "age_range": [3, 12],
+        "antecedent_keywords": ["家", "家里", "作业", "吃饭", "睡觉", "玩", "妈妈", "爸爸"]
+      }
+    },
+    {
+      "name": "community",
+      "environment": "社区/户外",
+      "conditions": {
+        "age_range": [3, 12],
+        "antecedent_keywords": ["公园", "外面", "户外", "小区", "广场", "游乐场"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,218 @@
+{
+  "version": "V4.5.0",
+  "name": "临床推理假设网络",
+  "description": "描述假设间的层次关系、证据规则和推理逻辑",
+  
+  "hypothesis_layers": {
+    "layer_1_function": {
+      "name": "表层功能假设",
+      "description": "行为的外在功能（逃避/获取/自动）",
+      "hypotheses": [
+        {
+          "id": "H_ESCAPE",
+          "name": "逃避",
+          "description": "行为用于逃避某种情境或要求",
+          "prior_probability": 0.35,
+          "children": ["H_ESCAPE_DIFFICULTY", "H_ESCAPE_SENSORY", "H_ESCAPE_DEMAND"]
+        },
+        {
+          "id": "H_ATTENTION",
+          "name": "寻求关注",
+          "description": "行为用于获取他人注意",
+          "prior_probability": 0.20,
+          "children": ["H_ATTENTION_ADULT", "H_ATTENTION_PEER"]
+        },
+        {
+          "id": "H_TANGIBLE",
+          "name": "获取实物",
+          "description": "行为用于获取物品或活动",
+          "prior_probability": 0.15,
+          "children": []
+        },
+        {
+          "id": "H_AUTOMATIC",
+          "name": "自动强化",
+          "description": "行为本身提供感官满足",
+          "prior_probability": 0.20,
+          "children": ["H_SENSORY_SEEKING", "H_STIMULATION"]
+        },
+        {
+          "id": "H_PROMPT_DEPENDENCE",
+          "name": "提示依赖",
+          "description": "依赖外部提示维持任务执行",
+          "prior_probability": 0.10,
+          "parents": ["H_WORKING_MEMORY", "H_SENSORY_OVERLOAD"],
+          "children": []
+        }
+      ]
+    },
+    
+    "layer_2_attribution": {
+      "name": "中层归因假设",
+      "description": "解释为什么出现该功能（认知/感觉/动机）",
+      "hypotheses": [
+        {
+          "id": "H_ESCAPE_DIFFICULTY",
+          "name": "逃避难度",
+          "description": "任务难度超出当前能力",
+          "parent": "H_ESCAPE",
+          "prior_probability": 0.40,
+          "evidence_rules": {
+            "supporting": ["说太难了", "不会做", "哭闹抗拒", "任务要求后出现"],
+            "contradicting": ["能独立完成类似任务", "简单任务也逃避"]
+          }
+        },
+        {
+          "id": "H_ESCAPE_SENSORY",
+          "name": "感觉逃避",
+          "description": "逃避不适的感觉刺激",
+          "parent": "H_ESCAPE",
+          "prior_probability": 0.25,
+          "evidence_rules": {
+            "supporting": ["捂耳朵", "环境嘈杂", "躲避光线", "皱眉不适"],
+            "contradicting": ["安静环境也发生", "无感觉敏感表现"]
+          }
+        },
+        {
+          "id": "H_WORKING_MEMORY",
+          "name": "工作记忆挑战",
+          "description": "难以在多步骤任务中保持信息",
+          "parent": "H_PROMPT_DEPENDENCE",
+          "prior_probability": 0.20,
+          "evidence_rules": {
+            "supporting": ["有提示则执行，无提示则中断", "需要实时视觉参照", "多步骤任务困难"],
+            "contradicting": ["无需提示也能独立完成复杂序列", "单步骤任务也困难"]
+          }
+        },
+        {
+          "id": "H_SENSORY_OVERLOAD",
+          "name": "感觉超载",
+          "description": "复杂环境导致认知资源耗尽",
+          "parent": "H_PROMPT_DEPENDENCE",
+          "prior_probability": 0.30,
+          "evidence_rules": {
+            "supporting": ["嘈杂环境", "人多拥挤", "多感官输入"],
+            "contradicting": ["安静环境也发生", "独处时也困难"]
+          }
+        },
+        {
+          "id": "H_SUSTAINED_ATTENTION",
+          "name": "持续性注意挑战",
+          "description": "难以在干扰下维持任务专注",
+          "prior_probability": 0.35,
+          "evidence_rules": {
+            "supporting": ["容易分心", "任务中走神", "需要频繁提醒"],
+            "contradicting": ["高兴趣活动能长时间专注"]
+          }
+        }
+      ]
+    },
+    
+    "layer_3_capability": {
+      "name": "深层能力缺口",
+      "description": "具体的神经心理能力缺口",
+      "hypotheses": [
+        {
+          "id": "H_VISUAL_PROCESSING",
+          "name": "视觉信息处理",
+          "description": "处理视觉信息的效率",
+          "prior_probability": 0.30,
+          "evidence_rules": {
+            "supporting": ["需要看老师才能做", "视觉提示有效", "听觉指令无效"],
+            "contradicting": ["视觉提示也无效", "听觉指令更有效"]
+          }
+        },
+        {
+          "id": "H_AUDITORY_PROCESSING",
+          "name": "听觉信息处理",
+          "description": "处理听觉信息的效率",
+          "prior_probability": 0.25,
+          "evidence_rules": {
+            "supporting": ["对声音反应慢", "需要重复指令", "嘈杂环境更差"],
+            "contradicting": ["听觉指令反应良好"]
+          }
+        },
+        {
+          "id": "H_MOTOR_PLANNING",
+          "name": "动作计划",
+          "description": "计划和执行动作序列的能力",
+          "prior_probability": 0.20,
+          "evidence_rules": {
+            "supporting": ["知道怎么做但动作慢", "需要示范才能模仿", "动作不协调"],
+            "contradicting": ["动作流畅无需示范"]
+          }
+        }
+      ]
+    }
+  },
+  
+  "discriminating_questions": {
+    "H_WORKING_MEMORY_vs_H_SENSORY_OVERLOAD": {
+      "question": "如果他先看一遍老师做，然后自己尝试，会不会好一些？",
+      "field_mapping": "pattern_with_prompt",
+      "interpretation": {
+        "yes": "支持工作记忆（视觉编码有效）",
+        "no": "支持感觉超载（即使有准备也困难）"
+      }
+    },
+    "H_ESCAPE_DIFFICULTY_vs_H_ATTENTION": {
+      "question": "当他哭闹时，如果您给予关注但不降低要求，他会继续还是停止？",
+      "field_mapping": "immediate_consequence",
+      "interpretation": {
+        "continue": "支持寻求关注（关注强化了行为）",
+        "stop": "支持逃避难度（目的是逃避而非关注）"
+      }
+    },
+    "H_SENSORY_OVERLOAD_vs_H_AUTOMATIC": {
+      "question": "在安静、人少的环境中，这个行为会减少吗？",
+      "field_mapping": "sensory_reactions",
+      "interpretation": {
+        "yes": "支持感觉超载（环境是触发因素）",
+        "no": "支持自动强化（行为本身提供满足）"
+      }
+    },
+    "H_ESCAPE_SENSORY_vs_H_ESCAPE_DIFFICULTY": {
+      "primary_hypothesis": "H_ESCAPE_SENSORY",
+      "question": "他是不是对某些声音、光线或触碰特别敏感或躲避？",
+      "field_mapping": "sensory_reactions",
+      "interpretation": {
+        "yes": "支持感觉逃避（感觉敏感是触发因素）",
+        "no": "支持逃避难度（任务本身是触发因素）"
+      }
+    },
+    "H_ESCAPE_DIFFICULTY_vs_H_WORKING_MEMORY": {
+      "primary_hypothesis": "H_ESCAPE_DIFFICULTY",
+      "question": "他说'太难了'或表现出任务难度相关的抗拒吗？",
+      "field_mapping": "escape_difficulty_clue",
+      "interpretation": {
+        "yes": "支持逃避难度（明确表达任务困难）",
+        "no": "支持工作记忆（没有说难但需要提示）"
+      }
+    },
+    "H_TANGIBLE_vs_H_ATTENTION": {
+      "primary_hypothesis": "H_TANGIBLE",
+      "question": "当他得到想要的物品或活动后，行为会停止吗？",
+      "field_mapping": "tangible_access",
+      "interpretation": {
+        "yes": "支持实物获取（目的是获得物品）",
+        "no": "支持寻求关注（目的是获得关注而非物品）"
+      }
+    },
+    "H_ATTENTION_vs_H_ESCAPE": {
+      "primary_hypothesis": "H_ATTENTION",
+      "question": "当您关注他但不改变任务要求时，他会继续还是停止？",
+      "field_mapping": "immediate_consequence",
+      "interpretation": {
+        "stop": "支持寻求关注（关注满足了目的）",
+        "continue": "支持逃避（目的是逃避而非关注）"
+      }
+    }
+  },
+  
+  "convergence_rules": {
+    "high_confidence_threshold": 0.75,
+    "low_confidence_threshold": 0.25,
+    "evidence_minimum": 3,
+    "narrative_template": "观察到的模式：{pattern}。最可能的解释：{attribution}。这主要反映了{capability}的挑战。我们排除了{excluded}，因为{reason}。"
+  }
+}

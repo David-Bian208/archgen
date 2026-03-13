@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "🚀 启动记录观察助手 V3.6"
+echo "🚀 启动记录观察助手 V4.1 - 严格出口 + 假设锁定"
 echo "================================"
 
 # 停止旧进程

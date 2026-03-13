@@ -1,0 +1,146 @@
+{
+  "version": "4.3.0",
+  "name": "结构化临床评估框架",
+  "description": "定义行为观察评估所需的全部信息字段与收集逻辑",
+  
+  "sections": [
+    {
+      "id": "CORE_ABC",
+      "name": "核心行为序列",
+      "description": "ABC 三段式：前因 - 行为 - 后果，必须完整收集",
+      "required_for_analysis": true,
+      "priority": 1,
+      "fields": [
+        {
+          "id": "antecedent",
+          "short": "前因",
+          "question": "当时正在发生什么活动？在哪里？",
+          "hint": "例如：'在教室小组活动时'、'做操排队时'",
+          "required": true,
+          "extraction_keywords": ["在", "时", "时候", "地方", "地点", "活动", "正在"]
+        },
+        {
+          "id": "behavior",
+          "short": "行为",
+          "question": "孩子具体做了什么或没做什么？",
+          "hint": "描述可观察的动作、语言、表情，如'发呆'、'不看老师'、'停下来'",
+          "required": true,
+          "extraction_keywords": ["做", "做", "表现", "行为", "动作", "说", "看", "听"]
+        },
+        {
+          "id": "consequence",
+          "short": "后果",
+          "question": "之后，您或周围人第一时间做了什么？",
+          "hint": "如'老师提醒他'、'我走过去看他'、'没人管他'",
+          "required": true,
+          "extraction_keywords": ["后", "然后", "之后", "老师", "我", "提醒", "管", "理", "回应"]
+        }
+      ]
+    },
+    {
+      "id": "BEHAVIOR_DETAIL",
+      "name": "行为细节鉴别",
+      "description": "用于鉴别行为功能的关键细节",
+      "required_for_analysis": false,
+      "priority": 2,
+      "fields": [
+        {
+          "id": "behavior_pattern",
+          "short": "模式",
+          "question": "这个行为是每次都发生，还是有时发生？",
+          "hint": "了解行为的一致性",
+          "required": false,
+          "extraction_keywords": ["每次", "总是", "经常", "有时", "偶尔", "一般", "通常"]
+        },
+        {
+          "id": "prompt_dependency",
+          "short": "提示依赖",
+          "question": "如果有人提醒或示范，他能做好吗？",
+          "hint": "关键鉴别点：提示依赖 vs 其他功能",
+          "required": false,
+          "extraction_keywords": ["提醒", "提示", "示范", "看", "教", "帮", "能", "会"],
+          "trigger_condition": {
+            "field": "behavior",
+            "contains": ["不看", "没看", "眼神", "发呆", "走神"]
+          }
+        },
+        {
+          "id": "sensory_check",
+          "short": "感官反应",
+          "question": "当时他有没有捂耳朵、皱眉等对声音/光线不适的表现？",
+          "hint": "排除感觉逃避/寻求假设",
+          "required": false,
+          "extraction_keywords": ["捂", "耳朵", "皱眉", "吵", "亮", "难受", "不舒服", "躲", "避"]
+        },
+        {
+          "id": "task_difficulty",
+          "short": "任务难度",
+          "question": "这个任务对他来说难不难？他之前能独立完成吗？",
+          "hint": "评估是否逃避难度",
+          "required": false,
+          "extraction_keywords": ["难", "不会", "不懂", "跟不上", "吃力", "累", "简单", "容易"]
+        }
+      ]
+    },
+    {
+      "id": "CONTEXT_FACTORS",
+      "name": "环境上下文",
+      "description": "影响行为的环境因素",
+      "required_for_analysis": false,
+      "priority": 3,
+      "fields": [
+        {
+          "id": "environment",
+          "short": "环境",
+          "question": "当时环境怎么样？安静还是吵闹？人多还是人少？",
+          "hint": "如'教室里很吵'、'只有几个人'",
+          "required": false,
+          "extraction_keywords": ["安静", "吵", "闹", "人多", "人少", "环境", "旁边"]
+        },
+        {
+          "id": "others_behavior",
+          "short": "他人行为",
+          "question": "其他小朋友在做什么？",
+          "hint": "了解社会参照情境",
+          "required": false,
+          "extraction_keywords": ["其他", "小朋友", "同学", "别人", "大家"]
+        }
+      ]
+    }
+  ],
+
+  "completion_rules": {
+    "minimum_required_fields": ["antecedent", "behavior", "consequence"],
+    "minimum_confidence_threshold": 0.7,
+    "max_turns": 6,
+    "early_exit_conditions": [
+      {
+        "name": "strong_prompt_dependency",
+        "description": "检测到强提示依赖证据，可直接结束",
+        "condition": {
+          "field": "prompt_dependency",
+          "value_contains": ["能", "会", "可以"],
+          "required_fields_filled": ["antecedent", "behavior", "consequence", "prompt_dependency"]
+        }
+      }
+    ]
+  },
+
+  "hypothesis_mapping": {
+    "prompt_dependency_positive": {
+      "hypothesis": "prompt_dependence",
+      "confidence_boost": 0.4,
+      "trigger_keywords": ["不看...就不", "看...就会", "提醒...就能", "需要...才"]
+    },
+    "sensory_negative": {
+      "hypothesis": "sensory_escape",
+      "confidence_boost": -0.3,
+      "trigger_keywords": ["没有", "不是", "不"]
+    },
+    "difficulty_positive": {
+      "hypothesis": "escape_difficulty",
+      "confidence_boost": 0.3,
+      "trigger_keywords": ["太难", "不会", "跟不上", "吃力"]
+    }
+  }
+}

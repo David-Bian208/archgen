@@ -1,0 +1,88 @@
+{
+  "case_id": 1,
+  "case_name": "典型提示依赖",
+  "conversation_log": [
+    {
+      "role": "user",
+      "content": "孩子 5 岁，在幼儿园做操时，不看老师就不会做，一看老师就会做。"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "5 岁，幼儿园中班"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "男孩"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "户外操场，有点吵"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "老师偶尔提醒'看这里'"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "没有了"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "没有了"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "没有了"
+    },
+    {
+      "role": "ai",
+      "content": "【BACKGROUND】 为了给您更合适的参考，可以告诉我孩子今年几岁吗？ 例如：'5 岁'、'幼儿园大班'"
+    }
+  ],
+  "report": null,
+  "evaluation": {
+    "A1_empathy": 3,
+    "A2_extraction": 3,
+    "B1_question": 3,
+    "B2_turns": 8,
+    "C1_accuracy": 3,
+    "C2_consistency": 1,
+    "C3_completeness": 3,
+    "D1_personal": 3,
+    "D2_actionable": 3,
+    "passed": false,
+    "issues": [
+      "未生成报告"
+    ]
+  },
+  "turn_count": 8,
+  "timestamp": "2026-03-10T21:44:03.050822"
+}

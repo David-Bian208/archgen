@@ -1,0 +1,13 @@
+{
+  "name": "behavior-recorder-wake",
+  "schedule": {
+    "kind": "every",
+    "everyMs": 300000
+  },
+  "payload": {
+    "kind": "systemEvent",
+    "text": "behavior-recorder heartbeat"
+  },
+  "sessionTarget": "main",
+  "enabled": true
+}

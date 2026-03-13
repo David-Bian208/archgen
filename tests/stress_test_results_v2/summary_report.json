@@ -1,0 +1,32 @@
+{
+  "test_info": {
+    "total_cases": 5,
+    "passed": 0,
+    "failed": 5,
+    "pass_rate": "0.0%",
+    "start_time": "2026-03-10T21:33:37.348016",
+    "end_time": "2026-03-10T21:46:44.682705",
+    "avg_turn_count": 8.0
+  },
+  "averages": {
+    "A1_empathy": 3.0,
+    "A2_extraction": 3.0,
+    "B1_question_quality": 3.0,
+    "C1_accuracy": 3.0,
+    "C2_consistency": 1.0,
+    "C3_completeness": 3.0,
+    "D1_personalization": 3.0,
+    "D2_actionable": 3.0
+  },
+  "overall_score": 2.75,
+  "issues": [
+    "案例1: 未生成报告",
+    "案例2: 未生成报告",
+    "案例3: 未生成报告",
+    "案例4: 未生成报告",
+    "案例5: 未生成报告"
+  ],
+  "recommendations": [
+    "【高优先级】修复逻辑自洽性问题"
+  ]
+}
