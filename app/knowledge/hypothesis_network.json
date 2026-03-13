@@ -104,6 +104,26 @@
             "supporting": ["容易分心", "任务中走神", "需要频繁提醒"],
             "contradicting": ["高兴趣活动能长时间专注"]
           }
+        },
+        {
+          "id": "impulse_control",
+          "name": "冲动控制挑战",
+          "description": "难以抑制冲动行为或情绪反应",
+          "prior_probability": 0.30,
+          "evidence_rules": {
+            "supporting": ["冲动", "控制不住自己", "行动先于思考", "插嘴", "抢东西", "不耐烦", "容易发脾气"],
+            "contradicting": ["能等待", "三思而后行"]
+          }
+        },
+        {
+          "id": "emotional_regulation",
+          "name": "情绪调节挑战",
+          "description": "情绪反应强度超出情境需要，难以自我调节",
+          "prior_probability": 0.30,
+          "evidence_rules": {
+            "supporting": ["情绪崩溃", "控制不住脾气", "一点就着", "脾气大", "易怒", "暴躁", "情绪化", "玻璃心", "输不起", "容易沮丧", "叛逆", "对着干", "不听管教", "情绪波动大"],
+            "contradicting": ["情绪稳定", "能自我安抚"]
+          }
         }
       ]
     },
