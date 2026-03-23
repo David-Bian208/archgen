@@ -1,0 +1,102 @@
+{
+  "test_type": "concurrent_users",
+  "num_users": 10,
+  "timestamp": "2026-03-20T13:13:19.383826",
+  "summary": {
+    "total": 10,
+    "success": 5,
+    "failed": 5,
+    "success_rate": "50.0%",
+    "avg_time": "24.85s",
+    "max_time": "30.04s",
+    "min_time": "7.73s",
+    "total_time": "30.06s"
+  },
+  "results": [
+    {
+      "user_id": 2,
+      "scenario": "我女儿每天写作业时总是要去喝水、上厕所，...",
+      "status_code": 200,
+      "elapsed": 7.729776859283447,
+      "success": true,
+      "timestamp": "2026-03-20T13:12:57.055277"
+    },
+    {
+      "user_id": 3,
+      "scenario": "孩子经常一个人摇晃身体，盯着旋转的风扇看...",
+      "status_code": 200,
+      "elapsed": 18.363335132598877,
+      "success": true,
+      "timestamp": "2026-03-20T13:13:07.691555"
+    },
+    {
+      "user_id": 1,
+      "scenario": "我儿子在课堂上总是突然发出奇怪的声音，老...",
+      "status_code": 200,
+      "elapsed": 18.367599725723267,
+      "success": true,
+      "timestamp": "2026-03-20T13:13:07.692711"
+    },
+    {
+      "user_id": 4,
+      "scenario": "孩子每天都要走同样的路线去幼儿园，换一条...",
+      "status_code": 200,
+      "elapsed": 23.92585301399231,
+      "success": true,
+      "timestamp": "2026-03-20T13:13:13.256331"
+    },
+    {
+      "user_id": 6,
+      "scenario": "我儿子在课堂上总是突然发出奇怪的声音，老...",
+      "status_code": 200,
+      "elapsed": 29.901049852371216,
+      "success": true,
+      "timestamp": "2026-03-20T13:13:19.238746"
+    },
+    {
+      "user_id": 5,
+      "scenario": "孩子在游乐场想和其他小朋友玩，但直接抢玩...",
+      "status_code": 0,
+      "elapsed": 30.039775371551514,
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "timestamp": "2026-03-20T13:13:19.377118"
+    },
+    {
+      "user_id": 7,
+      "scenario": "我女儿每天写作业时总是要去喝水、上厕所，...",
+      "status_code": 0,
+      "elapsed": 30.038572311401367,
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "timestamp": "2026-03-20T13:13:19.377250"
+    },
+    {
+      "user_id": 8,
+      "scenario": "孩子经常一个人摇晃身体，盯着旋转的风扇看...",
+      "status_code": 0,
+      "elapsed": 30.032448053359985,
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "timestamp": "2026-03-20T13:13:19.381315"
+    },
+    {
+      "user_id": 9,
+      "scenario": "孩子每天都要走同样的路线去幼儿园，换一条...",
+      "status_code": 0,
+      "elapsed": 30.031611442565918,
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "timestamp": "2026-03-20T13:13:19.382009"
+    },
+    {
+      "user_id": 10,
+      "scenario": "孩子在游乐场想和其他小朋友玩，但直接抢玩...",
+      "status_code": 0,
+      "elapsed": 30.0313720703125,
+      "success": false,
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=30)",
+      "timestamp": "2026-03-20T13:13:19.383308"
+    }
+  ]
+}

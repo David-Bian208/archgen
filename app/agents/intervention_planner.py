@@ -19,18 +19,421 @@ logger = logging.getLogger(__name__)
 
 
 class InterventionPlanner:
-    """干预规划器 V4.3 Hotfix - 功能判断驱动"""
+    """干预规划器 V4.5.21 P0 Fix - 安全校验 + 强制映射 + 输出前校验"""
 
     def __init__(self):
         """初始化规划器"""
         self.knowledge_base = get_knowledge_base()
-        logger.info("InterventionPlanner V4.3 Hotfix 初始化完成")
+        logger.info("InterventionPlanner V4.5.21 P0 Fix 初始化完成")
+    
+    # ========== V4.5.21 P0 核心修复 ==========
+    
+    def _check_safety_priority(self, session_context: Optional[dict] = None) -> bool:
+        """
+        V4.5.21 P0-2: 安全优先检查
+        
+        检查行为描述是否涉及安全风险，如果是则必须优先处理安全
+        
+        Returns:
+            bool: True 表示涉及安全，需要启用安全优先模式
+        """
+        if not session_context:
+            return False
+        
+        # 危险关键词列表（高优先级 - 低误报）
+        danger_keywords_high = [
+            "爬高", "危险", "利器", "冲撞", "跑到马路", "触电", "溺水", "水池",
+            "从高处", "跳下", "攀爬", "窗户", "阳台", "烫",
+            "尖锐", "刀子", "剪刀", "电源", "插座", "车祸", "交通"
+        ]
+        
+        # 危险关键词（需要上下文确认 - 避免误报）
+        danger_keywords_context = [
+            ("火", ["玩火", "点火", "烧", "火灾", "打火机", "火柴"]),  # 排除"发火"（发脾气）
+        ]
+        
+        child_behavior = session_context.get("child_behavior", "")
+        context = session_context.get("context", "")
+        context_activity = session_context.get("context", "")
+        
+        # 检查所有相关字段
+        check_text = f"{child_behavior}{context}{context_activity}"
+        
+        # 第一类：高优先级关键词（直接触发）
+        for keyword in danger_keywords_high:
+            if keyword in check_text:
+                logger.warning(
+                    f"⚠️ P0-2 安全优先触发 | "
+                    f"危险关键词：'{keyword}' | "
+                    f"行为：{child_behavior[:50]} | "
+                    f"已启用安全优先模式"
+                )
+                return True
+        
+        # 第二类：需要上下文确认的关键词
+        for keyword, required_contexts in danger_keywords_context:
+            if keyword in check_text:
+                # 检查是否有危险上下文
+                has_danger_context = any(ctx in check_text for ctx in required_contexts)
+                # 检查是否有排除上下文（如"发火"表示发脾气）
+                has_excluded_context = any(excl in check_text for excl in ["发火", "生气", "脾气"])
+                
+                if has_danger_context and not has_excluded_context:
+                    logger.warning(
+                        f"⚠️ P0-2 安全优先触发 | "
+                        f"危险关键词：'{keyword}' + 危险上下文 | "
+                        f"行为：{child_behavior[:50]} | "
+                        f"已启用安全优先模式"
+                    )
+                    return True
+        
+        return False
+    
+    def _generate_safety_first_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
+        """
+        V4.5.21 P0-2: 安全优先干预模板
+        
+        核心原则：安全永远是第一原则。任何行为干预都不能以牺牲安全为代价。
+        """
+        context_activity = session_context.get("context", "") if session_context else ""
+        activity = self._extract_activity_keyword(context_activity) if context_activity else "当前情境"
+        
+        return {
+            "phase_name": f"针对{activity}的'安全优先'计划",
+            "goal": f"确保孩子安全的前提下处理行为问题",
+            "core_principle": "安全永远是第一原则。任何行为干预都不能以牺牲安全为代价。",
+            "four_step_plan": {
+                "core_idea": f"既然行为涉及安全风险，那么我们的首要任务是确保环境安全，然后再处理行为功能。绝不能简单'忽视'危险行为。",
+                
+                "our_plan": f"我们可以采用'安全三步法'：\n\n1. **立即消除危险**：检查并移除环境中的危险因素（如锁好窗户、收好利器、安装防护栏）。\n\n2. **安全前提下最小化反应**：在确保环境安全后，对问题行为保持冷静，避免过度情绪反应强化行为。\n\n3. **教授安全替代行为**：教孩子用安全的方式满足相同需求（如用蹦床替代爬高）。\n\n4. **持续监控**：定期检查安全状况，确保防护措施有效。",
+                
+                "success_picture": f"危险行为频率下降，且未发生安全事故。孩子能使用安全的替代行为满足需求。",
+                
+                "first_step": f"今天，请立即检查并消除{activity}环境中的危险因素。例如：如果孩子爬高，请安装防护栏或移除可攀爬物品；如果有利器，请锁好或放到孩子够不到的地方。"
+            },
+            "observation_tool": f"记录是为了确保安全。您只需：在日历上，记录每天的危险行为次数和是否有安全事故（应该为 0）。重点是确保'零事故'。",
+            
+            # P0-2 新增：安全警示
+            "safety_warning": "⚠️ 重要：对于危险行为，绝不能简单'忽视'或'让孩子自己承担后果'。安全永远是第一位的！"
+        }
+    
+    def _validate_diagnosis_intervention_match(self, diagnosis: str, plan: dict) -> bool:
+        """
+        V4.5.21 P0-3: 输出前校验
+        
+        校验诊断结论与干预策略是否匹配，防止"开错药"
+        
+        Args:
+            diagnosis: 诊断/功能判断文本
+            plan: 生成的干预计划字典
+        
+        Returns:
+            bool: True 表示匹配，False 表示不匹配需要重新生成
+        """
+        if not diagnosis or not plan:
+            return True  # 无法校验时放过
+        
+        # 定义不允许的诊断 - 干预组合（"开错药"模式）
+        forbidden_combinations = [
+            # 社交技能不足 × 行为管理模板
+            ("社交技能", "忽视"),
+            ("社交技能", "冷静角"),
+            ("社交技能", "坐冷静"),
+            ("社交", "忽视"),
+            ("社交", "冷静角"),
+            
+            # 坚持同一性/刻板行为 × 行为管理模板
+            ("坚持同一性", "忽视"),
+            ("坚持同一性", "冷静角"),
+            ("刻板", "忽视"),
+            ("刻板", "冷静角"),
+            ("仪式", "忽视"),
+            
+            # 注意力/执行功能 × 后果法
+            ("注意力", "自然结果"),
+            ("注意力", "减少任务"),
+            ("注意缺陷", "忽视"),
+            ("工作记忆", "忽视"),
+            
+            # 感觉处理 × 行为管理
+            ("感觉", "忽视"),
+            ("感觉", "冷静角"),
+            ("过敏", "忽视"),
+            
+            # 情绪调节 × 纯行为管理
+            ("情绪调节", "忽视"),
+            ("情绪崩溃", "冷静角"),
+        ]
+        
+        # 将计划转换为文本进行检查
+        plan_text = str(plan).lower()
+        
+        for diagnosis_keyword, forbidden_word in forbidden_combinations:
+            if diagnosis_keyword in diagnosis and forbidden_word in plan_text:
+                # V4.5.21 P0-3 修复日志
+                logger.warning(
+                    f"⚠️ P0-3 校验失败，已降级到 fallback 计划 | "
+                    f"诊断：{diagnosis[:80]} | "
+                    f"禁止组合：'{diagnosis_keyword}' × '{forbidden_word}' | "
+                    f"建议人工审核"
+                )
+                return False
+        
+        logger.debug(f"P0-3 校验通过：诊断'{diagnosis[:50]}'与干预匹配")
+        return True
+    
+    def _generate_fallback_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
+        """
+        V4.5.21 P0-3: 降级干预模板（当校验失败时使用）
+        
+        这是一个通用的、低风险的干预模板
+        注意：严禁使用"忽视"、"冷静角"等禁止词！
+        """
+        context_activity = session_context.get("context", "") if session_context else ""
+        activity = self._extract_activity_keyword(context_activity) if context_activity else "当前活动"
+        
+        # V4.5.21 P0-3 修复日志
+        logger.warning(
+            f"⚠️ P0-3 使用 fallback 计划 | "
+            f"原因：诊断 - 干预校验失败或无匹配模板 | "
+            f"建议人工审核此案例"
+        )
+        
+        return {
+            "phase_name": f"针对{activity}的'观察 + 支持'计划",
+            "goal": f"通过观察和适度支持，帮助孩子更好地参与{activity}",
+            "core_principle": "先观察理解，再提供适度支持。",
+            "four_step_plan": {
+                "core_idea": f"既然我们还在了解孩子的需求，那么我们的核心思路是：先观察记录行为模式，同时提供温和的支持，逐步找到最适合孩子的干预方式。",
+                "our_plan": f"1) 记录行为发生的时间、情境和后果；2) 提供适度的环境调整；3) 观察孩子的反应；4) 根据观察结果调整策略。",
+                "success_picture": f"在 1 周内，通过观察记录找到行为模式，为后续精准干预提供依据。",
+                "first_step": f"今天，请开始记录：在什么时间、什么情境下出现行为，之后发生了什么。"
+            },
+            "observation_tool": f"记录 ABC：前因（Antecedent）、行为（Behavior）、后果（Consequence）。"
+        }
+    
+    def _generate_rigidity_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
+        """
+        V4.10.2 P2 简化版：坚持同一性/刻板行为干预模板（通用框架）
+        
+        定位：评估工具为主，干预建议为辅助参考
+        
+        核心原则：
+        - 坚持同一性不是"故意作对"，而是对可预测性的需求
+        - 不是"打破仪式"，而是"逐步增加灵活性"
+        - 关键词：预告、渐进变化、选择权、控制感
+        """
+        context_activity = session_context.get("context", "") if session_context else ""
+        activity = self._extract_activity_keyword(context_activity) if context_activity else "当前活动"
+        
+        return {
+            "phase_name": f"针对{activity}的干预方向（仅供参考）",
+            "goal": f"帮助孩子逐步接受小的变化，提升灵活性",
+            "core_principle": "坚持同一性反映了孩子对可预测性的需求。我们通过预告增加可预测性，通过渐进变化培养灵活性。",
+            "four_step_plan": {
+                "core_idea": f"针对'坚持固定模式'这一困难，干预核心是：通过提前预告增加可预测性，通过微小的、可控的变化逐步培养灵活性。",
+                
+                "our_plan": f"**参考练习类型：认知灵活性类练习**\n\n（示例：通过预告 + 微小变化，逐步培养灵活性）\n\n建议方向：\n• 变化发生前 5-10 分钟预告，使用视觉提示卡或计时器\n• 从极小的变化开始（如换一支笔的颜色），确保孩子能接受\n• 在可接受范围内给孩子选择权，增加控制感\n• 当孩子接受变化时，给予具体的积极反馈\n\n注：具体游戏设计建议咨询专业治疗师，根据孩子的具体情况个性化定制。",
+                
+                "success_picture": f"孩子能接受小的变化（如换路线、换餐具）而不崩溃，成功的标志是'能接受了'。",
+                
+                "first_step": f"您可以如何开始尝试？例如：选择一个孩子能接受的小变化（如换一种颜色的杯子），提前 5 分钟预告，观察并记录孩子的反应。"
+            },
+            "observation_tool": f"记录孩子接受了哪种小变化，以及反应如何（平静/轻微不适/崩溃）。重点是记录'成功接受'的时刻。",
+            
+            # V4.10.2 简化：通用衔接说明
+            "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'认知灵活性'能力的培养。"
+        }
+    
+    # ========== V4.5.21 P0 修复结束 ==========
+    
+    # ========== V4.10.1 P1 新增：场景→干预映射 ==========
+    
+    def _classify_scene_type(self, session_context: Optional[dict] = None) -> str:
+        """
+        V4.10.1 P1 新增：场景分类
+        
+        根据情境和行为描述，识别场景类型，用于匹配精准的干预建议
+        
+        场景分类：
+        1. joint_play - 共同游戏/加入游戏
+        2. conversation_intro - 对话/介绍/轮流
+        3. rules_rigidity - 规则理解/变化
+        4. body_boundary - 身体边界/触碰
+        5. emotion_recognition - 情绪识别/回应
+        
+        Returns:
+            str: 场景类型
+        """
+        if not session_context:
+            return "joint_play"  # 默认
+        
+        context = session_context.get("context", "")
+        behavior = session_context.get("child_behavior", "")
+        check_text = f"{context}{behavior}"
+        
+        # 1. 对话/介绍/轮流场景
+        conversation_keywords = ["介绍", "名字", "说话", "告诉", "问", "回答", "轮流", "对话", "说完", "任务化"]
+        if any(kw in check_text for kw in conversation_keywords):
+            logger.info(f"📍 场景分类：conversation_intro (对话/介绍)")
+            return "conversation_intro"
+        
+        # 2. 规则理解/变化场景
+        rigidity_keywords = ["路线", "顺序", "排列", "必须", "一定", "不能变", "同样", "固定", "仪式"]
+        if any(kw in check_text for kw in rigidity_keywords):
+            logger.info(f"📍 场景分类：rules_rigidity (规则/变化)")
+            return "rules_rigidity"
+        
+        # 3. 身体边界/触碰场景
+        boundary_keywords = ["拥抱", "碰", "推", "拉", "靠", "近", "远", "轻重", "用力", "边界"]
+        if any(kw in check_text for kw in boundary_keywords):
+            logger.info(f"📍 场景分类：body_boundary (身体边界)")
+            return "body_boundary"
+        
+        # 4. 情绪识别/回应场景
+        emotion_keywords = ["表情", "高兴", "生气", "哭", "笑", "脸色", "不想", "拒绝", "皱眉"]
+        if any(kw in check_text for kw in emotion_keywords):
+            logger.info(f"📍 场景分类：emotion_recognition (情绪识别)")
+            return "emotion_recognition"
+        
+        # 5. 共同游戏/加入游戏场景（默认）
+        play_keywords = ["玩", "游戏", "加入", "一起", "参与", "规则", "抓人", "追逐"]
+        if any(kw in check_text for kw in play_keywords):
+            logger.info(f"📍 场景分类：joint_play (共同游戏)")
+            return "joint_play"
+        
+        # 默认
+        logger.info(f"📍 场景分类：joint_play (默认)")
+        return "joint_play"
+    
+    def _get_scene_intervention(self, scene_type: str, session_context: Optional[dict] = None) -> Dict[str, Any]:
+        """
+        V4.10.2 P2 简化版：根据场景类型生成通用干预框架（仅供参考）
+        
+        定位：评估工具为主，干预建议为辅助参考
+        核心：提供干预方向和原则，不提供具体游戏步骤
+        
+        Args:
+            scene_type: 场景类型
+            session_context: 会话上下文
+        
+        Returns:
+            干预计划字典（简化版）
+        """
+        context_activity = session_context.get("context", "") if session_context else ""
+        activity = self._extract_activity_keyword(context_activity) if context_activity else "当前情境"
+        capability_gap = session_context.get("capability_gap", "") if session_context else ""
+        
+        # 1. 对话/介绍/轮流场景
+        if scene_type == "conversation_intro":
+            return {
+                "phase_name": f"针对{activity}的干预方向（仅供参考）",
+                "goal": f"帮助孩子在对话/介绍时学会观察对方反应",
+                "core_principle": "将'说完话要看对方反应'转化为可练习的具体步骤",
+                "four_step_plan": {
+                    "core_idea": f"针对'介绍时忽略他人反应'这一困难，干预核心是：将抽象的社交状态（'对方是否在听'）转化为具体的、可练习的动作信号。",
+                    
+                    "our_plan": f"**参考练习类型：社交信号监测类练习**\n\n（示例：练习'说完→看脸→等反应'的完整链条）\n\n**建议方向：**\n1. 家庭模拟对话场景，练习'说完→看脸→等反应'的完整链条\n2. 使用视觉提示卡，提醒孩子观察对方反应\n3. 在真实场景前给予简短提示（如'说完名字要做什么？'）\n\n注：具体游戏设计建议咨询专业治疗师，根据孩子的具体情况个性化定制。",
+                    
+                    "success_picture": f"孩子能在对话/介绍后主动观察对方反应（点头、微笑、眼神接触），而不只是'说完了'。",
+                    
+                    "first_step": f"您可以如何开始尝试？例如：在家模拟简单对话场景，观察孩子'说完后是否会看对方'，记录成功时刻。"
+                },
+                "observation_tool": f"记录孩子有几次'说完后看了对方'，以及对方的反应。重点是发现孩子的进步模式。",
+                
+                # V4.10.2 简化：通用衔接说明
+                "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'社交信号监测'能力的培养。"
+            }
+        
+        # 2. 规则理解/变化场景
+        elif scene_type == "rules_rigidity":
+            return {
+                "phase_name": f"针对{activity}的干预方向（仅供参考）",
+                "goal": f"帮助孩子逐步接受小的变化，提升灵活性",
+                "core_principle": "通过预告增加可预测性，通过微小变化培养灵活性",
+                "four_step_plan": {
+                    "core_idea": f"针对'坚持固定模式'这一困难，干预核心是：通过提前预告增加可预测性，通过微小的、可控的变化逐步培养灵活性。",
+                    
+                    "our_plan": f"**参考练习类型：认知灵活性类练习**\n\n（示例：通过预告 + 微小变化，逐步培养灵活性）\n\n**建议方向：**\n1. 变化发生前 5-10 分钟预告，使用视觉提示卡或计时器\n2. 从极小的变化开始（如换一支笔的颜色），确保孩子能接受\n3. 在可接受范围内给孩子选择权，增加控制感\n4. 当孩子接受变化时，给予具体的积极反馈\n\n注：具体游戏设计建议咨询专业治疗师。",
+                    
+                    "success_picture": f"孩子能接受小的变化（如换路线、换餐具）而不崩溃，成功的标志是'能接受了'。",
+                    
+                    "first_step": f"您可以如何开始尝试？例如：选择一个孩子能接受的小变化（如换一种颜色的杯子），提前 5 分钟预告，观察并记录孩子的反应。"
+                },
+                "observation_tool": f"记录孩子接受了哪种小变化，以及反应如何（平静/轻微不适/崩溃）。",
+                
+                "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'认知灵活性'能力的培养。"
+            }
+        
+        # 3. 身体边界/触碰场景
+        elif scene_type == "body_boundary":
+            return {
+                "phase_name": f"针对{activity}的干预方向（仅供参考）",
+                "goal": f"帮助孩子理解并尊重自己和他人的身体边界",
+                "core_principle": "将抽象的'身体边界'转化为可视化的具体概念",
+                "four_step_plan": {
+                    "core_idea": f"针对'身体边界感不足'这一困难，干预核心是：用视觉化和体验式的方法，让孩子理解每个人都有'舒适距离'。",
+                    
+                    "our_plan": f"**参考练习类型：身体感知类练习**\n\n（示例：用视觉化方法展示'身体边界'，如身体泡泡图）\n\n**建议方向：**\n1. 用视觉化方法（如画图）展示每个人的'身体泡泡'\n2. 通过体验式游戏（如呼啦圈）演示'舒适距离'\n3. 角色扮演练习'轻轻抱'vs'用力抱'的区别\n4. 建立非语言提醒信号（如手势）\n\n注：具体游戏设计建议咨询专业治疗师。",
+                    
+                    "success_picture": f"孩子能在拥抱/靠近前停顿一下，调整力度/距离，成功的标志是'会调整了'。",
+                    
+                    "first_step": f"您可以如何开始尝试？例如：和孩子一起画'身体泡泡'图，用玩偶练习'轻轻抱'。"
+                },
+                "observation_tool": f"记录孩子调整拥抱力度/距离的次数，以及对方的反应。",
+                
+                "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'身体感知与调节'能力的培养。"
+            }
+        
+        # 4. 情绪识别/回应场景
+        elif scene_type == "emotion_recognition":
+            return {
+                "phase_name": f"针对{activity}的干预方向（仅供参考）",
+                "goal": f"帮助孩子识别和理解他人的情绪信号",
+                "core_principle": "将情绪识别转化为可练习的'侦探游戏'",
+                "four_step_plan": {
+                    "core_idea": f"针对'情绪识别困难'这一困难，干预核心是：用游戏化的方式，让孩子像侦探一样寻找'情绪线索'。",
+                    
+                    "our_plan": f"**参考练习类型：情绪识别类练习**\n\n（示例：用游戏化方式寻找'情绪线索'，如表情卡片、猜表情游戏）\n\n**建议方向：**\n1. 制作表情卡片（高兴/生气/难过/惊讶），每天认一认\n2. 看照片/视频片段，猜测人物感受\n3. 讨论什么情况下会有什么表情\n4. 在真实情境中引导孩子注意他人情绪\n\n注：具体游戏设计建议咨询专业治疗师。",
+                    
+                    "success_picture": f"孩子能识别基本表情，并在真实情境中注意到他人的情绪信号。",
+                    
+                    "first_step": f"您可以如何开始尝试？例如：找 3-5 张不同表情的照片（家人/动画角色），和孩子玩'猜表情'游戏。"
+                },
+                "observation_tool": f"记录孩子正确识别他人情绪的次数和情境。",
+                
+                "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'非语言线索解读'能力的培养。"
+            }
+        
+        # 5. 共同游戏/加入游戏场景（默认）
+        else:  # joint_play
+            return {
+                "phase_name": f"针对{activity}的干预方向（仅供参考）",
+                "goal": f"帮助孩子判断自己是否被同伴真正接纳",
+                "core_principle": "将抽象的'我们是否在一起玩'转化为具体的身体动作信号",
+                "four_step_plan": {
+                    "core_idea": f"针对'社交信号监测弱'这一困难，干预核心是：将抽象的社交状态转化为具体的、可练习的动作信号。",
+                    
+                    "our_plan": f"**参考练习类型：社交信号监测类练习**\n\n（示例：建立'开始互动'的视觉或动作信号，如击掌、对暗号）\n\n**建议方向：**\n1. 设定专属'连接信号'，作为游戏开始的标志\n2. 在家演练：游戏前完成'连接信号'\n3. 过程中可随时暂停，用信号'重启'\n4. 真实场景前给予简短提示\n\n注：具体游戏设计建议咨询专业治疗师。",
+                    
+                    "success_picture": f"孩子能在游戏前主动寻求'连接信号'，或在不确定时观察对方是否在回应。",
+                    
+                    "first_step": f"您可以如何开始尝试？例如：和孩子一起发明一个'开始信号'（如击掌 + 说'开始！'），在家游戏前练习使用。"
+                },
+                "observation_tool": f"记录孩子主动确认'是否在一起玩'的次数，以及对方的回应。",
+                
+                "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'社交信号监测'能力的培养。"
+            }
+    
+    # ========== V4.10.1 P1 修复结束 ==========
 
     def generate_plan(self, matched_hypothesis_id: str, scenario_key: str, session_context: Optional[dict] = None) -> Optional[Dict[str, Any]]:
         """
-        V4.3 Hotfix 根据功能判断生成个性化干预计划
+        V4.10.1 P1 场景化干预：根据场景类型 + 功能判断生成精准干预计划
         
-        核心修复：根据 functional_judgment 选择完全不同的干预模板
+        核心修复：
+        1. 优先使用场景分类匹配精准干预（V4.10.1 P1）
+        2. 功能判断作为辅助校验（V4.5.21 P0）
 
         Args:
             matched_hypothesis_id: 匹配的假设 ID（如 "H1"）
@@ -40,83 +443,136 @@ class InterventionPlanner:
         Returns:
             干预计划字典，包含四步结构
         """
-        # V4.3 Hotfix 核心：从 session_context 提取功能判断
-        functional_judgment = session_context.get("primary_hypothesis", "") if session_context else ""
+        # V4.10.1 P1 核心：场景分类驱动的精准干预
+        scene_type = self._classify_scene_type(session_context)
         capability_gap = session_context.get("capability_gap", "") if session_context else ""
-        context_activity = session_context.get("context", "") if session_context else ""
+        functional_judgment = session_context.get("primary_hypothesis", "") if session_context else ""
         
-        logger.info(f"V4.3 Hotfix 生成计划：functional_judgment={functional_judgment[:50] if functional_judgment else 'N/A'}...")
+        logger.info(f"V4.10.1 P1 场景分类：{scene_type}, capability_gap={capability_gap[:50] if capability_gap else 'N/A'}...")
         
-        # === V4.3 Hotfix 核心：根据功能判断选择完全不同的干预模板 ===
-        # V4.5.3 修复：使用 AND 逻辑，确保精确匹配
-        if functional_judgment and "提示依赖" in functional_judgment:
-            # 提示依赖：建立视觉/动作锚点
-            logger.info("V4.3 Hotfix: 选择提示依赖干预模板")
-            return self._generate_prompt_dependence_plan(session_context)
+        # === V4.10.1 P1 核心：根据场景类型生成精准干预 ===
+        # 优先使用场景→干预映射（解决"诊断正确但开错药"问题）
+        plan = self._get_scene_intervention(scene_type, session_context)
         
-        elif functional_judgment and "逃避" in functional_judgment and "难度" in functional_judgment:
-            # 逃避难度：任务分解，降低起点（必须同时包含"逃避"和"难度"）
-            logger.info("V4.3 Hotfix: 选择逃避难度干预模板（任务分解）")
-            return self._generate_escape_difficulty_plan(session_context)
+        # V4.5.21 P0 校验：确保诊断 - 干预匹配
+        if plan and self._validate_diagnosis_intervention_match(functional_judgment, plan):
+            logger.info(f"✅ V4.10.1 P1：场景化干预生成成功（{scene_type}）")
+            return plan
         
-        elif functional_judgment and "关注" in functional_judgment:
-            # 寻求关注：关注重定向
-            logger.info("V4.3 Hotfix: 选择寻求关注干预模板")
-            return self._generate_attention_seeking_plan(session_context)
-        
-        # 降级方案：使用知识库模板
-        logger.info("V4.3 Hotfix: 使用知识库降级方案")
-        return self._generate_from_knowledge_base(matched_hypothesis_id, scenario_key, session_context)
+        # 降级方案：使用原有逻辑
+        logger.info("⚠️ V4.10.1 P1：场景化干预校验失败，降级到 V4.5.21 逻辑")
+        return self._generate_fallback_plan(session_context)
     
     def generate_plan_with_narrative(self, matched_hypothesis_id: str, scenario_key: str, session_context: Optional[dict] = None, narrative: Optional[dict] = None) -> Optional[Dict[str, Any]]:
         """
-        V4.5.3 核心修复：基于功能判断生成干预计划
+        V4.5.21 P0 修复：基于功能判断生成干预计划 + 安全校验 + 输出前校验
         
         核心原则：干预计划必须与功能判断严格匹配！
         诊断是"提示依赖"→干预必须是"建立视觉/动作锚点"
         诊断是"逃避难度"→干预必须是"任务分解，降低起点"
         诊断是"寻求关注"→干预必须是"关注重定向"
         
-        V4.5.3 修复：narrative 仅用于丰富干预细节，不覆盖功能判断选择的模板
+        V4.5.21 P0 新增：
+        - 安全优先检查（危险行为不能简单忽视）
+        - 输出前校验（防止诊断 - 干预断裂）
         """
+        # V4.5.21 P0-2 核心：安全优先检查
+        if self._check_safety_priority(session_context):
+            logger.warning("V4.5.21 P0-2: 检测到危险行为，启用安全优先模式")
+            safety_plan = self._generate_safety_first_plan(session_context)
+            return safety_plan
+        
         # V4.5.3 核心修复：优先使用 functional_judgment 选择模板
         functional_judgment = session_context.get("primary_hypothesis", "") if session_context else ""
         
-        logger.info(f"V4.5.3 生成计划：functional_judgment={functional_judgment[:80] if functional_judgment else 'N/A'}...")
+        logger.info(f"V4.5.21 生成计划：functional_judgment={functional_judgment[:80] if functional_judgment else 'N/A'}...")
         
         # === V4.5.3 核心：根据功能判断选择干预模板（严格匹配）===
         
         # 规则 1：提示依赖 → 建立视觉/动作锚点
         if functional_judgment and "提示依赖" in functional_judgment:
             logger.info("V4.5.3: 选择提示依赖干预模板（视觉/动作锚点）")
-            return self._generate_prompt_dependence_plan(session_context)
+            plan = self._generate_prompt_dependence_plan(session_context)
+            # V4.5.21 P0-3: 输出前校验
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
         
         # 规则 2：逃避难度 → 任务分解，降低起点
         elif functional_judgment and ("逃避" in functional_judgment and "难度" in functional_judgment):
             logger.info("V4.5.3: 选择逃避难度干预模板（任务分解）")
-            return self._generate_escape_difficulty_plan(session_context)
+            plan = self._generate_escape_difficulty_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
         
-        # 规则 3：寻求关注 → 关注重定向
+        # 规则 3（V4.5.21 P0 修复）：注意力/任务坚持 → 环境调整 + 专注支持
+        # 必须在"寻求关注"之前检查，避免"注意"关键词被错误匹配
+        elif functional_judgment and any(kw in functional_judgment for kw in ["注意力", "专注", "分心", "任务坚持", "走神", "持续性注意"]):
+            logger.info("V4.5.21 P0: 选择注意力支持干预模板（环境调整 + 专注支持）")
+            plan = self._generate_attention_support_plan(session_context, functional_judgment)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
+        
+        # 规则 4：寻求关注 → 关注重定向
         # 扩展匹配：包含"寻求关注"、"吸引注意"、"互动需求"等
-        elif functional_judgment and any(kw in functional_judgment for kw in ["关注", "注意", "互动"]):
+        # V4.5.21 P0 修复：移除"注意"关键词，避免与注意力困难混淆
+        elif functional_judgment and any(kw in functional_judgment for kw in ["关注", "寻求注意", "互动"]):
             logger.info("V4.5.3: 选择寻求关注干预模板（关注重定向）")
-            return self._generate_attention_seeking_plan(session_context)
+            plan = self._generate_attention_seeking_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
         
-        # 规则 4：感觉逃避 → 环境调整 + 脱敏
-        # 扩展匹配：包含"感觉逃避"、"感觉敏感"、"逃避不适"、"听觉过敏"等
+        # 规则 4.5（V4.5.20 P0 新增）：社交技能不足 → 直接教学 + 辅助演练
+        elif functional_judgment and "社交" in functional_judgment:
+            logger.info("V4.5.20 P0: 选择社交技能干预模板（直接教学）")
+            plan = self._generate_social_skills_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
+        
+        # 规则 5：感觉逃避 → 环境调整 + 脱敏
         elif functional_judgment and any(kw in functional_judgment for kw in ["感觉逃避", "感觉敏感", "逃避不适", "听觉过敏", "触觉敏感"]):
             logger.info("V4.5.3: 选择感觉逃避干预模板（环境调整）")
-            return self._generate_sensory_escape_plan(session_context)
+            plan = self._generate_sensory_escape_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
         
-        # 规则 5：自我刺激/自动强化 → 替代性感官输入
+        # 规则 6：自我刺激/自动强化 → 替代性感官输入
         elif functional_judgment and ("自我刺激" in functional_judgment or "自动" in functional_judgment):
             logger.info("V4.5.3: 选择自我刺激干预模板（替代性感官）")
-            return self._generate_self_stimulation_plan(session_context)
+            plan = self._generate_self_stimulation_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
         
-        # 规则 6：过渡困难 → 预告 + 选择权
+        # 规则 7：过渡困难 → 预告 + 选择权
         elif functional_judgment and "过渡" in functional_judgment:
             logger.info("V4.5.3: 选择过渡困难干预模板（预告 + 选择）")
-            return self._generate_transition_plan(session_context)
+            plan = self._generate_transition_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
+        
+        # 规则 8（V4.5.21 P0 新增）：坚持同一性/刻板行为 → 预告 + 渐进变化
+        elif functional_judgment and any(kw in functional_judgment for kw in ["坚持同一性", "刻板", "仪式", "固定模式", "排列", "排序", "固定"]):
+            logger.info("V4.5.21 P0: 选择坚持同一性干预模板（预告 + 渐进变化）")
+            plan = self._generate_rigidity_plan(session_context)
+            if self._validate_diagnosis_intervention_match(functional_judgment, plan):
+                return plan
+            else:
+                return self._generate_fallback_plan(session_context)
         
         # 降级方案：使用叙事性归因辅助选择（但不覆盖功能判断）
         # V4.5.3 修复：增加感觉逃避检查，避免错配到序列支持
@@ -127,21 +583,34 @@ class InterventionPlanner:
             # 优先检查感觉逃避（避免错配到序列支持）
             if any(kw in primary_attribution for kw in ["感觉", "听觉", "触觉", "噪音", "声音", "过敏"]):
                 logger.info("V4.5.3: 选择感觉逃避干预模板（叙事归因辅助）")
-                return self._generate_sensory_escape_plan(session_context)
+                plan = self._generate_sensory_escape_plan(session_context)
+                if self._validate_diagnosis_intervention_match(primary_attribution, plan):
+                    return plan
             
             # 检查工作记忆/序列记忆
             elif "工作记忆" in primary_attribution or "序列记忆" in primary_attribution:
                 logger.info("V4.5.3: 选择序列支持干预模板（辅助）")
-                return self._generate_sequential_support_plan(session_context, primary_attribution)
+                plan = self._generate_sequential_support_plan(session_context, primary_attribution)
+                if self._validate_diagnosis_intervention_match(primary_attribution, plan):
+                    return plan
             
             # 检查注意力
             elif "注意" in primary_attribution:
                 logger.info("V4.5.3: 选择注意力支持干预模板（辅助）")
-                return self._generate_attention_support_plan(session_context, primary_attribution)
+                plan = self._generate_attention_support_plan(session_context, primary_attribution)
+                if self._validate_diagnosis_intervention_match(primary_attribution, plan):
+                    return plan
         
         # 最终降级：基于功能标签
         logger.info("V4.5.3: 降级到基于功能标签的模板")
-        return self.generate_plan(matched_hypothesis_id, scenario_key, session_context)
+        plan = self.generate_plan(matched_hypothesis_id, scenario_key, session_context)
+        
+        # V4.5.21 P0-3: 输出前校验（降级方案也要校验）
+        if functional_judgment and not self._validate_diagnosis_intervention_match(functional_judgment, plan):
+            logger.warning("V4.5.21 P0-3: 降级方案校验失败，使用 fallback 计划")
+            return self._generate_fallback_plan(session_context)
+        
+        return plan
 
         # 构建返回结果
         plan = {
@@ -617,3 +1086,63 @@ class InterventionPlanner:
             },
             "observation_tool": f"记录是为了看见专注力的进步。您只需：在日历上，记录孩子每次专注的时长（秒）和分心的次数。",
         }
+    
+    # ========== V4.5.20 P0: 社交技能干预模板 ==========
+    
+    def _generate_social_skills_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
+        """
+        V4.7.0 行动种子版：社交技能不足干预模板
+        
+        V4.7.0 修复：干预建议不能是万金油，要提供具体可操作的游戏
+        核心策略：从一个关键信号开始，搭建能力桥梁
+        """
+        context_activity = session_context.get("context", "") if session_context else ""
+        child_behavior = session_context.get("child_behavior", "") if session_context else ""
+        capability_gap = session_context.get("capability_gap", "") if session_context else ""
+        
+        # V4.8.0 核心：基于具体场景生成"行动种子"游戏 + 深度原理解释
+        if "以为" in child_behavior or "监测" in child_behavior or "介绍" in child_behavior or "参与" in child_behavior:
+            # 抓人游戏/社交监测场景（核心问题：难以判断是否真的被接纳）
+            game_name = "我们开始玩了吗信号练习"
+            game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
+            why_effective = "孩子目前难以在复杂的实时互动中判断'别人是否在和我玩'。这个练习绕开了复杂的社交解读，直接给她一个明确、可执行的外在规则，作为她内部'社交监测'能力的脚手架。这是构建更复杂社交能力的第一步。"
+        elif "拥抱" in child_behavior or "轻重" in child_behavior:
+            # 身体边界场景
+            game_name = "轻柔的手练习游戏"
+            game_steps = "1. 准备道具：毛绒玩具或气球\n2. 练习轻柔：让孩子轻轻摸玩具，说'这是轻柔的手'\n3. 对比练习：先用力抱（说'太紧了'），再轻柔抱（说'刚刚好'）"
+            why_effective = "通过具体道具和对比练习，帮助孩子建立身体边界感的触觉记忆"
+        elif "规则" in child_behavior or "僵化" in child_behavior or "重复" in child_behavior:
+            # 规则理解场景
+            game_name = "规则变变变游戏"
+            game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'"
+            why_effective = "在安全环境中练习规则变化，培养认知灵活性"
+        elif "轮流" in child_behavior or "等待" in child_behavior or "争当" in child_behavior:
+            # 轮流等待场景
+            game_name = "轮流当队长游戏"
+            game_steps = "1. 准备计时器：设定 2 分钟\n2. 轮流规则：计时器响了就换人当队长\n3. 引导等待：在孩子等待时说'轮到你时我会提醒你'"
+            why_effective = "用可视化的计时器帮助孩子理解'轮流'的抽象概念"
+        else:
+            # 通用场景
+            game_name = "社交技能假装游戏"
+            game_steps = "1. 模拟当前场景\n2. 练习恰当的社交技能\n3. 给予积极反馈"
+            why_effective = "在安全环境中练习，逐步泛化到真实场景"
+        
+        return {
+            "phase_name": "行动起点",
+            "goal": f"从一个关键信号开始，搭建能力桥梁",
+            "core_principle": "将抽象的社交状态转化为可观察、可练习的具体动作信号",
+            "four_step_plan": {
+                "core_idea": "基于孩子的能力缺口，本周可以尝试一个极简的练习，帮助学习关键社交信号。核心思路是：将抽象的社交状态转化为具体的、可练习的动作信号。",
+                
+                "our_plan": f"一个可尝试的游戏：**{game_name}**\n\n{game_steps}",
+                
+                "success_picture": "在 1 周内，孩子能在游戏前主动使用约定的信号（如主动击掌），成功的标志是孩子开始注意到'我们是否在一起玩'这个关键信号。",
+                
+                "first_step": f"今天，您就可以开始第一步：{game_steps.split(chr(10))[0]}。记住，第一次玩不重要，重要的是开始！"
+            },
+            "observation_tool": f"记录孩子今天是否能使用约定的信号（如击掌），以及在什么情境下使用的。重点是记录'成功时刻'。",
+            
+            # V4.7.0 新增：原理解释
+            "why_effective": why_effective,
+        }
+    # ========== V4.5.20 P0 结束 ==========

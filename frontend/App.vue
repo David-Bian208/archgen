@@ -69,68 +69,104 @@
               </div>
             </div>
 
-            <!-- 二、多角度理解（V4.1 严格出口 + 假设锁定） -->
+            <!-- 二、多角度理解与能力分析（V4.10.0 精简版） -->
             <div v-if="insightReport.clinical_differential" class="report-section clinical-differential">
-              <h3>二、多角度理解</h3>
-              <p>{{ insightReport.clinical_differential }}</p>
+              <h3>二、多角度理解与能力分析</h3>
+              <div class="clinical-text" v-html="formatMarkdown(insightReport.clinical_differential)"></div>
+              <!-- V4.10.0 修复：删除冗余的 hypothesis-box，clinical_differential 已包含完整三模块 -->
             </div>
 
-            <!-- 三、行为模式解读 -->
-            <div class="report-section expert-view">
-              <h3>三、行为模式解读</h3>
-              <div class="hypothesis-box">
-                <p><strong>主要假设：</strong>{{ insightReport.primary_hypothesis || insightReport.expert_view }}</p>
-                <p><strong>支持证据：</strong>{{ insightReport.supporting_evidence || '基于您的详细描述和行为模式分析。' }}</p>
-                <p><strong>核心能力建设目标：</strong>{{ insightReport.core_capability_goal || '提升在无实时外部提示下，维持任务序列的工作记忆能力。' }}</p>
-              </div>
-            </div>
-
-            <!-- 四、我们可以这样开始（V4.1 紧急修复版） -->
-            <div v-if="interventionPlan && interventionPlan.four_step_plan" class="report-section intervention-plan-final">
-              <h3>四、我们可以这样开始</h3>
+            <!-- 三、行动起点：从一个关键信号开始（V4.10.2 通用框架版） -->
+            <div v-if="interventionPlan && interventionPlan.four_step_plan" class="report-section intervention-direction">
+              <h3>三、可尝试的行动方向（仅供参考）</h3>
+              <p class="intervention-intro">基于上述能力缺口，以下是干预的核心思路和参考方向。</p>
               
-              <div class="four-step-container">
-                <!-- 1. 核心思路 -->
-                <div class="step-item step-core">
-                  <h4>💡 核心思路</h4>
-                  <p>{{ interventionPlan.four_step_plan.core_idea }}</p>
-                </div>
-                
-                <!-- 2. 我们的计划 -->
-                <div class="step-item step-plan">
-                  <h4>🎮 我们的计划：{{ interventionPlan.phase_name || '动作密语' }}</h4>
+              <!-- V4.10.2 新增：免责声明 -->
+              <div class="disclaimer-box">
+                <p>⚠️ <strong>重要提示：</strong>以下建议仅供参考，不能替代专业评估和个性化干预方案。具体训练活动建议咨询专业治疗师，根据孩子的具体情况设计。</p>
+              </div>
+              
+              <!-- V4.10.1 新增：场景化衔接说明 -->
+              <div v-if="interventionPlan.scene_bridge" class="scene-bridge-box">
+                <p><strong>🎯 干预重点：</strong>{{ interventionPlan.scene_bridge }}</p>
+              </div>
+              
+              <!-- V4.10.0 新增：核心思路 -->
+              <div v-if="interventionPlan.four_step_plan.core_idea" class="core-idea-box">
+                <p><strong>💡 核心思路：</strong>{{ interventionPlan.four_step_plan.core_idea }}</p>
+              </div>
+              
+              <div class="intervention-suggestion">
+                <div class="game-box">
+                  <h4>📚 参考练习类型</h4>
                   <p>{{ interventionPlan.four_step_plan.our_plan }}</p>
                 </div>
                 
-                <!-- 3. 成功的画面 -->
-                <div class="step-item step-success">
-                  <h4> 成功的画面</h4>
-                  <p class="success-picture">{{ interventionPlan.four_step_plan.success_picture }}</p>
-                </div>
-                
-                <!-- 4. 第一步行动与观察 -->
-                <div class="step-item step-first">
-                  <h4>🚀 第一步行动与观察</h4>
-                  <p>{{ interventionPlan.four_step_plan.first_step }}</p>
-                </div>
+                <p><strong>建议起点：</strong>{{ interventionPlan.four_step_plan.first_step }}</p>
               </div>
               
-              <!-- V4.1 成功时刻记录卡 -->
-              <div v-if="interventionPlan.observation_tool" class="observation-tool-final">
-                <h4>📋 您的"成功时刻"记录卡</h4>
-                <p>{{ interventionPlan.observation_tool }}</p>
-              </div>
+              <p class="intervention-note">注：以上分析是基于您提供的有限情境的深度解读。每个孩子都是独特的，一份完整的干预方案需要更全面的评估并由专业人员制定。</p>
             </div>
 
-            <!-- 五、展望与共勉 -->
+            <!-- 四、展望与共勉 -->
             <div class="report-section reflection">
-              <h3>五、展望与共勉</h3>
+              <h3>四、展望与共勉</h3>
               <div class="future-section">
                 <p><strong>后续可能的方向：</strong>{{ interventionPlan?.next_phase_preview || insightReport.reflection }}</p>
                 <p><strong>给您的赋能思考题：</strong>{{ insightReport.empowerment_question || '在接下来一周，请留意孩子在哪件他热爱的事情上，展现出惊人的"无需提醒"的专注力？' }}</p>
               </div>
             </div>
 
+            <!-- V4.10.4 新增：用户反馈区域 -->
+            <div class="feedback-section">
+              <h4>💬 帮助我们改进</h4>
+              <p class="feedback-intro">这份分析对你有帮助吗？你的反馈会让我们变得更好。</p>
+              
+              <div class="rating-stars">
+                <span 
+                  v-for="star in 5" 
+                  :key="star"
+                  class="star"
+                  :class="{ active: star <= feedbackForm.rating }"
+                  @click="setRating(star)"
+                >
+                  {{ star <= feedbackForm.rating ? '⭐' : '☆' }}
+                </span>
+                <span class="rating-text">{{ getRatingText() }}</span>
+              </div>
+              
+              <div class="accuracy-select">
+                <label>分析准确性：</label>
+                <select v-model="feedbackForm.accuracy">
+                  <option value="">请选择</option>
+                  <option value="accurate">✅ 准确</option>
+                  <option value="partial">⚠️ 部分准确</option>
+                  <option value="inaccurate">❌ 不准确</option>
+                </select>
+              </div>
+              
+              <div class="feedback-textarea">
+                <label>具体反馈（选填）：</label>
+                <textarea 
+                  v-model="feedbackForm.feedbackText"
+                  placeholder="哪些地方分析得好？哪些地方需要改进？"
+                  rows="3"
+                ></textarea>
+              </div>
+              
+              <button 
+                @click="submitFeedback" 
+                :disabled="!feedbackForm.rating || submittingFeedback"
+                class="btn-feedback"
+              >
+                {{ submittingFeedback ? '提交中...' : '提交反馈' }}
+              </button>
+              
+              <div v-if="feedbackMessage" class="feedback-message" :class="feedbackMessageType">
+                {{ feedbackMessage }}
+              </div>
+            </div>
+            
             <div class="report-actions">
               <button @click="startNewSession" class="btn-primary">
                 🔄 开始新的记录
@@ -149,6 +185,12 @@
                 <span></span>
                 <span></span>
               </div>
+              <p class="loading-text">
+                🤖 AI 正在分析您的问题，这通常需要 <strong>5-10 秒</strong>，请耐心等待...
+              </p>
+              <p class="loading-hint">
+                💡 提示：AI 正在进行深度临床推理，包括行为功能分析、能力缺口评估和干预建议生成。
+              </p>
             </div>
           </div>
         </div>
@@ -196,6 +238,16 @@ export default {
       interventionPlan: null,  // V3.5 新增
       reportData: {},  // V3.5 新增
       today: new Date().toLocaleDateString('zh-CN'),
+      // V4.10.4 新增：反馈表单
+      feedbackForm: {
+        rating: 0,
+        accuracy: '',
+        feedbackText: '',
+        improvementSuggestion: ''
+      },
+      submittingFeedback: false,
+      feedbackMessage: '',
+      feedbackMessageType: 'success'
     }
   },
   methods: {
@@ -218,6 +270,8 @@ export default {
         const response = await axios.post('/api/v4/chat', {
           session_id: this.sessionId,
           user_input: text,
+        }, {
+          timeout: 60000, // 60 秒超时（V4.10.5 优化）
         })
 
         const data = response.data
@@ -255,9 +309,18 @@ export default {
 
       } catch (error) {
         console.error('发送失败:', error)
+        
+        let errorMessage = '抱歉，处理您的请求时出现了问题。'
+        
+        if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+          errorMessage = '⏱️ 响应时间较长，AI 仍在努力分析中。建议您：\n\n1. 稍等片刻后刷新页面重试\n2. 避开使用高峰（如晚上 8-10 点）\n3. 如果问题持续，请联系管理员\n\n感谢您的耐心！'
+        } else {
+          errorMessage += '请重试。'
+        }
+        
         this.messages.push({
           role: 'ai',
-          text: '抱歉，处理您的请求时出现了问题。请重试。',
+          text: errorMessage,
           timestamp: new Date().toISOString(),
         })
       } finally {
@@ -312,10 +375,151 @@ ${this.insightReport.expert_view}
       })
     },
 
+    // ========== V4.10.4 新增：反馈相关方法 ==========
+    
+    setRating(star) {
+      this.feedbackForm.rating = star
+    },
+    
+    getRatingText() {
+      const texts = ['', '非常差', '差', '一般', '好', '非常好']
+      return texts[this.feedbackForm.rating] || ''
+    },
+    
+    async submitFeedback() {
+      if (!this.feedbackForm.rating || !this.sessionId) {
+        this.feedbackMessage = '请先评分'
+        this.feedbackMessageType = 'error'
+        return
+      }
+      
+      this.submittingFeedback = true
+      
+      try {
+        const response = await axios.post('/api/v4/feedback', {
+          session_id: this.sessionId,
+          rating: this.feedbackForm.rating,
+          accuracy: this.feedbackForm.accuracy || 'partial',
+          feedback_text: this.feedbackForm.feedbackText,
+          improvement_suggestion: this.feedbackForm.improvementSuggestion
+        }, {
+          timeout: 10000, // 10 秒超时
+        })
+        
+        if (response.data.status === 'success') {
+          this.feedbackMessage = '✅ 感谢你的反馈！'
+          this.feedbackMessageType = 'success'
+          // 清空表单
+          this.feedbackForm = {
+            rating: 0,
+            accuracy: '',
+            feedbackText: '',
+            improvementSuggestion: ''
+          }
+        }
+      } catch (error) {
+        console.error('提交反馈失败:', error)
+        this.feedbackMessage = '❌ 提交失败，请稍后重试'
+        this.feedbackMessageType = 'error'
+      } finally {
+        this.submittingFeedback = false
+        
+        // 3 秒后清除消息
+        setTimeout(() => {
+          this.feedbackMessage = ''
+        }, 3000)
+      }
+    },
+
     formatMessage(text) {
       if (!text) return ''
       // V3.6 修复：使用全局过滤器处理特殊字符
       return this.$escape(text).replace(/\n/g, '<br>')
+    },
+
+    // V4.10.3 新增：Markdown 格式化（支持加粗、列表）
+    formatMarkdown(text) {
+      if (!text) return ''
+      
+      let html = this.$escape(text)
+      
+      // 1. 加粗：**text** → <strong>text</strong>（全局替换，支持多次出现）
+      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      
+      // 2. 处理换行：先保留所有换行
+      html = html.replace(/\n/g, '<LINEBREAK>')
+      
+      // 3. 有序列表和无序列表处理
+      const lines = html.split('<LINEBREAK>')
+      const processedLines = []
+      let inOrderedList = false
+      let inUnorderedList = false
+      
+      // V4.10.3 修复：主标题关键词（不渲染为列表，保持为普通段落）
+      const mainTitles = ['鉴别与排除', '核心假设', '能力缺口分析']
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim()
+        
+        // 匹配有序列表：1. 2. 3. 或数字 + 点
+        const orderedMatch = line.match(/^(\d+)\.\s*(.+)/)
+        
+        // 匹配无序列表：• 或 - 或 *
+        const unorderedMatch = line.match(/^[•\-\*]\s*(.+)/)
+        
+        // V4.10.3 修复：检查是否是主标题（包含关键词）
+        const isMainTitle = mainTitles.some(title => line.includes(title))
+        
+        if (orderedMatch && !isMainTitle) {
+          // 关闭无序列表（如果正在其中）
+          if (inUnorderedList) {
+            processedLines.push('</ul>')
+            inUnorderedList = false
+          }
+          // 开启或继续有序列表
+          if (!inOrderedList) {
+            processedLines.push('<ol>')
+            inOrderedList = true
+          }
+          processedLines.push(`<li>${orderedMatch[2]}</li>`)
+        } else if (unorderedMatch) {
+          // 关闭有序列表（如果正在其中）
+          if (inOrderedList) {
+            processedLines.push('</ol>')
+            inOrderedList = false
+          }
+          // 开启或继续无序列表
+          if (!inUnorderedList) {
+            processedLines.push('<ul>')
+            inUnorderedList = true
+          }
+          processedLines.push(`<li>${unorderedMatch[1]}</li>`)
+        } else {
+          // 普通段落（包括主标题）：关闭所有列表
+          if (inOrderedList) {
+            processedLines.push('</ol>')
+            inOrderedList = false
+          }
+          if (inUnorderedList) {
+            processedLines.push('</ul>')
+            inUnorderedList = false
+          }
+          // 普通段落：有内容则显示，空行则跳过
+          if (line && line !== '<br>') {
+            processedLines.push(line + '<br>')
+          }
+        }
+      }
+      
+      // 关闭未结束的列表
+      if (inOrderedList) {
+        processedLines.push('</ol>')
+      }
+      if (inUnorderedList) {
+        processedLines.push('</ul>')
+      }
+      
+      return processedLines.join('')
     },
 
     scrollToBottom() {
@@ -691,6 +895,27 @@ textarea:disabled {
   40% { transform: scale(1); }
 }
 
+/* 加载提示文本 */
+.loading-text {
+  margin: 10px 0 5px 0;
+  color: #667eea;
+  font-size: 0.95em;
+  line-height: 1.5;
+}
+
+.loading-text strong {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.loading-hint {
+  margin: 5px 0 0 0;
+  color: #999;
+  font-size: 0.85em;
+  line-height: 1.4;
+  font-style: italic;
+}
+
 .footer {
   text-align: center;
   color: rgba(255,255,255,0.8);
@@ -1002,5 +1227,346 @@ textarea:disabled {
   background: white;
   padding: 12px;
   border-radius: 6px;
+}
+
+/* V4.6.0 新增样式 */
+.clinical-text {
+  line-height: 1.8;
+  color: #475569;
+  margin-bottom: 16px;
+  white-space: normal; /* 允许换行 */
+}
+
+/* V4.10.3 新增：临床文本加粗 */
+.clinical-text strong {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+/* V4.10.3 新增：临床文本列表样式 */
+.clinical-text ol {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.clinical-text ul {
+  margin: 12px 0;
+  padding-left: 24px;
+  list-style-type: disc; /* 实心圆点 */
+}
+
+.clinical-text li {
+  margin: 8px 0;
+  line-height: 1.7;
+}
+
+/* 子列表层级区分 */
+.clinical-text li > ol {
+  margin-top: 4px;
+  padding-left: 20px;
+  list-style-type: lower-alpha; /* a, b, c... */
+}
+
+.clinical-text li > ul {
+  margin-top: 4px;
+  padding-left: 20px;
+  list-style-type: circle; /* 空心圆 */
+}
+
+.intervention-direction {
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 24px;
+}
+
+.intervention-intro {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 12px;
+}
+
+.intervention-suggestion {
+  background: white;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.intervention-suggestion p {
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap; /* 保留换行 */
+}
+
+/* 修复加粗显示 */
+.intervention-suggestion strong {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+/* 列表样式优化 */
+.intervention-suggestion ol,
+.intervention-suggestion ul {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.intervention-suggestion li {
+  margin: 6px 0;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+/* 子列表样式（层级区分） */
+.intervention-suggestion li > ol,
+.intervention-suggestion li > ul {
+  margin-top: 4px;
+  padding-left: 20px;
+  list-style-type: lower-alpha; /* a, b, c... */
+}
+
+.intervention-note {
+  font-size: 11px;
+  color: #94a3b8;
+  font-style: italic;
+  margin-top: 12px;
+}
+
+/* V4.10.1 新增：场景化衔接说明样式 */
+.scene-bridge-box {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-left: 4px solid #f59e0b;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 16px 0;
+}
+
+.scene-bridge-box p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #92400e;
+  margin: 0;
+}
+
+.scene-bridge-box strong {
+  color: #b45309;
+}
+
+/* V4.10.2 新增：免责声明样式 */
+.disclaimer-box {
+  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+  border-left: 4px solid #ef4444;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 16px 0;
+}
+
+.disclaimer-box p {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #991b1b;
+  margin: 0;
+}
+
+.disclaimer-box strong {
+  color: #b91c1c;
+}
+
+.game-box {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-left: 4px solid #0284c7;
+  border-radius: 6px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+.game-box h4 {
+  color: #0369a1;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+}
+
+.game-box p {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #0c4a6e;
+  margin: 8px 0;
+}
+
+.why-effective {
+  background: white;
+  padding: 12px;
+  border-radius: 4px;
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.why-effective strong {
+  color: #0891b2;
+}
+
+.game-box .why-effective-box {
+  background: #f0f9ff;
+  border-left: 3px solid #0284c7;
+  padding: 12px;
+  margin-top: 12px;
+  border-radius: 4px;
+}
+
+.game-box .why-effective-box p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #0c4a6e;
+  margin: 0;
+}
+
+/* ========== V4.10.4 反馈区域样式 ========== */
+
+.feedback-section {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 2px solid #f59e0b;
+  border-radius: 12px;
+  padding: 24px;
+  margin: 24px 0;
+}
+
+.feedback-section h4 {
+  color: #92400e;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+}
+
+.feedback-intro {
+  color: #78350f;
+  font-size: 13px;
+  margin: 0 0 16px 0;
+}
+
+.rating-stars {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.star {
+  font-size: 28px;
+  cursor: pointer;
+  transition: transform 0.2s;
+  user-select: none;
+}
+
+.star:hover {
+  transform: scale(1.2);
+}
+
+.star.active {
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));
+}
+
+.rating-text {
+  color: #92400e;
+  font-size: 14px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+
+.accuracy-select {
+  margin-bottom: 16px;
+}
+
+.accuracy-select label {
+  display: block;
+  color: #78350f;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.accuracy-select select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d97706;
+  border-radius: 6px;
+  font-size: 14px;
+  background: white;
+  color: #78350f;
+}
+
+.feedback-textarea label {
+  display: block;
+  color: #78350f;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.feedback-textarea textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d97706;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  background: white;
+  color: #78350f;
+  box-sizing: border-box;
+}
+
+.feedback-textarea textarea::placeholder {
+  color: #b45309;
+  opacity: 0.7;
+}
+
+.btn-feedback {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.btn-feedback:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+}
+
+.btn-feedback:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.feedback-message {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.feedback-message.success {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.feedback-message.error {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
 }
 </style>

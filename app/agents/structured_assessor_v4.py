@@ -76,6 +76,9 @@ class StructuredAssessmentState:
     turn_count: int = 0
     is_complete: bool = False
     
+    # V4.8.0 新增：背景信息
+    child_profile: Optional[Dict[str, Any]] = None
+    
     # 分析结果
     insight_result: Optional[Dict[str, Any]] = None
     intervention_plan: Optional[Dict[str, Any]] = None
@@ -249,9 +252,12 @@ class StructuredAssessorV4:
         
         logger.info("StructuredAssessorV4 初始化完成 - V4.5 临床推理引擎集成版")
     
-    def _create_session(self) -> StructuredAssessmentState:
+    def _create_session(self, session_id: Optional[str] = None) -> StructuredAssessmentState:
         """创建新会话（V4.5.12 新增：重置推理引擎假设）"""
-        session_id = str(uuid.uuid4())[:8]
+        # V4.5.19 修复：如果传入了 session_id，使用传入的 ID
+        if not session_id:
+            session_id = str(uuid.uuid4())[:8]
+        
         session = StructuredAssessmentState(session_id=session_id)
         self.sessions[session_id] = session
         
@@ -262,14 +268,17 @@ class StructuredAssessorV4:
         for field_id in self.framework.get_required_fields():
             session.filled_data[field_id] = FieldValue()
         
-        logger.info(f"创建新会话：{session_id} (假设置信度已重置)")
+        # V4.5.19 新增：初始阶段设为 PROBLEM_CLARIFICATION
+        session.current_stage = "PROBLEM_CLARIFICATION"
+        
+        logger.info(f"创建新会话：{session_id} (初始阶段={session.current_stage}, 假设置信度已重置)")
         return session
     
     def _get_or_create_session(self, session_id: Optional[str]) -> StructuredAssessmentState:
-        """获取或创建会话"""
+        """获取或创建会话（V4.5.19 修复：传入 session_id 给 _create_session）"""
         if session_id and session_id in self.sessions:
             return self.sessions[session_id]
-        return self._create_session()
+        return self._create_session(session_id)
     
     def _extract_into_framework(self, state: StructuredAssessmentState, user_input: str) -> Dict[str, str]:
         """
@@ -320,12 +329,14 @@ class StructuredAssessorV4:
 {user_input}
 
 【提取规则】
-1. **优先提取必填字段**：child_age, antecedent, behavior_detail, immediate_consequence
+1. **优先提取必填字段**：problem_description, specific_example, child_age, antecedent, behavior_detail, immediate_consequence
 2. 只提取明确提到的信息，不要推断
 3. 值要简洁，保留核心信息
 4. 以 JSON 格式输出：{{"field_id": "提取的值", ...}}
 
 【字段说明】
+- problem_description：具体行为表现（如"叫他不理"、"不眼神对视"、"自己玩自己的"）
+- specific_example：具体场景（如"今天早上在幼儿园做操时"）
 - child_age：孩子年龄（如"5 岁"、"幼儿园大班"）
 - antecedent：何时、何地、何事（如"在教室里做操"）
 - behavior_detail：孩子具体做了什么/没做什么（如"发呆"、"不看老师"）
@@ -868,20 +879,66 @@ class StructuredAssessorV4:
             filled_data_dict = {k: v.value for k, v in state.filled_data.items() if v.value}
             narrative = self.reasoning_engine.generate_narrative(filled_data_dict)
             
-            # 3. 生成干预计划 - V4.5.1 核心修复：基于叙事性归因选择计划
+            # 3. 生成干预计划 - V4.5.20 P0 修复：基于功能判断选择场景
             planner = InterventionPlanner()
             
-            # 根据假设置信度选择场景和假设
-            hypotheses = state.inferred_hypotheses
-            top_hypothesis = max(hypotheses.items(), key=lambda x: x[1], default=("prompt_dependence", 0))
+            # V4.5.20 P0 核心修复：优先使用 functional_judgment 选择场景（而非假设置信度）
+            functional_judgment = insight.get("functional_judgment", "")
+            capability_gap = insight.get("capability_hypothesis", "")
             
-            # 选择场景
-            if top_hypothesis[0] == "escape_difficulty" or "难" in behavior or "太难" in behavior:
-                scenario_key = "task_refusal"  # 逃避难度场景
-                hypothesis_id = "H1"  # 逃避任务难度
+            logger.info(f"V4.5.20 P0 功能判断：{functional_judgment[:80] if functional_judgment else 'N/A'}...")
+            logger.info(f"V4.5.20 P0 能力缺口：{capability_gap[:80] if capability_gap else 'N/A'}...")
+            
+            # V4.5.20 P0 核心：根据功能判断 + 能力缺口选择干预场景（能力缺口优先级更高）
+            # V4.5.20 P0 关键修复：capability_gap 比 functional_judgment 更可靠！
+            
+            # 优先检查能力缺口（社交技能 > 其他）
+            if capability_gap and any(kw in capability_gap for kw in ["社交", "换位思考", "灵活性", "情绪识别"]):
+                scenario_key = "social_skills_deficit"
+                hypothesis_id = "H_SOCIAL_SKILLS"
+                logger.info("✅ 选择社交技能干预模板（基于能力缺口 - V4.5.20 P0 核心）")
+                
+            elif functional_judgment and "逃避" in functional_judgment and "难度" in functional_judgment:
+                scenario_key = "task_refusal"
+                hypothesis_id = "H_ESCAPE_DIFFICULTY"
+                logger.info("✅ 选择逃避难度干预模板")
+                
+            elif functional_judgment and "提示依赖" in functional_judgment:
+                scenario_key = "task_disengagement"
+                hypothesis_id = "H_PROMPT_DEPENDENCE"
+                logger.info("✅ 选择提示依赖干预模板")
+                
+            # V4.5.20 P0 修复：即使 functional_judgment 是"寻求关注"，如果能力缺口是社交，也选社交技能
+            elif functional_judgment and "关注" in functional_judgment:
+                # 二次检查：如果能力缺口或行为指向社交技能，覆盖 functional_judgment
+                if capability_gap and any(kw in capability_gap for kw in ["社交", "换位思考", "灵活性"]):
+                    scenario_key = "social_skills_deficit"
+                    hypothesis_id = "H_SOCIAL_SKILLS"
+                    logger.info("✅ 选择社交技能干预模板（覆盖'寻求关注'判断 - V4.5.20 P0 修复）")
+                else:
+                    scenario_key = "attention_seeking"
+                    hypothesis_id = "H_ATTENTION"
+                    logger.info("✅ 选择寻求关注干预模板")
+                
+            elif functional_judgment and "社交" in functional_judgment:
+                scenario_key = "social_skills_deficit"
+                hypothesis_id = "H_SOCIAL_SKILLS"
+                logger.info("✅ 选择社交技能干预模板（基于功能判断）")
+                
             else:
-                scenario_key = "task_disengagement"  # 提示依赖场景
-                hypothesis_id = "H1"  # 提示依赖
+                # 默认：根据行为特征和能力缺口推断（优先指向社交技能，更安全）
+                if capability_gap and any(kw in capability_gap for kw in ["社交", "换位思考", "灵活性"]):
+                    scenario_key = "social_skills_deficit"
+                    hypothesis_id = "H_SOCIAL_SKILLS"
+                    logger.info("✅ 默认选择社交技能干预模板（基于能力缺口）")
+                elif "难" in behavior or "不会" in behavior or "太难" in behavior:
+                    scenario_key = "task_refusal"
+                    hypothesis_id = "H_ESCAPE_DIFFICULTY"
+                    logger.info("✅ 默认选择逃避难度干预模板（基于行为特征）")
+                else:
+                    scenario_key = "social_skills_deficit"  # 最安全的默认
+                    hypothesis_id = "H_SOCIAL_SKILLS"
+                    logger.info("✅ 默认选择社交技能干预模板（安全默认）")
             
             # V4.5.1 核心：传递叙事性分析给干预计划生成器
             session_context = {
@@ -891,13 +948,13 @@ class StructuredAssessorV4:
                 "others_response": consequence,
                 "child_age": child_age,
                 # V4.3 核心：传递功能判断和能力缺口
-                "primary_hypothesis": insight.get("functional_judgment", ""),
-                "capability_gap": insight.get("capability_hypothesis", ""),
+                "primary_hypothesis": functional_judgment,
+                "capability_gap": capability_gap,
                 # V4.5.1 新增：传递叙事性归因
                 "narrative_analysis": narrative,
             }
             
-            logger.info(f"V4.5.1 生成干预计划：scenario={scenario_key}, hypothesis={hypothesis_id}, narrative={narrative.get('primary_attribution', 'N/A')[:50] if narrative else 'N/A'}...")
+            logger.info(f"V4.5.20 P0 生成干预计划：scenario={scenario_key}, hypothesis={hypothesis_id}")
             plan = planner.generate_plan_with_narrative(hypothesis_id, scenario_key, session_context, narrative)
             
             # 3. 保存结果
@@ -1010,16 +1067,33 @@ class StructuredAssessorV4:
     
     def _decide_next_action_with_reasoning(self, state: StructuredAssessmentState, reasoning_action: Optional[dict] = None) -> Dict[str, Any]:
         """
-        V4.5.1 核心修复：带推理的工作流决策
+        V4.5.19 修复版：带推理的工作流决策 + 已问字段跟踪
         
         当推理引擎无明确指令时，按优先级收集缺失信息：
         1. 必填字段（CORE_ABC 优先）
         2. 鉴别线索字段
         3. 背景信息字段
+        
+        V4.5.19 新增：
+        - 已问字段跟踪，避免重复提问
+        - 问过 2 次仍未填充的字段，跳过或给示例
         """
         rules = self.framework.get_completion_rules()
         required_fields = rules.get("required_fields_for_analysis", [])
-        max_turns = rules.get("max_turns", 8)
+        max_turns = rules.get("max_turns", 10)  # V4.5.19: 增加到 10 轮（新增问题澄清阶段）
+        
+        # 规则 0: 计算已问字段
+        asked_fields = {}
+        import re
+        for msg in state.conversation_history:
+            if msg.get("role") == "ai" and msg.get("field_id"):
+                field_id = msg.get("field_id")
+                # 跳过共情回应（不计入已问次数）
+                if msg.get("is_empathetic"):
+                    continue
+                asked_fields[field_id] = asked_fields.get(field_id, 0) + 1
+        
+        logger.info(f"📊 已问字段统计：{asked_fields}")
         
         # 规则 1: 强制结束（轮数限制）
         if state.turn_count >= max_turns:
@@ -1044,33 +1118,48 @@ class StructuredAssessorV4:
                     logger.info(f"触发早期退出：{condition.get('name')}")
                     return {"type": "GENERATE_REPORT", "source": f"early_exit_{condition.get('name')}"}
         
-        # 规则 4: 按工作流阶段选择下一个必填字段
-        current_stage = self.framework.get_stage(state.current_stage)
-        if current_stage:
-            # 优先问当前阶段的必填字段
-            for f in current_stage.get("fields", []):
-                field_id = f["field_id"]
-                if not state.is_field_filled(field_id) and not f.get("is_auto_inferred"):
-                    # 检查触发条件
-                    trigger = f.get("trigger_condition")
-                    if trigger:
-                        trigger_field = trigger.get("field")
-                        trigger_contains = trigger.get("contains", [])
-                        tf_value = state.get_field_value(trigger_field)
-                        if tf_value and any(kw in tf_value for kw in trigger_contains):
-                            logger.info(f"选择触发字段：{field_id}")
-                            return {"type": "ASK_FIELD", "field_id": field_id, "source": "workflow_trigger"}
+        # 规则 4: 按工作流阶段顺序选择下一个必填字段（V4.5.19 增强）
+        # 遍历所有阶段，找到第一个未完成的阶段
+        for stage_def in self.framework.data.get("workflow_stages", []):
+            stage_id = stage_def.get("id")
+            stage_fields = stage_def.get("fields", [])
+            
+            # 检查此阶段是否有未完成的必填字段
+            missing_in_stage = [
+                f["field_id"] for f in stage_fields 
+                if f.get("is_required") and not f.get("is_auto_inferred") 
+                and not state.is_field_filled(f["field_id"])
+            ]
+            
+            if missing_in_stage:
+                # 此阶段未完成，选择第一个未完成的字段
+                for field_id in missing_in_stage:
+                    asked_count = asked_fields.get(field_id, 0)
+                    
+                    # V4.5.19 新增：跳过已问过 2 次的字段
+                    if asked_count >= 2:
+                        logger.warning(f"⚠️ 字段{field_id}已问过{asked_count}次，跳过")
                         continue
-                    else:
-                        logger.info(f"选择当前阶段字段：{field_id}")
-                        return {"type": "ASK_FIELD", "field_id": field_id, "source": "workflow_current_stage"}
+                    
+                    # 检查触发条件
+                    field_def = next((f for f in stage_fields if f["field_id"] == field_id), None)
+                    if field_def:
+                        trigger = field_def.get("trigger_condition")
+                        if trigger:
+                            trigger_field = trigger.get("field")
+                            trigger_contains = trigger.get("contains", [])
+                            tf_value = state.get_field_value(trigger_field)
+                            if tf_value and any(kw in tf_value for kw in trigger_contains):
+                                logger.info(f"选择触发字段：{field_id} (stage={stage_id})")
+                                return {"type": "ASK_FIELD", "field_id": field_id, "source": "workflow_trigger"}
+                            continue
+                    
+                    logger.info(f"选择阶段{stage_id}的字段：{field_id} (asked={asked_count})")
+                    return {"type": "ASK_FIELD", "field_id": field_id, "source": "workflow_stage_priority"}
         
-        # 规则 5: 进入下一阶段
-        next_stage = self.framework.get_next_stage(state.current_stage)
-        if next_stage:
-            state.current_stage = next_stage
-            logger.info(f"进入下一阶段：{state.current_stage}")
-            return self._decide_next_action_with_reasoning(state)
+        # 规则 5: 所有阶段都完成，生成报告
+        logger.info("所有阶段字段已完成，生成报告")
+        return {"type": "GENERATE_REPORT", "source": "all_stages_complete"}
         
         # 规则 6: 默认结束
         logger.info("无更多字段可问，生成报告")
@@ -1140,49 +1229,366 @@ class StructuredAssessorV4:
         return hyp_intents.get(field_id, "行为背后的原因")
     
     def _generate_summary(self, state: StructuredAssessmentState, inferred_env: str) -> str:
-        """生成综合摘要（V4.3 增强版）"""
-        parts = []
+        """
+        生成综合摘要（V4.10.0 P0 修复版）
         
-        child_age = state.get_field_value("child_age") or ""
-        antecedent = state.get_field_value("antecedent") or ""
+        V4.10.0 P0 核心修复：摘要必须精准概括行为模式和核心能力挑战，与后文分析严格一致
+        优化版示例："在集体游戏中，孩子表现出自我游戏规则与集体互动现实的显著脱节..."
+        
+        修复要点：
+        1. 优先使用 insight_result 中的 capability_hypothesis 和 functional_judgment（而非 inferred_hypotheses）
+        2. 摘要中的能力归因必须与后文分析保持一致
+        """
+        # 获取关键字段
         behavior = state.get_field_value("behavior_detail") or ""
-        consequence = state.get_field_value("immediate_consequence") or ""
+        specific_example = state.get_field_value("specific_example") or ""
+        context = state.get_field_value("antecedent") or ""
         
-        # 年龄 + 环境
-        if child_age and inferred_env != "未明确":
-            parts.append(f"{child_age}孩子在{inferred_env}环境中")
-        elif child_age:
-            parts.append(f"{child_age}孩子")
-        elif inferred_env != "未明确":
-            parts.append(f"在{inferred_env}环境中")
+        # V4.9.0 新增：从背景信息计算年龄和阶段
+        child_profile = state.child_profile or {}
+        birth_date = child_profile.get("birth_date", "")
+        stage = child_profile.get("stage", "")
         
-        # 情境
-        if antecedent:
-            parts.append(f"当{antecedent}时")
+        # 计算年龄显示
+        child_age_display = self._calculate_age_display(birth_date)
         
-        # 行为
-        if behavior:
-            parts.append(f"观察到孩子{behavior}")
+        # V4.10.0 P0 修复：优先使用 insight_result 中的能力缺口和功能判断
+        insight = state.insight_result or {}
+        capability_gap = insight.get("capability_hypothesis", "")
+        functional_judgment = insight.get("functional_judgment", "")
         
-        # 后果
-        if consequence:
-            parts.append(f"而周围人的回应是{consequence}")
+        # 确定用于摘要生成的"首要假设"（优先级：capability_gap > functional_judgment > inferred_hypotheses）
+        if capability_gap and any(kw in capability_gap for kw in ["社交", "换位思考", "灵活性", "情绪识别", "观点采择"]):
+            primary_hypothesis = "社交技能不足"
+        elif capability_gap and any(kw in capability_gap for kw in ["规则", "僵化", "同一性"]):
+            primary_hypothesis = "坚持同一性"
+        elif functional_judgment and "社交" in functional_judgment:
+            primary_hypothesis = "社交技能不足"
+        elif functional_judgment and "提示依赖" in functional_judgment:
+            primary_hypothesis = "提示依赖"
+        elif functional_judgment and "逃避" in functional_judgment:
+            primary_hypothesis = "逃避难度"
+        elif functional_judgment and "关注" in functional_judgment:
+            primary_hypothesis = "寻求关注"
+        else:
+            # 降级：使用 inferred_hypotheses
+            top_hypothesis = max(state.inferred_hypotheses.items(), key=lambda x: x[1], default=(None, 0))
+            primary_hypothesis = top_hypothesis[0]
         
-        # 假设信息
-        top_hypothesis = max(state.inferred_hypotheses.items(), key=lambda x: x[1], default=(None, 0))
-        if top_hypothesis[0] and top_hypothesis[1] > 0.3:
-            hyp_names = {
-                "prompt_dependence": "提示依赖",
-                "escape_difficulty": "逃避难度",
-                "attention_seeking": "寻求关注",
-            }
-            hyp_name = hyp_names.get(top_hypothesis[0], top_hypothesis[0])
-            parts.append(f"初步判断可能与{hyp_name}有关")
-        
-        if not parts:
+        # 如果没有足够信息，返回降级方案
+        if not behavior and not specific_example:
             return "基于我们的对话，我对情况有了基本了解。"
         
-        return "。".join(parts) + "。"
+        # V4.10.0 P0 核心：生成精准摘要（像专家写报告）
+        
+        # 1. 场景提取
+        if specific_example:
+            scene = self._extract_scene_keyword(specific_example)
+        elif context:
+            scene = self._extract_scene_keyword(context)
+        else:
+            scene = "当前互动场景"
+        
+        # 2. 核心行为模式（V4.10.0 修复：基于行为描述，不套用模板）
+        ability_pattern = self._generate_ability_pattern(behavior, primary_hypothesis)
+        
+        # 3. 核心能力挑战（V4.10.0 修复：直接点明核心挑战，与后文分析一致）
+        core_challenge = self._generate_core_challenge(primary_hypothesis, behavior)
+        
+        # 4. 发展期待对标（如果有背景信息）
+        developmental_context = self._generate_developmental_context(stage, child_age_display, scene)
+        
+        # 组合摘要（V4.10.0 优化：像专家写报告）
+        summary_parts = []
+        
+        # 第一句：场景 + 核心行为模式（直接点明）
+        if child_age_display:
+            summary_parts.append(f"在{scene}中，{child_age_display}的孩子{ability_pattern}")
+        else:
+            summary_parts.append(f"在{scene}中，孩子{ability_pattern}")
+        
+        # 第二句：核心能力挑战（如有发展期待则加入）
+        if developmental_context:
+            summary_parts.append(f"{core_challenge}。{developmental_context}")
+        else:
+            summary_parts.append(core_challenge)
+        
+        if not summary_parts:
+            return "基于我们的对话，我对情况有了基本了解。"
+        
+        return "。".join(summary_parts) + "。"
+    
+    def _generate_core_challenge(self, hypothesis_id: str, behavior: str) -> str:
+        """
+        V4.10.0 P0 修复：生成核心能力挑战描述
+        
+        基于行为描述生成精准的能力挑战，而非套用模板
+        核心原则：摘要中的能力归因必须与后文分析严格一致
+        """
+        # 社交技能不足的核心挑战（V4.10.0 增强：覆盖更多行为模式）
+        if "社交技能不足" in hypothesis_id or hypothesis_id == "社交技能不足":
+            # 社交信号监测弱（"以为别人在和她玩"）
+            if "以为" in behavior or "监测" in behavior or "参与" in behavior:
+                return "这主要反映了在动态、多变的同伴互动中，监测社交信号与灵活调整自身行为的核心挑战"
+            # 认知灵活性不足（"规则只有 3 条，不停重复"）
+            elif "规则" in behavior or "僵化" in behavior or "重复" in behavior or "固定" in behavior:
+                return "这反映了在快速变化的社交情境中，整合外界信息来更新自己认知和行为脚本的挑战"
+            # 身体边界感（"拥抱""轻重"）
+            elif "拥抱" in behavior or "轻重" in behavior or "边界" in behavior:
+                return "这反映了感知自己行为对他人影响的身体边界感待发展"
+            # 观点采择/换位思考
+            elif "换位" in behavior or "观点" in behavior or "感受" in behavior:
+                return "这反映了在互动中理解他人感受和观点的换位思考能力待发展"
+            # 默认：社交技能不足
+            else:
+                return "这主要反映了在动态、多变的同伴互动中，监测社交信号与灵活调整自身行为的核心挑战"
+        
+        # 坚持同一性/刻板行为的核心挑战
+        if "坚持同一性" in hypothesis_id or "僵化" in hypothesis_id or "刻板" in hypothesis_id:
+            if "规则" in behavior or "顺序" in behavior or "仪式" in behavior:
+                return "这反映了在面对变化时保持灵活性的挑战，以及对可预测性的强烈需求"
+            else:
+                return "这反映了认知灵活性的待发展，以及对固定模式的依赖"
+        
+        # 其他假设（使用映射表）
+        challenge_map = {
+            "提示依赖": "这反映了在无外部提示情况下维持任务执行的工作记忆挑战",
+            "逃避难度": "这反映了在面对困难任务时的情绪调节与任务坚持能力待发展",
+            "寻求关注": "这反映了用恰当方式获取成人注意的社交沟通技能待发展",
+        }
+        
+        hyp_names = {
+            "prompt_dependence": "提示依赖",
+            "escape_difficulty": "逃避难度",
+            "attention_seeking": "寻求关注",
+            "社交技能不足": "社交技能不足",
+            "坚持同一性": "坚持同一性",
+        }
+        
+        hyp_name = hyp_names.get(hypothesis_id, hypothesis_id)
+        return challenge_map.get(hyp_name, "这反映了相关能力的待发展")
+    
+    def _calculate_age_display(self, birth_date: str) -> str:
+        """
+        V4.8.0 新增：根据出生日期计算年龄显示
+        
+        例如："2021-03-15" → "5 岁 3 个月"
+        """
+        if not birth_date:
+            return ""
+        
+        try:
+            from datetime import datetime
+            birth = datetime.strptime(birth_date, "%Y-%m-%d")
+            today = datetime.now()
+            
+            total_months = (today.year - birth.year) * 12 + (today.month - birth.month)
+            years = total_months // 12
+            months = total_months % 12
+            
+            if months > 0:
+                return f"{years}岁{months}个月"
+            else:
+                return f"{years}岁"
+        except:
+            return ""
+    
+    def _generate_developmental_context(self, stage: str, child_age_display: str, scene: str) -> str:
+        """
+        V4.8.0 新增：生成发展期待对标
+        
+        例如：
+        - "对于一个 5 岁、幼儿园中班的孩子，通常应能进行有简单规则的同伴合作游戏"
+        - "在复杂同伴游戏这一特定场景中，其表现反映出...的挑战"
+        """
+        if not stage:
+            return ""
+        
+        # 阶段发展期待（轻量级规则，无需数据库）
+        stage_expectations = {
+            "kindergarten_small": "适应集体生活，听从简单指令，进行平行游戏",
+            "kindergarten_middle": "跟随集体指令，进行简单同伴合作游戏，理解基本规则",
+            "kindergarten_big": "理解复杂游戏规则，进行合作游戏，处理简单同伴冲突",
+            "primary_low": "完成课堂任务，遵循多步指令，处理同伴关系",
+            "primary_high": "独立完成任务，理解复杂社交规则，解决同伴冲突",
+        }
+        
+        expectation = stage_expectations.get(stage, "适应当前环境")
+        stage_name = self._get_stage_name(stage)
+        
+        # 生成发展视角解读
+        if child_age_display:
+            return f"对于一个{child_age_display}、处于{stage_name}的孩子，通常应能{expectation}。在当前场景中，孩子的表现反映出将基础能力应用于真实情境时存在挑战"
+        else:
+            return f"处于{stage_name}的孩子通常应能{expectation}。在当前场景中，孩子的表现反映出相关能力待发展"
+    
+    def _get_stage_name(self, stage: str) -> str:
+        """V4.8.0 新增：获取阶段显示名称"""
+        stage_names = {
+            "not_in_school": "尚未入园",
+            "kindergarten_small": "幼儿园小班",
+            "kindergarten_middle": "幼儿园中班",
+            "kindergarten_big": "幼儿园大班",
+            "primary_low": "小学低年级",
+            "primary_high": "小学高年级",
+            "other": "其他",
+        }
+        return stage_names.get(stage, stage)
+    
+    def _extract_scene_keyword(self, specific_example: str) -> str:
+        """
+        从具体例子中提取场景关键词
+        
+        例如：
+        - "上周六下午在迪士尼与同龄玩伴相处" → "同伴互动"
+        - "昨天请玥玥做相互介绍" → "同伴介绍"
+        - "做操时发呆" → "集体活动"
+        """
+        # 场景关键词映射
+        scene_keywords = {
+            "同伴互动": ["玩伴", "小朋友", "同伴", "朋友"],
+            "同伴介绍": ["介绍", "认识"],
+            "集体活动": ["做操", "集体", "排队", "小组"],
+            "任务执行": ["作业", "任务", "练习"],
+            "日常互动": ["吃饭", "睡觉", "穿衣"],
+        }
+        
+        for scene_name, keywords in scene_keywords.items():
+            if any(kw in specific_example for kw in keywords):
+                return scene_name
+        
+        # 默认返回"当前互动"
+        return "当前互动"
+    
+    def _generate_ability_pattern(self, behavior: str, hypothesis_id: str) -> str:
+        """
+        生成能力表现描述（V4.10.0 P2 比喻增强版）
+        
+        V4.8.0 核心修复：不能套用模板，必须基于用户输入的行为描述
+        V4.10.0 P2 新增：使用生动比喻帮助家长理解（如"沉浸在自己剧本里的导演"）
+        
+        比喻库映射：
+        - 社交误解类 → "导演/演员""雷达""频道"
+        - 规则僵化类 → "单曲循环""固定剧本""唯一规则书"
+        - 情绪调节类 → "音量旋钮""温度计""刹车系统"
+        """
+        # V4.8.0 核心：基于行为描述生成，而非假设 ID 套用
+        
+        # 社交技能不足的细分模式（优先匹配）
+        if "社交技能不足" in hypothesis_id or hypothesis_id == "社交技能不足":
+            # 认知灵活性不足（"规则只有 3 条，不停重复"）- 优先级最高
+            if "规则" in behavior or "僵化" in behavior or "重复" in behavior or "固定" in behavior:
+                # V4.10.0 P2 比喻增强：使用"单曲循环"比喻
+                return "就像一台只能播放三首歌的收音机，在快速变化的游戏'电台'中持续单曲循环"
+            
+            # 社交信号监测弱（"以为别人在和她玩"）
+            elif "以为" in behavior or "监测" in behavior or "介绍" in behavior or "参与" in behavior:
+                # V4.10.0 P2 比喻增强：使用"导演/演员"比喻
+                return "就像一位沉浸在自己剧本里的导演，还没学会在'合作拍摄'时去观察其他演员的剧本和即兴发挥"
+            
+            # 身体边界感不足（"拥抱不知轻重"）
+            elif "拥抱" in behavior or "轻重" in behavior or "边界" in behavior:
+                return "表现出身体边界感不足：拥抱不知轻重，无法感知自己的行为对他人造成的影响"
+            
+            # 社交灵活性不足（"轮流等待""争当队长"）
+            elif "轮流" in behavior or "等待" in behavior or "争当" in behavior or "只能我" in behavior:
+                return "表现出社交灵活性不足：难以接受折中方案，坚持'只能我当'"
+            
+            # 默认社交技能不足
+            else:
+                return "表现出社交技能待发展：在同伴互动中难以理解他人感受和灵活变通"
+        
+        # 坚持同一性/刻板行为
+        if "坚持同一性" in hypothesis_id or "僵化" in hypothesis_id or "刻板" in hypothesis_id:
+            if "路线" in behavior or "顺序" in behavior or "仪式" in behavior:
+                # V4.10.0 P2 比喻增强：使用"固定剧本"比喻
+                return "就像一位严格按剧本演出的演员，任何即兴改动都会让他感到不安和困惑"
+            else:
+                return "表现出对固定模式的坚持，变化会带来挑战"
+        
+        # 其他假设（V4.8.0 修复：必须检查行为中是否真的有相关描述）
+        if hypothesis_id == "提示依赖" or "prompt_dependence" in hypothesis_id:
+            # 检查用户输入中是否真的提到了提示
+            if "提示" in behavior or "提醒" in behavior or "帮助" in behavior or "教" in behavior:
+                # V4.10.0 P2 比喻增强：使用"脚手架"比喻
+                return "就像建筑需要脚手架支撑，孩子在有外部提示时能执行任务，但提示撤去后任务也会'倒塌'"
+            else:
+                # 如果没有提到提示，不套用此模板
+                return "需要进一步确认行为模式"
+        
+        if hypothesis_id == "寻求关注" or "attention_seeking" in hypothesis_id:
+            # 检查是否针对成人注意力
+            if "大人" in behavior or "成人" in behavior or "注意力" in behavior or "打电话" in behavior:
+                # V4.10.0 P2 比喻增强：使用"聚光灯"比喻
+                return "就像一个需要站在聚光灯下的表演者，当灯光转向别处时会想办法重新吸引注意"
+            else:
+                return "需要进一步确认行为功能"
+        
+        # 默认降级
+        return "表现出行为模式待分析"
+    
+    def _generate_capability_judgment(self, hypothesis_id: str, behavior: str = "") -> str:
+        """
+        生成核心能力判断（V4.7.0 锋利版）
+        
+        V4.7.0 修复：摘要要一针见血，不能说空话
+        问题：之前说"行为模式待分析" = 什么都没说
+        修复：直接点明核心行为模式 + 能力缺口
+        """
+        # V4.7.0 核心：生成锋利的结论，避免空泛表述
+        
+        # 社交技能不足的细分判断（V4.7.0 增强版）
+        if "社交技能不足" in hypothesis_id or hypothesis_id == "社交技能不足":
+            if "介绍" in behavior or "监测" in behavior or "以为" in behavior:
+                return "这指向社交互动中'共同关注'与'社交监测'能力的待发展：孩子难以判断自己是否真的被同伴接纳"
+            elif "规则" in behavior or "僵化" in behavior or "重复" in behavior:
+                return "这指向社交规则理解与认知灵活性方面的待发展：孩子固守自定规则，难以适应同伴的动态变化"
+            elif "拥抱" in behavior or "轻重" in behavior:
+                return "这指向身体边界感与触觉调节能力的待发展：孩子无法感知自己的行为对他人造成的影响"
+            elif "轮流" in behavior or "等待" in behavior or "争当" in behavior:
+                return "这指向社交灵活性与轮流等待能力的待发展：孩子难以接受折中方案"
+            else:
+                return "这指向换位思考与社交灵活性方面的待发展：孩子难以理解他人感受和适应社交变化"
+        
+        # 其他假设保持原有判断
+        judgment_map = {
+            "提示依赖": "这指向工作记忆与持续性注意能力的待发展",
+            "寻求关注": "这指向恰当社交沟通技能的待发展",
+        }
+        
+        hyp_names = {
+            "prompt_dependence": "提示依赖",
+            "escape_difficulty": "逃避难度",
+            "attention_seeking": "寻求关注",
+            "社交技能不足": "社交技能不足",
+        }
+        
+        hyp_name = hyp_names.get(hypothesis_id, hypothesis_id)
+        return judgment_map.get(hyp_name, "这指向相关能力的待发展")
+    
+    def _generate_exclusion_statement(self, hypothesis_id: str) -> str:
+        """
+        生成排除说明（而非什么问题）
+        
+        例如：
+        - "而非动机或理解力问题"
+        - "而非任务执行能力不足"
+        """
+        exclusion_map = {
+            "社交技能不足": "而非动机或理解力问题",
+            "提示依赖": "而非任务执行能力不足",
+            "寻求关注": "而非缺乏基本能力",
+        }
+        
+        hyp_names = {
+            "prompt_dependence": "提示依赖",
+            "escape_difficulty": "逃避难度",
+            "attention_seeking": "寻求关注",
+            "社交技能不足": "社交技能不足",
+        }
+        
+        hyp_name = hyp_names.get(hypothesis_id, hypothesis_id)
+        return exclusion_map.get(hyp_name, "而非其他因素")
     
     def _generate_supporting_evidence(self, state: StructuredAssessmentState) -> str:
         """生成支持证据描述"""
@@ -1207,21 +1613,27 @@ class StructuredAssessorV4:
         
         return "；".join(evidence_parts) + "。"
     
-    def process(self, session_id: Optional[str], user_input: str) -> Dict[str, Any]:
+    def process(self, session_id: Optional[str], user_input: str, child_profile: Optional[dict] = None) -> Dict[str, Any]:
         """
-        V4.3 主处理流程
+        V4.8.0 主处理流程（增加背景信息支持）
         
         1. 加载/创建会话
         2. 记录用户输入
-        3. LLM 提取信息到框架字段
-        4. 智能环境推断
-        5. 更新假设置信度
-        6. 工作流决策下一步
-        7. 生成问题或触发报告
+        3. 存储背景信息（出生日期、阶段）
+        4. LLM 提取信息到框架字段
+        5. 智能环境推断
+        6. 更新假设置信度
+        7. 工作流决策下一步
+        8. 生成问题或触发报告
         """
         # 1. 加载状态
         state = self._get_or_create_session(session_id)
         state.turn_count += 1
+        
+        # V4.8.0 新增：存储背景信息
+        if child_profile:
+            state.child_profile = child_profile
+            logger.info(f"V4.8.0: 存储背景信息 - 出生日期={child_profile.get('birth_date')}, 阶段={child_profile.get('stage')}")
         
         # 2. 记录对话
         state.conversation_history.append({
@@ -1263,6 +1675,56 @@ class StructuredAssessorV4:
         if emotion_response:
             logger.info(f"💙 情感回应：{emotion_response[:50]}...")
         
+        # V4.5.19 新增：模糊回答检测
+        vague_type = self._is_vague_answer(user_input)
+        if vague_type:
+            logger.info(f"🔍 检测到模糊回答：{vague_type}，生成共情回应")
+            # 获取当前需要问的字段
+            current_field = None
+            if state.conversation_history:
+                for msg in reversed(state.conversation_history):
+                    if msg.get("role") == "ai" and msg.get("field_id"):
+                        current_field = msg.get("field_id")
+                        break
+            
+            empathetic_response = self._generate_empathetic_response(vague_type, current_field)
+            
+            # 记录共情回应到对话历史
+            state.conversation_history.append({
+                "role": "ai",
+                "text": empathetic_response,
+                "turn": state.turn_count,
+                "field_id": current_field,
+                "is_empathetic": True,  # 标记这是共情回应，不是新问题
+            })
+            
+            # 返回共情回应，不推进工作流
+            return {
+                "session_id": state.session_id,
+                "status": "in_progress",
+                "response_type": "empathetic_follow_up",
+                "message": empathetic_response,
+                "state": state.current_stage,
+                "vague_type": vague_type,
+            }
+        
+        # V4.5.20 P1 新增：信息充分性检测（避免机械追问）
+        # 如果用户输入已包含多个字段信息，直接提取并检查是否足够生成报告
+        if self._is_information_sufficient(state, user_input):
+            logger.info(f"✅ 信息已充分，直接生成报告")
+            # 先提取信息
+            extracted = self._extract_into_framework(state, user_input)
+            rule_extracted = self._rule_based_extraction(user_input)
+            for field_id, value in rule_extracted.items():
+                if field_id not in extracted:
+                    extracted[field_id] = value
+            for field_id, value in extracted.items():
+                if field_id.startswith("_"):
+                    continue
+                state.set_field_value(field_id, value)
+            # 直接生成报告
+            return self._generate_report(state)
+        
         # 3. LLM 提取信息
         extracted = self._extract_into_framework(state, user_input)
         
@@ -1271,6 +1733,13 @@ class StructuredAssessorV4:
         for field_id, value in rule_extracted.items():
             if field_id not in extracted:  # LLM 未提取到的字段用规则补充
                 extracted[field_id] = value
+        
+        # V4.5.20 P2 新增：智能追问 - 从已有信息中提取缺失字段
+        context_extracted = self._extract_missing_fields_from_context(state)
+        for field_id, value in context_extracted.items():
+            if field_id not in extracted and not state.is_field_filled(field_id):
+                extracted[field_id] = value
+                logger.info(f"✅ 智能追问：{field_id} 从上下文提取")
         
         # V4.5.18 新增：ABC 信息收集 fallback
         # 如果用户输入模糊（如"眼神关注有问题"），缺少 A 或 B，需要主动询问
@@ -1350,61 +1819,36 @@ class StructuredAssessorV4:
             else:
                 logger.warning(f"⚠️ hypothesis_confidences 类型错误：{type(hypothesis_confidences)}，跳过更新")
         
-        # 6. V4.5.10 系统性重构：临床推理引擎驱动决策（增加已问字段跟踪）
-        # === 第 1 优先级：推理引擎的主动鉴别提问 ===
-        # V4.5.10 新增：计算已问字段
-        asked_fields = {}
-        import re
-        for msg in state.conversation_history:
-            if msg.get("role") == "ai":
-                # Try to get field_id from the message first
-                field_id = msg.get("field_id")
-                if not field_id:
-                    # Fallback: extract from message text
-                    msg_text = msg.get("text", "")
-                    if "field=" in str(msg_text):
-                        match = re.search(r'field=(\w+)', str(msg_text))
-                        if match:
-                            field_id = match.group(1)
-                if field_id:
-                    asked_fields[field_id] = asked_fields.get(field_id, 0) + 1
-        
-        logger.info(f"📊 已问字段统计：{asked_fields}")
-        
-        # V4.5.11 新增：传递 conversation_history 供推理引擎使用
-        reasoning_action = self.reasoning_engine.decide_next_question(
-            filled_data_dict, 
-            state.current_stage, 
-            asked_fields,
-            state.conversation_history,
-        )
-        
-        # V4.5.14 修复：确保 reasoning_action 是字典
-        if not isinstance(reasoning_action, dict):
-            logger.error(f"⚠️ reasoning_action 类型错误：{type(reasoning_action)}，降级到工作流")
-            action = self._decide_next_action_with_reasoning(state, None)
-        elif reasoning_action.get("type") == "ASK_FIELD":
-            # 推理引擎明确要求问某个问题，以验证某个假设
-            target_field = reasoning_action.get("field_id")
-            probing_hyp = reasoning_action.get("probing_hypothesis")
-            if target_field:
-                logger.info(f"🔍 推理引擎驱动提问：为验证假设 [{probing_hyp}]，询问字段 [{target_field}]")
-                action = {
-                    "type": "ASK_FIELD",
-                    "field_id": target_field,
-                    "probing_hypothesis": probing_hyp,
-                    "source": "reasoning_engine",
-                }
+        # 6. V4.5.19 修复：工作流阶段优先于推理引擎
+        # === 第 1 优先级：检查当前阶段是否完成 ===
+        current_stage_def = self.framework.get_stage(state.current_stage)
+        if current_stage_def:
+            stage_missing_fields = [
+                f["field_id"] for f in current_stage_def.get("fields", [])
+                if f.get("is_required") and not f.get("is_auto_inferred")
+                and not state.is_field_filled(f["field_id"])
+            ]
+            
+            if stage_missing_fields:
+                # 当前阶段有未完成的必填字段，优先完成当前阶段
+                # 推理引擎只在当前阶段完成后才介入
+                logger.info(f"📋 阶段{state.current_stage}有未完成字段：{stage_missing_fields}，优先完成阶段")
+                action = self._decide_next_action_with_reasoning(state, None)
             else:
-                # 推理引擎没有明确字段，降级到工作流
-                action = self._decide_next_action_with_reasoning(state, reasoning_action)
-        elif reasoning_action.get("type") == "GENERATE_REPORT":
-            # 推理引擎判定假设已收敛
-            logger.info(f"✅ 推理引擎判定假设已收敛，触发报告生成")
-            action = {"type": "GENERATE_REPORT", "source": "reasoning_engine_converged"}
+                # 当前阶段已完成，可以进入下一阶段或让推理引擎驱动
+                next_stage = self.framework.get_next_stage(state.current_stage)
+                if next_stage:
+                    state.current_stage = next_stage
+                    logger.info(f"➡️ 阶段{state.current_stage}已完成，进入下一阶段：{next_stage}")
+                    # 重新检查新阶段的必填字段
+                    action = self._decide_next_action_with_reasoning(state, None)
+                else:
+                    # 所有阶段完成，推理引擎驱动鉴别提问
+                    logger.info(f"✅ 所有阶段完成，推理引擎驱动鉴别提问")
+                    action = self._invoke_reasoning_engine(state, filled_data_dict)
         else:
-            # 降级到 V4.3 工作流收集缺失的必填字段
-            action = self._decide_next_action_with_reasoning(state, reasoning_action)
+            # 没有阶段定义，降级到工作流
+            action = self._decide_next_action_with_reasoning(state, None)
         
         # V4.5.14 修复：确保 action 是字典
         if not isinstance(action, dict):
@@ -1538,6 +1982,205 @@ class StructuredAssessorV4:
         
         return None
     # ========== P1-04 结束 ==========
+    
+    # ========== V4.5.20 P1: 信息充分性检测 ==========
+    def _is_information_sufficient(self, state: StructuredAssessmentState, user_input: str) -> bool:
+        """
+        V4.5.20 P1 新增：检测信息是否已足够生成报告
+        
+        避免用户已提供详细信息，系统还机械追问
+        
+        Args:
+            state: 会话状态
+            user_input: 用户输入
+            
+        Returns:
+            True 表示信息充分，可直接生成报告
+        """
+        # 核心必填字段（80% 完成度即可）
+        core_fields = ["problem_description", "specific_example", "child_age", "antecedent", "behavior_detail", "immediate_consequence"]
+        filled_count = sum(1 for f in core_fields if state.is_field_filled(f))
+        
+        # 80% 完成度阈值
+        if filled_count >= len(core_fields) * 0.8:
+            logger.info(f"✅ 信息充分性检测：{filled_count}/{len(core_fields)} 核心字段已填充")
+            return True
+        
+        # 用户输入长度 > 50 字且包含具体场景描述
+        if len(user_input) > 50 and any(kw in user_input for kw in ["今天", "昨天", "在", "时", "当", "时候"]):
+            logger.info(f"✅ 信息充分性检测：用户输入详细（{len(user_input)}字），包含场景描述")
+            return True
+        
+        return False
+    
+    # ========== V4.5.20 P2: 智能追问策略 ==========
+    def _extract_missing_fields_from_context(self, state: StructuredAssessmentState) -> Dict[str, str]:
+        """
+        V4.5.20 P2 新增：从已有信息中提取缺失字段
+        
+        例如：用户已提供 specific_example="今天早上在幼儿园做操时"
+        → 可从中提取 antecedent="在幼儿园做操时"
+        
+        Args:
+            state: 会话状态
+            
+        Returns:
+            提取的字段值字典
+        """
+        extracted = {}
+        
+        # 从 specific_example 中提取 antecedent
+        specific_example = state.get_field_value("specific_example")
+        if specific_example and not state.is_field_filled("antecedent"):
+            # specific_example 通常包含 antecedent 信息
+            extracted["antecedent"] = specific_example
+            logger.info(f"🧠 智能追问：从 specific_example 提取 antecedent = {specific_example[:30]}...")
+        
+        # 从 antecedent 中提取 inferred_setting（如果有明确地点）
+        antecedent = state.get_field_value("antecedent")
+        if antecedent and not state.is_field_filled("inferred_setting"):
+            if "幼儿园" in antecedent or "学校" in antecedent:
+                extracted["inferred_setting"] = "幼儿园" if "幼儿园" in antecedent else "学校"
+            elif "家" in antecedent or "家里" in antecedent:
+                extracted["inferred_setting"] = "家庭"
+            logger.info(f"🧠 智能追问：从 antecedent 提取 inferred_setting")
+        
+        # 从 behavior_detail 中提取 problem_description（如果未填充）
+        behavior = state.get_field_value("behavior_detail")
+        if behavior and not state.is_field_filled("problem_description"):
+            extracted["problem_description"] = behavior
+            logger.info(f"🧠 智能追问：从 behavior_detail 提取 problem_description")
+        
+        return extracted
+    # ========== V4.5.20 P2 结束 ==========
+    # ========== V4.5.20 P1 结束 ==========
+    
+    # ========== V4.5.19: 推理引擎调用辅助方法 ==========
+    def _invoke_reasoning_engine(self, state: StructuredAssessmentState, filled_data_dict: dict) -> Dict[str, Any]:
+        """
+        V4.5.19 新增：调用推理引擎进行鉴别提问
+        
+        只在所有阶段必填字段完成后才调用
+        """
+        import re
+        
+        # 计算已问字段
+        asked_fields = {}
+        for msg in state.conversation_history:
+            if msg.get("role") == "ai" and msg.get("field_id"):
+                if msg.get("is_empathetic"):
+                    continue
+                asked_fields[msg["field_id"]] = asked_fields.get(msg["field_id"], 0) + 1
+        
+        logger.info(f"📊 已问字段统计：{asked_fields}")
+        
+        # 调用推理引擎
+        reasoning_action = self.reasoning_engine.decide_next_question(
+            filled_data_dict,
+            state.current_stage,
+            asked_fields,
+            state.conversation_history,
+        )
+        
+        if not isinstance(reasoning_action, dict):
+            logger.error(f"⚠️ reasoning_action 类型错误：{type(reasoning_action)}，降级到工作流")
+            return self._decide_next_action_with_reasoning(state, None)
+        elif reasoning_action.get("type") == "ASK_FIELD":
+            target_field = reasoning_action.get("field_id")
+            probing_hyp = reasoning_action.get("probing_hypothesis")
+            if target_field:
+                logger.info(f"🔍 推理引擎驱动提问：为验证假设 [{probing_hyp}]，询问字段 [{target_field}]")
+                return {
+                    "type": "ASK_FIELD",
+                    "field_id": target_field,
+                    "probing_hypothesis": probing_hyp,
+                    "source": "reasoning_engine",
+                }
+        elif reasoning_action.get("type") == "GENERATE_REPORT":
+            logger.info(f"✅ 推理引擎判定假设已收敛，触发报告生成")
+            return {"type": "GENERATE_REPORT", "source": "reasoning_engine_converged"}
+        
+        # 默认降级到工作流
+        return self._decide_next_action_with_reasoning(state, reasoning_action)
+    # ========== V4.5.19 结束 ==========
+    
+    # ========== V4.5.19: 模糊回答检测与共情回应 ==========
+    VAGUE_ANSWER_PATTERNS = {
+        "不知道": {
+            "keywords": ["不知道", "不清楚", "没注意", "忘了", "说不清", "不确定", "说不好"],
+            "empathy": "我理解，确实每个情况都不一样，一时说不清楚很正常。",
+            "reframe": "那不如这样——您能回想一个最近发生的具体例子吗？比如昨天或这周，孩子出现这个行为时，当时您或老师做了什么？哪怕是很小的回应也可以。",
+        },
+        "看情况": {
+            "keywords": ["看情况", "要看", "不一定", "不好说", "这个嘛", "怎么说呢", "分情况"],
+            "empathy": "您说得对，不同事情确实处理方式会不一样。",
+            "reframe": "那我们就拿一个具体事情来说——最近一次让您注意到这个行为的是什么事？当时发生了什么？",
+        },
+        "模糊标签": {
+            "keywords": ["深度关注", "社交互动", "有问题", "不对劲", "不正常", "怪怪的"],
+            "empathy": "我明白您想表达的意思，不过这些词确实比较抽象。",
+            "reframe": "能具体描述一下孩子做了什么吗？比如：不看人？不回应名字？还是自己玩自己的？描述具体的行为会帮助我更好地理解。",
+        },
+        "抗拒回答": {
+            "keywords": ["不想说", "没必要", "说了你也不懂", "太复杂了", "一言难尽"],
+            "empathy": "我理解，这种情况确实可能比较复杂，或者让您不太舒服。",
+            "reframe": "没关系，我们可以从最简单的开始——比如最近一次发生这个行为是什么时候？在什么地方？",
+        },
+    }
+    
+    def _is_vague_answer(self, user_input: str) -> Optional[str]:
+        """
+        V4.5.19 新增：检测模糊回答/困难表达
+        
+        Args:
+            user_input: 用户输入
+            
+        Returns:
+            匹配到的模糊回答类型，如果没有则返回 None
+        """
+        for vague_type, data in self.VAGUE_ANSWER_PATTERNS.items():
+            if any(kw in user_input for kw in data["keywords"]):
+                logger.info(f"🔍 检测到模糊回答：{vague_type}")
+                return vague_type
+        return None
+    
+    def _generate_empathetic_response(self, vague_type: str, field_id: str = None) -> str:
+        """
+        V4.5.19 新增：生成共情 + 换问法的回应
+        
+        Args:
+            vague_type: 模糊回答类型
+            field_id: 当前字段 ID（可选）
+            
+        Returns:
+            共情回应文本
+        """
+        data = self.VAGUE_ANSWER_PATTERNS.get(vague_type)
+        if not data:
+            return "能再详细描述一下吗？"
+        
+        empathy = data["empathy"]
+        reframe = data["reframe"]
+        
+        return f"{empathy} {reframe}"
+    
+    def _should_skip_field(self, state: StructuredAssessmentState, field_id: str, asked_count: int) -> bool:
+        """
+        V4.5.19 新增：判断是否应该跳过某个字段（问过多次仍未填充）
+        
+        Args:
+            state: 会话状态
+            field_id: 字段 ID
+            asked_count: 已问次数
+            
+        Returns:
+            True 表示应该跳过，False 表示继续问
+        """
+        if asked_count >= 2 and not state.is_field_filled(field_id):
+            logger.warning(f"⚠️ 字段{field_id}已问过{asked_count}次仍未填充，考虑跳过")
+            return True
+        return False
+    # ========== V4.5.19 结束 ==========
     
     def get_session(self, session_id: str) -> Optional[StructuredAssessmentState]:
         """获取会话"""
