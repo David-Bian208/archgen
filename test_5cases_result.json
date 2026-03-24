@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-03-17T23:37:53.460686",
+  "total": 5,
+  "passed": 1,
+  "pass_rate": 20.0,
+  "results": [
+    {
+      "id": 1,
+      "scene": "共同游戏",
+      "passed": true,
+      "hypothesis": "社交技能不足",
+      "capability_gap": "社交信号监测能力弱，难以准确判断自己是否真正融入游戏；认知灵活性不足，难以根据游戏情境调整行为",
+      "elapsed": 65.02701616287231
+    },
+    {
+      "id": 2,
+      "scene": "共同游戏",
+      "passed": false,
+      "hypothesis": "",
+      "capability_gap": "",
+      "elapsed": 8.658456325531006
+    },
+    {
+      "id": 3,
+      "scene": "共同游戏",
+      "passed": false,
+      "hypothesis": "",
+      "capability_gap": "",
+      "elapsed": 0.004244089126586914
+    },
+    {
+      "id": 4,
+      "scene": "共同游戏",
+      "passed": false,
+      "hypothesis": "",
+      "capability_gap": "",
+      "elapsed": 6.3916685581207275
+    },
+    {
+      "id": 5,
+      "scene": "共同游戏",
+      "passed": false,
+      "hypothesis": "",
+      "capability_gap": "",
+      "elapsed": 8.383110284805298
+    }
+  ]
+}

@@ -13,6 +13,12 @@ Things like:
 - Device nicknames
 - Anything environment-specific
 
+## User-Visible Report Output Path
+
+**所有给用户看的报告都保存到**: `/home/admin/Desktop/`
+
+用户通过桌面访问文件，不要只保存在 workspace 深处。
+
 ## Examples
 
 ```markdown

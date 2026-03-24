@@ -1,0 +1,111 @@
+<!--pages/index/index.wxml-->
+<view class="container">
+  <!-- 标题 -->
+  <view class="header">
+    <text class="title">行为观察伙伴</text>
+    <text class="subtitle">理解孩子行为，从观察开始</text>
+  </view>
+
+  <!-- 输入区域 -->
+  <view class="input-section" wx:if="{{!report}}">
+    <textarea 
+      class="input-box"
+      placeholder="请描述孩子的行为，例如：'我儿子在课堂上总是突然发出奇怪的声音，老师看他时他就笑...'"
+      value="{{userInput}}"
+      bindinput="onInput"
+      maxlength="1000"
+      auto-height
+    />
+    <button 
+      class="send-btn" 
+      bindtap="sendRequest" 
+      disabled="{{isAnalyzing}}"
+    >
+      {{isAnalyzing ? 'AI 分析中...' : '发送分析'}}
+    </button>
+  </view>
+
+  <!-- 加载中 -->
+  <view class="loading" wx:if="{{isAnalyzing}}">
+    <view class="spinner"></view>
+    <text class="loading-text">AI 正在深度分析，约需 5-10 秒</text>
+  </view>
+
+  <!-- 报告展示 -->
+  <view class="report-section" wx:if="{{report && !isAnalyzing}}">
+    <!-- 功能判断 -->
+    <view class="report-card">
+      <view class="card-title">🎯 行为功能判断</view>
+      <view class="card-content">{{report.functional_judgment}}</view>
+    </view>
+
+    <!-- 能力缺口 -->
+    <view class="report-card" wx:if="{{report.capability_gap}}">
+      <view class="card-title">💡 能力缺口分析</view>
+      <view class="card-content">{{report.capability_gap}}</view>
+    </view>
+
+    <!-- 干预建议 -->
+    <view class="report-card" wx:if="{{report.intervention_suggestions}}">
+      <view class="card-title">🔧 干预建议</view>
+      <view class="card-content">{{report.intervention_suggestions}}</view>
+    </view>
+
+    <!-- 免责声明 -->
+    <view class="disclaimer">
+      <text class="disclaimer-text">
+        ⚠️ 以上建议仅供参考，不能替代专业评估。如有严重问题，请咨询专业治疗师或医生。
+      </text>
+    </view>
+
+    <!-- 反馈区域 -->
+    <view class="feedback-section">
+      <view class="feedback-title">这份报告有帮助吗？</view>
+      
+      <!-- 星级评分 -->
+      <view class="rating">
+        <text 
+          class="star {{rating >= index ? 'active' : ''}}" 
+          wx:for="{{5}}" 
+          wx:key="*this"
+          data-rating="{{index + 1}}"
+          bindtap="setRating"
+        >★</text>
+      </view>
+
+      <!-- 准确性选择 -->
+      <view class="accuracy-selector">
+        <button 
+          class="accuracy-btn {{accuracy === 'accurate' ? 'active' : ''}}"
+          data-accuracy="accurate"
+          bindtap="setAccuracy"
+        >准确</button>
+        <button 
+          class="accuracy-btn {{accuracy === 'partial' ? 'active' : ''}}"
+          data-accuracy="partial"
+          bindtap="setAccuracy"
+        >部分准确</button>
+        <button 
+          class="accuracy-btn {{accuracy === 'inaccurate' ? 'active' : ''}}"
+          data-accuracy="inaccurate"
+          bindtap="setAccuracy"
+        >不准确</button>
+      </view>
+
+      <!-- 文字反馈 -->
+      <textarea
+        class="feedback-input"
+        placeholder="欢迎提出具体建议（可选）"
+        value="{{feedbackText}}"
+        bindinput="onFeedbackInput"
+        auto-height
+      />
+
+      <!-- 提交反馈 -->
+      <button class="submit-feedback" bindtap="submitFeedback">提交反馈</button>
+    </view>
+
+    <!-- 开始新记录 -->
+    <button class="new-record-btn" bindtap="startNew">开始新的记录</button>
+  </view>
+</view>

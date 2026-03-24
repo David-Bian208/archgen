@@ -1,0 +1,74 @@
+{
+  "version": "V4.5.20",
+  "codename": "临床逻辑断裂修复 + 诊断准确性优化",
+  "release_date": "2026-03-15",
+  "features": [
+    "动态假设追踪",
+    "贝叶斯信念更新",
+    "主动鉴别提问",
+    "叙事性报告生成",
+    "多层级假设网络（13 个假设）",
+    "三层防御语义识别",
+    "未知表达自学习",
+    "模糊回答检测与共情回应",
+    "问题澄清阶段（PROBLEM_CLARIFICATION）",
+    "已问字段跟踪与跳过逻辑",
+    "社交技能干预模板（V4.5.20 P0）",
+    "信息整合逻辑优化（V4.5.20 P1）",
+    "InsightAnalyzer 诊断逻辑增强（V4.5.20 P2）",
+    "智能追问策略（从上下文提取缺失字段）"
+  ],
+  "architecture": {
+    "data_pipeline": "V4.3 结构化评估框架（保留）",
+    "reasoning_layer": "V4.5 临床推理引擎（新增）",
+    "semantic_recognition": "三层防御机制（新增）",
+    "workflow_stages": "4 阶段（PROBLEM_CLARIFICATION → BACKGROUND → CORE_ABC → DIFFERENTIAL）",
+    "hypothesis_network": "3 层 13 假设",
+    "bayesian_update": true,
+    "narrative_generation": true,
+    "unknown_expression_learning": true,
+    "empathetic_response": true,
+    "vague_answer_detection": true
+  },
+  "api_version": "v4",
+  "frontend_version": "1.0.0",
+  "backend_components": [
+    "structured_assessor_v4.py",
+    "clinical_reasoning_engine.py",
+    "insight_analyzer.py",
+    "intervention_planner.py",
+    "unknown_expression_logger.py"
+  ],
+  "knowledge_files": [
+    "clinical_assessment_framework.json",
+    "hypothesis_network.json",
+    "behavior_hypotheses.json",
+    "intervention_patterns.json"
+  ],
+  "semantic_recognition_layers": {
+    "layer1": "精确匹配（硬编码关键词）",
+    "layer2": "正则模式匹配（语义模式）",
+    "layer3": "LLM 兜底识别（少样本学习）"
+  },
+  "changes_from_v45": [
+    "新增三层防御语义识别机制",
+    "新增 intervention_patterns.json 语义知识库",
+    "新增 unknown_expression_logger.py 未知表达日志",
+    "新增 review_unknown_expressions.py 审查工具",
+    "增强 _post_process_extraction 方法",
+    "版本号更新为 V4.5.1"
+  ],
+  "changes_from_v451": [
+    "新增 PROBLEM_CLARIFICATION 问题澄清阶段",
+    "新增 problem_description 和 specific_example 字段",
+    "新增 VAGUE_ANSWER_PATTERNS 模糊回答模式库（4 类）",
+    "新增 _is_vague_answer 检测方法",
+    "新增 _generate_empathetic_response 共情回应生成",
+    "修改 process 方法：模糊回答检测优先于字段提取",
+    "修改 _create_session：初始阶段设为 PROBLEM_CLARIFICATION",
+    "修改 _decide_next_action_with_reasoning：已问字段跟踪与跳过逻辑",
+    "更新 max_turns: 8 → 10（适应新增字段）",
+    "更新 required_fields_for_analysis：包含问题澄清字段",
+    "版本号更新为 V4.5.19"
+  ]
+}

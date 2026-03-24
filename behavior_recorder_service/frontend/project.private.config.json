@@ -1,0 +1,9 @@
+{
+  "description": "项目私有配置文件",
+  "projectname": "behavior-recorder",
+  "setting": {
+    "compileHotReLoad": false
+  },
+  "libVersion": "2.19.4",
+  "appid": "wxe260e43ba0375cde"
+}
