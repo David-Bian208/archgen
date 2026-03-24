@@ -1,9 +1,8 @@
 # 行为记录员微服务 (Behavior Recorder Service)
 
-自闭症干预辅助系统 - 第一阶段 + 干预策略分析师
+自闭症干预辅助系统 - 第一阶段 MVP
 
-**版本**: 1.1.0  
-**更新日期**: 2026 年 3 月 6 日
+**当前版本**: 1.1.0（优化版）
 
 ## 项目简介
 
@@ -149,7 +148,7 @@ pytest tests/test_agent.py -v
 }
 ```
 
-**响应**:
+**响应** (V1.1 新增 `reasoning` 字段):
 ```json
 {
   "success": true,
@@ -158,52 +157,11 @@ pytest tests/test_agent.py -v
     "antecedent": "不给他手机",
     "behavior": "打自己头",
     "consequence": "把手机给他",
-    "hypothesized_function": "tangible"
+    "hypothesized_function": "tangible",
+    "reasoning": "行为后获得了想要的物品，符合实物获取特征。"
   }
 }
 ```
-
-### POST /api/plan
-
-干预策略规划接口（新增 v1.1.0）
-
-**请求体**:
-```json
-{
-  "description": "不给他手机，他就打自己头，我赶紧把手机给他了。",
-  "abc_result": {
-    "antecedent": "不给他手机",
-    "behavior": "打自己头",
-    "consequence": "把手机给他",
-    "hypothesized_function": "tangible"
-  }
-}
-```
-
-**响应**:
-```json
-{
-  "success": true,
-  "message": "规划成功",
-  "data": {
-    "timestamp": "2026-03-06T00:00:00",
-    "original_description": "不给他手机，他就打自己头，我赶紧把手机给他了。",
-    "abc_analysis": {...},
-    "intervention_strategy": {
-      "function": "tangible",
-      "antecedent_strategies": ["提前告知物品使用规则", ...],
-      "behavior_strategies": ["教授'我想要'的手势或语言", ...],
-      "consequence_strategies": ["立即强化适当请求", ...],
-      "replacement_behavior": "用语言或手势适当请求物品",
-      "implementation_tips": ["保持一致性", ...]
-    },
-    "disengagement_task": null,
-    "status": "completed"
-  }
-}
-```
-
-**注意**: 当功能为 `escape` 时，`disengagement_task` 将包含任务脱离锚点计划。
 
 ### GET /api/health
 
@@ -221,20 +179,6 @@ pytest tests/test_agent.py -v
 ### GET /api/
 
 服务信息接口
-
-**响应**:
-```json
-{
-  "name": "Behavior Recorder Service",
-  "version": "1.1.0",
-  "description": "自闭症干预辅助系统 - 行为记录员 + 干预策略分析师",
-  "endpoints": {
-    "analyze": "POST /analyze",
-    "plan": "POST /plan",
-    "health": "GET /health"
-  }
-}
-```
 
 ## 环境变量覆盖
 
@@ -357,23 +301,13 @@ docker-compose logs -f
 
 ## 下一步计划
 
-### ✅ 已完成 (v1.1.0)
+第一阶段 MVP 完成后，后续将实现：
 
-1. **行为记录员 Agent**: ABC 分析 + 功能假设
-2. **干预策略分析师 Agent**: 基于功能生成个性化策略
-3. **任务脱离锚点计划**: H1 阶段 - 建立锚点行为（针对 escape 功能）
-
-### 🔄 进行中
-
-1. **数据持久化**: 添加 SQLite/PostgreSQL 支持，存储历史记录
-2. **用户系统**: 多用户、多儿童支持
-
-### 📋 规划中
-
-1. **进展教练 Agent**: 追踪干预进度并动态优化
-2. **沟通协调员 Agent**: 生成多角色报告（家长/老师/治疗师）
-3. **移动端应用**: iOS/Android 客户端
-4. **可视化仪表盘**: 行为趋势分析图表
+1. **策略分析师 Agent**: 基于 ABC 分析生成干预策略
+2. **进展教练 Agent**: 追踪干预进度并动态优化
+3. **沟通协调员 Agent**: 生成多角色报告
+4. **数据持久化**: 添加数据库支持
+5. **用户系统**: 多用户、多儿童支持
 
 ## 许可证
 
@@ -382,5 +316,5 @@ docker-compose logs -f
 ---
 
 **开发团队**: OpenClaw  
-**版本**: 1.1.0  
-**日期**: 2026 年 3 月 6 日
+**版本**: 1.0.0  
+**日期**: 2026 年 3 月 5 日

@@ -1,0 +1,88 @@
+{
+  "case_id": 3,
+  "case_name": "感觉逃避",
+  "conversation_log": [
+    {
+      "role": "user",
+      "content": "一到超市他就捂耳朵，哭闹要出去。"
+    },
+    {
+      "role": "ai",
+      "content": "【BACKGROUND】 为了给您更合适的参考，可以告诉我孩子今年几岁吗？ 例如：'5 岁'、'幼儿园大班'"
+    },
+    {
+      "role": "user",
+      "content": "5 岁"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "5 岁"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "男孩"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "超市，嘈杂明亮"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "我们通常直接离开"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "没有了"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    },
+    {
+      "role": "user",
+      "content": "没有了"
+    },
+    {
+      "role": "ai",
+      "content": ""
+    }
+  ],
+  "report": null,
+  "evaluation": {
+    "A1_empathy": 3,
+    "A2_extraction": 3,
+    "B1_question": 3,
+    "B2_turns": 8,
+    "C1_accuracy": 3,
+    "C2_consistency": 1,
+    "C3_completeness": 3,
+    "D1_personal": 3,
+    "D2_actionable": 3,
+    "passed": false,
+    "issues": [
+      "未生成报告"
+    ]
+  },
+  "turn_count": 8,
+  "timestamp": "2026-03-10T21:49:18.992386"
+}

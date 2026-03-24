@@ -1,0 +1,100 @@
+{
+  "version": "V4.5.1",
+  "name": "干预模式语义知识库",
+  "description": "用于识别各种干预/非干预表达的语义模式",
+  
+  "categories": {
+    "no_intervention": {
+      "name": "无外部干预",
+      "field": "immediate_consequence",
+      "value": "无外部干预",
+      "patterns": {
+        "exact_match": [
+          "不管", "不干预", "忽略", "没人理", "随他去", "没人管",
+          "不怎么管", "很少管", "基本不管", "观察者", "影子", "记录",
+          "不干预学校的情况", "尽量不干预", "没有人管"
+        ],
+        "semantic_patterns": [
+          {"pattern": ".*不.*管.*", "explanation": "包含'不'和'管'的表达"},
+          {"pattern": ".*观察者.*", "explanation": "观察者角色"},
+          {"pattern": ".*影子.*", "explanation": "影子式观察"},
+          {"pattern": ".*记录.*", "explanation": "只做记录不干预"},
+          {"pattern": ".*除非.*夸张.*", "explanation": "只在极端情况下干预"},
+          {"pattern": ".*大多数.*不.*", "explanation": "大部分时间不干预"}
+        ],
+        "llm_examples": [
+          "老师一般不会介入",
+          "他们让孩子自己处理",
+          "成人选择旁观",
+          "没有立即反应",
+          "等待孩子自己解决",
+          "采取不干涉态度",
+          "让自然结果发生",
+          "给孩子空间自己处理"
+        ]
+      }
+    },
+    
+    "active_intervention": {
+      "name": "主动干预",
+      "field": "immediate_consequence",
+      "value": "有外部干预",
+      "patterns": {
+        "exact_match": [
+          "提醒", "制止", "干预", "介入", "帮助", "协助",
+          "走过去", "拉到身边", "单独教导", "一对一"
+        ],
+        "semantic_patterns": [
+          {"pattern": ".*提醒.*", "explanation": "言语提醒"},
+          {"pattern": ".*走.*身边.*", "explanation": "身体接近"},
+          {"pattern": ".*帮助.*", "explanation": "提供帮助"}
+        ],
+        "llm_examples": [
+          "老师马上过来帮助",
+          "成人立即介入",
+          "给予直接指导",
+          "提供身体辅助",
+          "口头提示下一步"
+        ]
+      }
+    },
+    
+    "peer_response": {
+      "name": "同伴反应",
+      "field": "immediate_consequence",
+      "value": "同伴反应",
+      "patterns": {
+        "exact_match": [
+          "小朋友笑他", "同学告诉老师", "其他孩子模仿",
+          "同伴排斥", "朋友帮助"
+        ],
+        "semantic_patterns": [
+          {"pattern": ".*小朋友.*", "explanation": "同伴相关"},
+          {"pattern": ".*同学.*", "explanation": "同学相关"},
+          {"pattern": ".*其他孩子.*", "explanation": "其他孩子"}
+        ],
+        "llm_examples": [
+          "其他孩子注意到了",
+          "同伴做出了反应",
+          "小朋友们开始讨论",
+          "有同学报告老师"
+        ]
+      }
+    }
+  },
+  
+  "unknown_handling": {
+    "strategy": "clarify_or_default",
+    "clarify_question": "可以具体描述一下当时大人或周围人的反应吗？",
+    "default_category": "no_intervention",
+    "confidence_threshold": 0.6,
+    "log_unknown": true
+  },
+  
+  "learning_config": {
+    "enable_feedback_loop": true,
+    "unknown_expression_log": "app/logs/unknown_expressions.log",
+    "auto_expand_threshold": 3,
+    "review_frequency": "weekly"
+  }
+}

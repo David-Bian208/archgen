@@ -1,0 +1,33 @@
+{
+  "test_info": {
+    "total_cases": 5,
+    "passed": 0,
+    "failed": 5,
+    "pass_rate": "0.0%",
+    "start_time": "2026-03-10T21:29:09.525079",
+    "end_time": "2026-03-10T21:32:53.412141"
+  },
+  "averages": {
+    "A1_empathy": 0,
+    "A2_extraction": 0,
+    "B1_question_quality": 0,
+    "C1_accuracy": 0,
+    "C2_consistency": 0,
+    "C3_completeness": 0,
+    "D1_personalization": 0,
+    "D2_actionable": 0
+  },
+  "overall_score": 0.0,
+  "issues": [
+    "案例1: 未生成报告",
+    "案例2: 未生成报告",
+    "案例3: 未生成报告",
+    "案例4: 未生成报告",
+    "案例5: 未生成报告"
+  ],
+  "recommendations": [
+    "【高优先级】修复逻辑自洽性问题",
+    "【中优先级】优化提问策略，减少冗余",
+    "【中优先级】增强干预计划的可操作性"
+  ]
+}

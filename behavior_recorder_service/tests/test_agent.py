@@ -1,30 +1,33 @@
 """
-行为记录员 Agent + 干预策略分析师 Agent 单元测试
+行为记录员 Agent V1.1 单元测试
+测试优化后的核心逻辑
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 from app.agents.behavior_recorder_agent import BehaviorRecorderAgent
-from app.agents.intervention_planner import InterventionPlannerAgent
 
 
 class MockLLMClient:
     """模拟 LLM 客户端用于测试"""
 
-    def __init__(self, mock_abc_result=None, mock_function="tangible"):
+    def __init__(self, mock_abc_result=None, mock_function_result=None):
         self.mock_abc_result = mock_abc_result or {
             "antecedent": "测试前因",
             "behavior": "测试行为",
             "consequence": "测试后果",
         }
-        self.mock_function = mock_function
+        self.mock_function_result = mock_function_result or {
+            "hypothesized_function": "tangible",
+            "reasoning": "测试推理",
+        }
 
     def generate_json(self, system_prompt, user_prompt, temperature=0.1, max_tokens=500):
+        # 根据提示词内容判断是步骤一还是步骤二
+        if "推理步骤" in user_prompt or "hypothesized_function" in user_prompt:
+            return self.mock_function_result
         return self.mock_abc_result
-
-    def generate(self, system_prompt, user_prompt, temperature=0.1, max_tokens=100):
-        return f"功能：{self.mock_function}"
 
 
 def test_agent_initialization():
@@ -44,7 +47,10 @@ def test_analyze_basic():
             "behavior": "打自己头",
             "consequence": "把手机给他",
         },
-        mock_function="tangible",
+        mock_function_result={
+            "hypothesized_function": "tangible",
+            "reasoning": "行为后获得了想要的物品，符合实物获取特征",
+        },
     )
     agent = BehaviorRecorderAgent(mock_llm)
     
@@ -55,6 +61,8 @@ def test_analyze_basic():
     assert result["behavior"] == "打自己头"
     assert result["consequence"] == "把手机给他"
     assert result["hypothesized_function"] == "tangible"
+    assert "reasoning" in result
+    assert len(result["reasoning"]) > 0
 
 
 def test_analyze_escape_function():
@@ -65,7 +73,10 @@ def test_analyze_escape_function():
             "behavior": "哭闹并逃跑",
             "consequence": "妈妈让他先去玩",
         },
-        mock_function="escape",
+        mock_function_result={
+            "hypothesized_function": "escape",
+            "reasoning": "前因为任务要求，后果为任务中断，符合逃避特征",
+        },
     )
     agent = BehaviorRecorderAgent(mock_llm)
     
@@ -73,6 +84,7 @@ def test_analyze_escape_function():
     result = agent.analyze(description)
     
     assert result["hypothesized_function"] == "escape"
+    assert "逃避" in result["reasoning"] or "任务" in result["reasoning"]
 
 
 def test_analyze_attention_function():
@@ -83,7 +95,10 @@ def test_analyze_attention_function():
             "behavior": "大声尖叫",
             "consequence": "妈妈停止通话看他",
         },
-        mock_function="attention",
+        mock_function_result={
+            "hypothesized_function": "attention",
+            "reasoning": "行为获得了他人注意，符合关注获取特征",
+        },
     )
     agent = BehaviorRecorderAgent(mock_llm)
     
@@ -91,6 +106,7 @@ def test_analyze_attention_function():
     result = agent.analyze(description)
     
     assert result["hypothesized_function"] == "attention"
+    assert "注意" in result["reasoning"] or "关注" in result["reasoning"]
 
 
 def test_analyze_automatic_function():
@@ -99,9 +115,12 @@ def test_analyze_automatic_function():
         mock_abc_result={
             "antecedent": "独自坐在角落",
             "behavior": "反复摇晃身体",
-            "consequence": "无人干预",
+            "consequence": "未明确提及",
         },
-        mock_function="automatic",
+        mock_function_result={
+            "hypothesized_function": "automatic",
+            "reasoning": "行为是重复刻板的，与社交环境无关，符合自动强化特征",
+        },
     )
     agent = BehaviorRecorderAgent(mock_llm)
     
@@ -111,256 +130,153 @@ def test_analyze_automatic_function():
     assert result["hypothesized_function"] == "automatic"
 
 
-def test_parse_function_response():
-    """测试功能响应解析"""
+def test_analyze_inconclusive():
+    """测试信息不足时的 inconclusive 判断"""
+    mock_llm = MockLLMClient(
+        mock_abc_result={
+            "antecedent": "未明确提及",
+            "behavior": "有些异常",
+            "consequence": "未明确提及",
+        },
+        mock_function_result={
+            "hypothesized_function": "inconclusive",
+            "reasoning": "信息不足，无法做出明确判断",
+        },
+    )
+    agent = BehaviorRecorderAgent(mock_llm)
+    
+    description = "他今天表现有些异常。"
+    result = agent.analyze(description)
+    
+    assert result["hypothesized_function"] == "inconclusive"
+
+
+def test_empty_description_error():
+    """测试空描述抛出错误"""
     mock_llm = MockLLMClient()
     agent = BehaviorRecorderAgent(mock_llm)
     
-    # 测试标准格式
-    assert agent._parse_function_response("功能：escape") == "escape"
-    assert agent._parse_function_response("功能：tangible") == "tangible"
+    with pytest.raises(ValueError, match="描述不能为空"):
+        agent.analyze("")
     
-    # 测试关键词匹配
-    assert agent._parse_function_response("我认为是 escape 功能") == "escape"
-    assert agent._parse_function_response("应该是 attention") == "attention"
-    
-    # 测试中文关键词
-    assert agent._parse_function_response("功能：逃避") == "逃避"
-    assert agent._parse_function_response("为了获得关注") == "关注"
+    with pytest.raises(ValueError, match="描述不能为空"):
+        agent.analyze("   ")
 
 
-def test_empty_description():
-    """测试空描述处理"""
+def test_missing_fields_handling():
+    """测试缺失字段的默认处理"""
     mock_llm = MockLLMClient(
         mock_abc_result={
-            "antecedent": "",
-            "behavior": "",
-            "consequence": "",
+            "antecedent": "测试",
+            # 缺少 behavior 和 consequence
         },
-        mock_function="automatic",
+        mock_function_result={
+            "hypothesized_function": "tangible",
+            "reasoning": "测试推理",
+        },
     )
     agent = BehaviorRecorderAgent(mock_llm)
     
-    result = agent.analyze("")
+    result = agent.analyze("测试描述")
     
-    assert result["antecedent"] == ""
-    assert result["behavior"] == ""
-    assert result["consequence"] == ""
-    # 即使 ABC 为空，也应返回默认功能
-    assert result["hypothesized_function"] in ["escape", "tangible", "attention", "automatic"]
+    # 缺失字段应被填充为默认值
+    assert result["antecedent"] == "测试"
+    assert result["behavior"] == "未明确提及"
+    assert result["consequence"] == "未明确提及"
 
 
-# ============== 干预策略分析师 Agent 测试 ==============
+# ========== V1.1 新增测试案例 ==========
 
-
-class MockLLMClientForPlanner:
-    """模拟 LLM 客户端用于干预策略测试"""
-
-    def __init__(self, mock_strategy=None, mock_disengagement=None):
-        self.mock_strategy = mock_strategy or {
-            "function": "tangible",
-            "antecedent_strategies": ["策略 1", "策略 2", "策略 3"],
-            "behavior_strategies": ["策略 1", "策略 2", "策略 3"],
-            "consequence_strategies": ["策略 1", "策略 2", "策略 3"],
-            "replacement_behavior": "使用适当方式请求物品",
-            "implementation_tips": ["提示 1", "提示 2", "提示 3", "提示 4", "提示 5"],
-        }
-        self.mock_disengagement = mock_disengagement or {
-            "task_name": "任务脱离训练",
-            "anchor_behavior": "坐下",
-            "step_by_step_plan": ["步骤 1", "步骤 2", "步骤 3"],
-            "success_criteria": "成功标准",
-            "fallback_plan": "fallback 计划",
-        }
-
-    def generate_json(self, system_prompt, user_prompt, temperature=0.3, max_tokens=1500):
-        # 根据提示词内容判断返回策略还是任务脱离计划
-        if "锚点建立" in user_prompt or "Disengagement" in user_prompt:
-            return self.mock_disengagement
-        return self.mock_strategy
-
-    def generate(self, system_prompt, user_prompt, temperature=0.1, max_tokens=100):
-        return f"功能：tangible"
-
-
-def test_planner_initialization():
-    """测试干预策略分析师 Agent 初始化"""
-    mock_llm = MockLLMClientForPlanner()
-    agent = InterventionPlannerAgent(mock_llm)
-    
-    assert agent.llm == mock_llm
-    assert agent is not None
-
-
-def test_generate_strategy_tangible():
-    """测试实物功能的干预策略生成"""
-    mock_llm = MockLLMClientForPlanner(
-        mock_strategy={
-            "function": "tangible",
-            "antecedent_strategies": [
-                "提前告知物品使用规则",
-                "提供视觉提示卡",
-                "设置计时器明确时间"
-            ],
-            "behavior_strategies": [
-                "教授'我想要'的手势或语言",
-                "练习等待技能",
-                "使用替代沟通方式"
-            ],
-            "consequence_strategies": [
-                "立即强化适当请求",
-                "问题行为时不给予物品",
-                "使用'先...然后...'结构"
-            ],
-            "replacement_behavior": "用语言或手势适当请求物品",
-            "implementation_tips": [
-                "保持一致性",
-                "从小要求开始",
-                "使用高频强化",
-                "记录行为数据",
-                "逐步延长等待时间"
-            ],
-        }
+def test_v11_case_foggy_social_escape():
+    """V1.1 测试案例：模糊后果的社交逃避"""
+    mock_llm = MockLLMClient(
+        mock_abc_result={
+            "antecedent": "在教室排队跳操时",
+            "behavior": "眼睛不跟随老师，站着发呆",
+            "consequence": "未明确提及",
+        },
+        mock_function_result={
+            "hypothesized_function": "escape",
+            "reasoning": "前因为集体活动要求，行为表现为不参与，符合逃避特征",
+        },
     )
-    agent = InterventionPlannerAgent(mock_llm)
+    agent = BehaviorRecorderAgent(mock_llm)
     
-    result = agent.generate_strategy(
-        antecedent="不给他手机",
-        behavior="打自己头",
-        consequence="把手机给他",
-        function="tangible"
+    description = "在教室排队跳操时，他眼睛不跟随老师，站着发呆。"
+    result = agent.analyze(description)
+    
+    # 这个案例可能是 escape 或 inconclusive，取决于专业判断
+    assert result["hypothesized_function"] in ["escape", "inconclusive", "automatic"]
+    assert "reasoning" in result
+    assert len(result["reasoning"]) > 10
+
+
+def test_v11_case_tangible():
+    """V1.1 测试案例：明显的实物获取"""
+    mock_llm = MockLLMClient(
+        mock_abc_result={
+            "antecedent": "想要手机我没给",
+            "behavior": "打自己头",
+            "consequence": "我马上把手机给他了",
+        },
+        mock_function_result={
+            "hypothesized_function": "tangible",
+            "reasoning": "行为后获得了想要的物品，符合实物获取特征",
+        },
     )
+    agent = BehaviorRecorderAgent(mock_llm)
     
-    assert result["function"] == "tangible"
-    assert len(result["antecedent_strategies"]) >= 3
-    assert len(result["behavior_strategies"]) >= 3
-    assert len(result["consequence_strategies"]) >= 3
-    assert result["replacement_behavior"] != ""
-    assert len(result["implementation_tips"]) >= 5
+    description = "想要手机我没给，他就打自己头，我马上把手机给他了。"
+    result = agent.analyze(description)
+    
+    assert result["hypothesized_function"] == "tangible"
+    assert "实物" in result["reasoning"] or "物品" in result["reasoning"]
 
 
-def test_generate_strategy_escape():
-    """测试逃避功能的干预策略生成"""
-    mock_llm = MockLLMClientForPlanner(
-        mock_strategy={
-            "function": "escape",
-            "antecedent_strategies": [
-                "任务分解为小步骤",
-                "提供选择权",
-                "使用视觉日程表"
-            ],
-            "behavior_strategies": [
-                "教授'休息'的请求方式",
-                "练习坚持技能",
-                "使用'先...然后...'结构"
-            ],
-            "consequence_strategies": [
-                "完成小步骤后允许短暂休息",
-                "问题行为时不终止任务",
-                "使用代币强化系统"
-            ],
-            "replacement_behavior": "用适当方式请求休息",
-            "implementation_tips": [
-                "从低要求开始",
-                "逐步增加任务难度",
-                "高频强化适当行为",
-                "保持任务趣味性",
-                "记录成功数据"
-            ],
-        }
+def test_v11_case_attention():
+    """V1.1 测试案例：获得关注（即使是负面的）"""
+    mock_llm = MockLLMClient(
+        mock_abc_result={
+            "antecedent": "我在工作时",
+            "behavior": "他不停跑来拍我笔记本",
+            "consequence": "我每次都说'别吵'",
+        },
+        mock_function_result={
+            "hypothesized_function": "attention",
+            "reasoning": "行为获得了他人反应（即使是负面），符合关注获取特征",
+        },
     )
-    agent = InterventionPlannerAgent(mock_llm)
+    agent = BehaviorRecorderAgent(mock_llm)
     
-    result = agent.generate_strategy(
-        antecedent="要求写作业",
-        behavior="哭闹逃跑",
-        consequence="妈妈让他去玩",
-        function="escape"
-    )
+    description = "我在工作时，他不停跑来拍我笔记本，我每次都说'别吵'。"
+    result = agent.analyze(description)
     
-    assert result["function"] == "escape"
-    assert len(result["antecedent_strategies"]) >= 3
+    assert result["hypothesized_function"] == "attention"
+    assert "注意" in result["reasoning"] or "关注" in result["reasoning"] or "反应" in result["reasoning"]
 
 
-def test_create_disengagement_anchor():
-    """测试任务脱离锚点计划创建"""
-    mock_llm = MockLLMClientForPlanner(
-        mock_disengagement={
-            "task_name": "任务脱离训练",
-            "anchor_behavior": "安静坐下 5 秒",
-            "step_by_step_plan": [
-                "步骤 1: 建立坐下锚点（无任务要求）",
-                "步骤 2: 坐下后呈现 1 秒任务",
-                "步骤 3: 坐下后呈现 5 秒任务",
-                "步骤 4: 坐下后完成简单任务",
-                "步骤 5: 泛化到不同任务类型"
-            ],
-            "success_criteria": "孩子能够在提示下完成任务并保持适当脱离",
-            "fallback_plan": "当孩子抗拒时，回到上一步骤，降低任务要求，增加强化频率",
-        }
-    )
-    agent = InterventionPlannerAgent(mock_llm)
+def test_v11_reasoning_field_present():
+    """V1.1 测试：确保所有分析都包含 reasoning 字段"""
+    test_cases = [
+        "不给他手机，他就打自己头，我赶紧把手机给他了。",
+        "要求他写作业，他就哭闹并逃跑，妈妈只好让他先去玩。",
+        "妈妈在打电话时，他突然大声尖叫，妈妈只好停止通话看他。",
+        "他独自坐在角落时，会反复摇晃身体。",
+    ]
     
-    result = agent.create_disengagement_anchor(
-        function="escape",
-        target_behavior="哭闹逃跑",
-        challenge="要求写作业时"
-    )
-    
-    assert result["task_name"] == "任务脱离训练"
-    assert result["anchor_behavior"] != ""
-    assert len(result["step_by_step_plan"]) >= 3
-    assert result["success_criteria"] != ""
-    assert result["fallback_plan"] != ""
-
-
-def test_analyze_and_plan_complete():
-    """测试完整分析 + 规划流程"""
-    mock_llm = MockLLMClientForPlanner()
-    agent = InterventionPlannerAgent(mock_llm)
-    
-    abc_result = {
-        "antecedent": "不给他手机",
-        "behavior": "打自己头",
-        "consequence": "把手机给他",
-        "hypothesized_function": "tangible",
-    }
-    
-    result = agent.analyze_and_plan(
-        description="不给他手机，他就打自己头，我赶紧把手机给他了。",
-        abc_result=abc_result
-    )
-    
-    assert result["status"] == "completed"
-    assert result["abc_analysis"] == abc_result
-    assert "intervention_strategy" in result
-    assert result["intervention_strategy"]["function"] == "tangible"
-    # tangible 功能不应有 disengagement_task
-    assert result["disengagement_task"] is None
-
-
-def test_analyze_and_plan_with_disengagement():
-    """测试逃避功能的完整分析 + 规划（包含任务脱离计划）"""
-    mock_llm = MockLLMClientForPlanner()
-    agent = InterventionPlannerAgent(mock_llm)
-    
-    abc_result = {
-        "antecedent": "要求写作业",
-        "behavior": "哭闹逃跑",
-        "consequence": "妈妈让他去玩",
-        "hypothesized_function": "escape",
-    }
-    
-    result = agent.analyze_and_plan(
-        description="要求他写作业，他就哭闹逃跑，妈妈只好让他先去玩。",
-        abc_result=abc_result
-    )
-    
-    assert result["status"] == "completed"
-    assert result["abc_analysis"]["hypothesized_function"] == "escape"
-    # escape 功能应该有 disengagement_task
-    assert result["disengagement_task"] is not None
-    assert result["disengagement_task"]["task_name"] == "任务脱离训练"
+    for description in test_cases:
+        mock_llm = MockLLMClient(
+            mock_function_result={
+                "hypothesized_function": "tangible",
+                "reasoning": f"针对'{description[:20]}...'的推理",
+            },
+        )
+        agent = BehaviorRecorderAgent(mock_llm)
+        result = agent.analyze(description)
+        
+        assert "reasoning" in result, f"测试案例缺少 reasoning 字段：{description}"
+        assert isinstance(result["reasoning"], str), "reasoning 应该是字符串"
+        assert len(result["reasoning"]) > 0, "reasoning 不应该为空"
 
 
 if __name__ == "__main__":

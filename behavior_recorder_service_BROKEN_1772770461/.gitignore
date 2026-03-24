@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# 配置文件（包含敏感信息）
+config.yaml
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
