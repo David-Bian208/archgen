@@ -12,7 +12,12 @@
 import json
 import logging
 import re
-from typing import TypedDict, Optional
+from typing import Optional
+
+try:
+    from typing import TypedDict
+except ImportError:
+    from typing_extensions import TypedDict
 
 from app.llm.base import LLMClient
 
