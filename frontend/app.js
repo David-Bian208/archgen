@@ -5,7 +5,6 @@ App({
   },
   globalData: {
     userInfo: null,
-    baseUrl: 'http://localhost:8000'  // 本地开发用 localhost
-    // 发布时改为公网地址：'https://your-domain.com'
+    baseUrl: 'http://47.103.229.125:8000'  // 服务器公网 IP
   }
 })
