@@ -210,7 +210,7 @@
 - ✅ 测试驱动：每个模块都有单元测试
 - ✅ 每日站会：20:00 群里同步（3 句话）
 
-**Day 1 进度（2026-04-07 17:30）：**
+## Day 1 完成总结（2026-04-07）
 
 ### 后端核心（100% 完成）
 | 文件 | 状态 | 代码行数 | 完成时间 |
@@ -233,7 +233,41 @@
 - **提交时间：** 17:30
 - **提交信息：** feat(report): 实现报告生成核心功能（V4.12.0）
 
-**代码审查状态：** ✅ 审查通过（14:15）
+**Day1 状态：** ✅ 100% 完成，提前进入 Day2
+
+---
+
+## Day 2 开发指令（2026-04-08）
+
+### 前端组件开发（3 个组件）
+
+| 组件 | 优先级 | 预计时间 | 功能说明 |
+|------|--------|----------|----------|
+| `BasicReportForm.vue` | P0 | 2 小时 | 简单报告表单（4 项输入） |
+| `StepWizard.vue` | P0 | 3 小时 | 5 步分步向导（带进度保存） |
+| `ReportViewer.vue` | P1 | 2 小时 | 报告查看器（Markdown 渲染） |
+
+### API 对接
+
+| 组件 | 对接 API | 请求方法 |
+|------|----------|----------|
+| BasicReportForm | `/api/report/basic` | POST |
+| StepWizard | `/api/collect/step` | POST（5 次） |
+| ReportViewer | `/api/report/detailed` | POST |
+
+### 技术要求
+
+- Vue 3 Composition API（`<script setup>`）
+- Element Plus 组件库
+- localStorage 进度保存（StepWizard）
+- Markdown 渲染（ReportViewer，用 marked.js 或类似）
+
+### 完成标准
+
+- [ ] 3 个组件可独立运行
+- [ ] 与后端 API 联调通过
+- [ ] 无明显 UI/UX 问题
+- [ ] 基本错误处理（网络错误、表单验证）
 
 **审查意见：**
 | 维度 | 评分 | 评价 |
