@@ -1007,8 +1007,8 @@ class StructuredAssessorV4:
             "clinical_differential": insight.get("clinical_differential", "基于观察到的行为模式，我们考虑了多种可能性。"),
             "reflection": insight.get("reasoning_brief", "每个行为都是孩子与我们沟通的方式。"),
             "empowerment_question": "在接下来一周，请留意孩子在哪件他热爱的事情上展现出惊人的专注力？",
-            # V4.5 新增：叙事性报告
-            "narrative_analysis": narrative,
+            # V4.5 新增：叙事性报告（V4.10.7 修复：返回完整叙事对象，前端格式化显示）
+            "narrative_analysis": narrative if isinstance(narrative, dict) else {"narrative_summary": str(narrative) if narrative else ""},
         }
         
         return {

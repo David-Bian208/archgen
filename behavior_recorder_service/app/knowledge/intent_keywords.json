@@ -5,7 +5,7 @@
   "last_updated": "2026-03-14",
   "bcba_reviewed": true,
   "review_notes": "BCBA 审核通过 + 评估量表整合 + 词库优化 (精简 3 词)",
-  "total_keywords": 263
+  "total_keywords": 263,
   
   "intent_mapping": {
     "H_AUTOMATIC": [

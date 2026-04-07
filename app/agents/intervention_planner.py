@@ -1087,45 +1087,119 @@ class InterventionPlanner:
             "observation_tool": f"记录是为了看见专注力的进步。您只需：在日历上，记录孩子每次专注的时长（秒）和分心的次数。",
         }
     
-    # ========== V4.5.20 P0: 社交技能干预模板 ==========
+    # ========== V6.0 P0: 社交技能干预模板 - 能力缺口优先匹配 ==========
+    
+    def _match_social_scene(self, child_behavior: str) -> tuple:
+        """
+        V6.0 P0 新增：场景匹配降级方法
+        
+        当 capability_gap 不明确时，降级到场景匹配
+        注意：场景匹配条件必须精确，避免过度匹配
+        
+        Args:
+            child_behavior: 孩子行为描述
+        
+        Returns:
+            (game_name, game_steps, why_effective) 元组
+        """
+        # 1. 社交监测场景（精确匹配：判断是否被接纳）
+        if any(kw in child_behavior for kw in ["以为", "监测", "介绍", "参与", "加入"]):
+            game_name = "我们开始玩了吗信号练习"
+            game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
+            why_effective = "孩子目前难以在复杂的实时互动中判断'别人是否在和我玩'。这个练习绕开了复杂的社交解读，直接给她一个明确、可执行的外在规则，作为她内部'社交监测'能力的脚手架。这是构建更复杂社交能力的第一步。"
+        
+        # 2. 身体边界场景
+        elif any(kw in child_behavior for kw in ["拥抱", "轻重", "触碰", "边界"]):
+            game_name = "轻柔的手练习游戏"
+            game_steps = "1. 准备道具：毛绒玩具或气球\n2. 练习轻柔：让孩子轻轻摸玩具，说'这是轻柔的手'\n3. 对比练习：先用力抱（说'太紧了'），再轻柔抱（说'刚刚好'）"
+            why_effective = "通过具体道具和对比练习，帮助孩子建立身体边界感的触觉记忆"
+        
+        # 3. 规则理解/认知灵活性场景
+        elif any(kw in child_behavior for kw in ["规则", "僵化", "重复", "必须", "一定"]):
+            game_name = "规则变变变游戏"
+            game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'"
+            why_effective = "在安全环境中练习规则变化，培养认知灵活性"
+        
+        # 4. 轮流等待场景
+        elif any(kw in child_behavior for kw in ["轮流", "等待", "争当", "抢"]):
+            game_name = "轮流当队长游戏"
+            game_steps = "1. 准备计时器：设定 2 分钟\n2. 轮流规则：计时器响了就换人当队长\n3. 引导等待：在孩子等待时说'轮到你时我会提醒你'"
+            why_effective = "用可视化的计时器帮助孩子理解'轮流'的抽象概念"
+        
+        # 5. 通用场景（兜底）
+        else:
+            game_name = "社交技能假装游戏"
+            game_steps = "1. 模拟当前场景\n2. 练习恰当的社交技能\n3. 给予积极反馈"
+            why_effective = "在安全环境中练习，逐步泛化到真实场景"
+        
+        return game_name, game_steps, why_effective
     
     def _generate_social_skills_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
         """
-        V4.7.0 行动种子版：社交技能不足干预模板
+        V6.0 P0 修复版：社交技能不足干预模板 - 能力缺口优先匹配
         
-        V4.7.0 修复：干预建议不能是万金油，要提供具体可操作的游戏
-        核心策略：从一个关键信号开始，搭建能力桥梁
+        V6.0 P0 核心修复：
+        1. 优先使用 capability_gap 字段进行精确匹配
+        2. 场景匹配降级为兜底方案
+        3. 避免不同能力缺口得到相同干预
+        
+        能力缺口→干预映射：
+        - 社交信号监测 → 社交信号侦探游戏
+        - 观点采择 → 视角游戏：妈妈会看到什么
+        - 工作记忆 → 视觉提示卡游戏
+        - 认知灵活性 → 规则变变变游戏
+        - 情绪识别 → 情绪小侦探游戏
+        - 共同调控 → 我们开始玩了吗信号练习
         """
         context_activity = session_context.get("context", "") if session_context else ""
         child_behavior = session_context.get("child_behavior", "") if session_context else ""
         capability_gap = session_context.get("capability_gap", "") if session_context else ""
         
-        # V4.8.0 核心：基于具体场景生成"行动种子"游戏 + 深度原理解释
-        if "以为" in child_behavior or "监测" in child_behavior or "介绍" in child_behavior or "参与" in child_behavior:
-            # 抓人游戏/社交监测场景（核心问题：难以判断是否真的被接纳）
-            game_name = "我们开始玩了吗信号练习"
-            game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
-            why_effective = "孩子目前难以在复杂的实时互动中判断'别人是否在和我玩'。这个练习绕开了复杂的社交解读，直接给她一个明确、可执行的外在规则，作为她内部'社交监测'能力的脚手架。这是构建更复杂社交能力的第一步。"
-        elif "拥抱" in child_behavior or "轻重" in child_behavior:
-            # 身体边界场景
-            game_name = "轻柔的手练习游戏"
-            game_steps = "1. 准备道具：毛绒玩具或气球\n2. 练习轻柔：让孩子轻轻摸玩具，说'这是轻柔的手'\n3. 对比练习：先用力抱（说'太紧了'），再轻柔抱（说'刚刚好'）"
-            why_effective = "通过具体道具和对比练习，帮助孩子建立身体边界感的触觉记忆"
-        elif "规则" in child_behavior or "僵化" in child_behavior or "重复" in child_behavior:
-            # 规则理解场景
-            game_name = "规则变变变游戏"
-            game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'"
-            why_effective = "在安全环境中练习规则变化，培养认知灵活性"
-        elif "轮流" in child_behavior or "等待" in child_behavior or "争当" in child_behavior:
-            # 轮流等待场景
-            game_name = "轮流当队长游戏"
-            game_steps = "1. 准备计时器：设定 2 分钟\n2. 轮流规则：计时器响了就换人当队长\n3. 引导等待：在孩子等待时说'轮到你时我会提醒你'"
-            why_effective = "用可视化的计时器帮助孩子理解'轮流'的抽象概念"
+        # V6.0 P0 核心：能力缺口优先匹配
+        if capability_gap:
+            # 1. 社交信号监测（优先检查，避免被覆盖）
+            if any(kw in capability_gap for kw in ["社交信号", "监测", "观察反应", "眼神接触"]):
+                game_name = "社交信号侦探游戏"
+                game_steps = "1. 准备表情卡片：制作高兴/生气/难过/惊讶等表情卡片\n2. 侦探游戏：给孩子一张卡片，让他在家中找到'匹配这个表情'的人\n3. 记录发现：每次找到后，记录'谁 + 什么表情 + 为什么'\n4. 真实场景：在游乐场观察其他小朋友的表情，猜测他们的感受"
+                why_effective = "针对'社交信号监测弱'这一能力缺口，通过游戏化的'侦探'角色，让孩子主动观察和解读他人的面部表情和身体语言，逐步建立社交信号监测能力。"
+            
+            # 2. 观点采择
+            elif any(kw in capability_gap for kw in ["观点采择", "换位思考", "视角转换", "心理理论"]):
+                game_name = "视角游戏：妈妈会看到什么"
+                game_steps = "1. 准备道具：一个不透明的盒子，里面放一个玩具\n2. 视角差异：妈妈看到盒子外面，孩子可以看到里面\n3. 提问练习：问孩子'妈妈知道盒子里是什么吗？为什么？'\n4. 引导理解：帮助孩子理解'我知道的，别人不一定知道'"
+                why_effective = "针对'观点采择困难'这一能力缺口，通过具体的视觉差异场景，帮助孩子理解不同人有不同的视角和知识，逐步发展心理理论能力。"
+            
+            # 3. 工作记忆
+            elif any(kw in capability_gap for kw in ["工作记忆", "记不住", "忘记步骤", "序列"]):
+                game_name = "视觉提示卡游戏"
+                game_steps = "1. 制作步骤卡：将任务分解为 3-4 个步骤，每步一张卡片\n2. 排序练习：让孩子按顺序排列卡片\n3. 执行任务：按照卡片提示完成任务\n4. 渐褪支持：逐步减少卡片数量，让孩子记忆步骤"
+                why_effective = "针对'工作记忆弱'这一能力缺口，通过视觉化提示降低记忆负荷，同时逐步训练序列记忆能力。"
+            
+            # 4. 认知灵活性
+            elif any(kw in capability_gap for kw in ["认知灵活性", "灵活性", "变化", "转换"]):
+                game_name = "规则变变变游戏"
+                game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'\n4. 庆祝适应：当孩子接受变化时，给予积极反馈"
+                why_effective = "针对'认知灵活性不足'这一能力缺口，在安全环境中练习规则变化，培养孩子适应变化的能力。"
+            
+            # 5. 情绪识别
+            elif any(kw in capability_gap for kw in ["情绪识别", "表情", "面部表情", "情绪"]):
+                game_name = "情绪小侦探游戏"
+                game_steps = "1. 准备表情卡片：高兴/生气/难过/惊讶/害怕\n2. 猜表情：展示卡片，让孩子猜测是什么情绪\n3. 情境匹配：讨论'什么时候会有这个表情'\n4. 真实观察：在看动画片时暂停，猜测角色情绪"
+                why_effective = "针对'情绪识别困难'这一能力缺口，通过游戏化的方式让孩子学习识别基本情绪表情，为更复杂的社交互动打基础。"
+            
+            # 6. 共同调控
+            elif any(kw in capability_gap for kw in ["共同调控", "同步", "节奏匹配", "互动节奏"]):
+                game_name = "我们开始玩了吗信号练习"
+                game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
+                why_effective = "针对'共同调控能力弱'这一能力缺口，通过明确的开始/暂停信号，帮助孩子学习互动节奏的同步，建立共同调控能力。"
+            
+            # 7. 降级到场景匹配
+            else:
+                game_name, game_steps, why_effective = self._match_social_scene(child_behavior)
+        
+        # 无 capability_gap 时，降级到场景匹配
         else:
-            # 通用场景
-            game_name = "社交技能假装游戏"
-            game_steps = "1. 模拟当前场景\n2. 练习恰当的社交技能\n3. 给予积极反馈"
-            why_effective = "在安全环境中练习，逐步泛化到真实场景"
+            game_name, game_steps, why_effective = self._match_social_scene(child_behavior)
         
         return {
             "phase_name": "行动起点",
@@ -1142,7 +1216,7 @@ class InterventionPlanner:
             },
             "observation_tool": f"记录孩子今天是否能使用约定的信号（如击掌），以及在什么情境下使用的。重点是记录'成功时刻'。",
             
-            # V4.7.0 新增：原理解释
+            # V6.0 P0 新增：原理解释
             "why_effective": why_effective,
         }
-    # ========== V4.5.20 P0 结束 ==========
+    # ========== V6.0 P0 修复结束 ==========

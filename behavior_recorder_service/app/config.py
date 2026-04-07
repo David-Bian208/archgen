@@ -90,21 +90,22 @@ class Config:
     def llm_api_key(self) -> str:
         """LLM API 密钥"""
         # 支持环境变量覆盖
-        return os.getenv("LLM_API_KEY") or self.get("llm.openai.api_key", "")
+        return os.getenv("LLM_API_KEY", "")
 
     @property
     def llm_base_url(self) -> str:
         """LLM API 基础 URL"""
-        return os.getenv("LLM_BASE_URL") or self.get(
-            "llm.openai.base_url",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        return os.getenv(
+            "LLM_BASE_URL", 
+            "https://api.deepseek.com"
         )
 
     @property
     def llm_model(self) -> str:
         """LLM 模型名称"""
-        return os.getenv("LLM_MODEL") or self.get(
-            "llm.openai.model", "qwen-turbo"
+        return os.getenv(
+            "LLM_MODEL", 
+            "deepseek-chat"
         )
 
     @property
@@ -121,6 +122,31 @@ class Config:
     def debug(self) -> bool:
         """调试模式"""
         return self.get("server.debug", False)
+
+    @property
+    def test_mode_enabled(self) -> bool:
+        """测试模式是否启用"""
+        return self.get("test_mode.enabled", False)
+
+    @property
+    def test_mode_require_auth(self) -> bool:
+        """测试模式是否需要认证"""
+        return self.get("test_mode.require_auth", False)
+
+    @property
+    def test_mode_save_history(self) -> bool:
+        """测试模式是否保存历史记录"""
+        return self.get("test_mode.save_history", False)
+
+    @property
+    def test_mode_aliyun_deploy(self) -> bool:
+        """测试模式是否阿里云部署"""
+        return self.get("test_mode.aliyun_deploy", False)
+
+    @property
+    def test_mode_public_access(self) -> bool:
+        """测试模式是否公开访问"""
+        return self.get("test_mode.public_access", False)
 
 
 # 全局配置实例

@@ -387,6 +387,9 @@ class InsightAnalyzer:
             result = self._fix_capability_gap_format(result)
             logger.info(f"V4.10.3 修复后 clinical_differential: {result.get('clinical_differential', '')}")
 
+            # V5.0 新增：发展性视角映射（功能→能力）
+            result = self._add_developmental_perspective(result)
+
             logger.info(f"洞察分析完成：{result['core_insight'][:50]}...")
             return result
 
@@ -529,6 +532,91 @@ class InsightAnalyzer:
             result["reasoning_brief"] = "基于 ABC 模式和临床经验的综合判断"
         
         logger.info(f"V4.3 字段兼容性检查完成：functional_judgment={result.get('functional_judgment', 'N/A')[:30]}...")
+        return result
+    
+    def _add_developmental_perspective(self, result: dict) -> dict:
+        """
+        V5.0 新增：发展性视角映射（功能→能力）
+        
+        基于功能判断，映射到可能的发展能力领域
+        
+        Args:
+            result: 洞察分析结果
+        
+        Returns:
+            增加 developmental_perspective 字段的结果
+        """
+        from app.knowledge import map_function_to_capabilities
+        
+        functional_judgment = result.get("functional_judgment", "")
+        
+        # 从功能判断提取假设 ID
+        # 例如："逃避难度" → "H_ESCAPE_DIFFICULTY"
+        #      "提示依赖" → "H_PROMPT_DEPENDENCE"
+        #      "寻求关注" → "H_ATTENTION"
+        #      "社交技能不足" → "H_SOCIAL_SKILLS"
+        #      "自动强化" → "H_AUTOMATIC"
+        
+        function_to_id = {
+            "逃避难度": "H_ESCAPE_DIFFICULTY",
+            "逃避": "H_ESCAPE",
+            "提示依赖": "H_PROMPT_DEPENDENCE",
+            "寻求关注": "H_ATTENTION",
+            "关注": "H_ATTENTION",
+            "社交技能不足": "H_SOCIAL_SKILLS",
+            "社交": "H_SOCIAL_SKILLS",
+            "自动强化": "H_AUTOMATIC",
+            "自我刺激": "H_AUTOMATIC",
+            "感觉超载": "H_SENSORY_OVERLOAD",
+            "感觉逃避": "H_ESCAPE_SENSORY",
+            "感觉敏感": "H_ESCAPE_SENSORY",
+        }
+        
+        # 匹配假设 ID
+        hypothesis_id = None
+        for func_name, hyp_id in function_to_id.items():
+            if func_name in functional_judgment:
+                hypothesis_id = hyp_id
+                break
+        
+        if not hypothesis_id:
+            logger.warning(f"未能从功能判断 '{functional_judgment}' 中提取假设 ID")
+            result["developmental_perspective"] = {
+                "capability_areas": [],
+                "note": "未能匹配到对应的能力领域映射"
+            }
+            return result
+        
+        # 映射到能力领域
+        capability_areas = map_function_to_capabilities(hypothesis_id)
+        
+        if not capability_areas:
+            logger.warning(f"未找到假设 {hypothesis_id} 的能力映射")
+            result["developmental_perspective"] = {
+                "capability_areas": [],
+                "note": f"暂未建立 {hypothesis_id} 的能力领域映射"
+            }
+            return result
+        
+        # 构建发展性视角输出（最多 3 个，避免信息过载）
+        developmental_perspective = {
+            "capability_areas": [
+                {
+                    "area": area.get("area"),
+                    "sub_areas": area.get("sub_areas", []),
+                    "confidence": area.get("confidence", 0),
+                    "evidence": [],  # 从行为描述中提取（后续优化）
+                    "assessment_implications": area.get("assessment_tools", []),
+                    "family_verification": area.get("family_verification", ""),
+                    "developmental_milestone": area.get("developmental_milestone", "")
+                }
+                for area in capability_areas[:3]
+            ]
+        }
+        
+        result["developmental_perspective"] = developmental_perspective
+        logger.info(f"V5.0 发展性视角映射完成：{len(developmental_perspective['capability_areas'])} 个能力领域")
+        
         return result
     
     def _get_fallback_result(self, error: str) -> dict:

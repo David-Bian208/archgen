@@ -1,0 +1,194 @@
+{
+  "version": "1.0-rc1",
+  "created_at": "2026-03-27",
+  "description": "功能假设→发展能力领域映射表（V5.0 范式升级）",
+  "usage": "将 FBA 功能分析结果映射到发展性能力领域，为综合评估提供线索",
+  "mapping_rules": [
+    {
+      "function_hypothesis": "H_ESCAPE_DIFFICULTY",
+      "function_name": "逃避难度",
+      "capability_areas": [
+        {
+          "area": "执行功能/任务坚持性",
+          "sub_areas": ["抑制控制", "认知灵活性", "任务启动"],
+          "confidence": 0.8,
+          "evidence_keywords": ["太难了", "放弃", "情绪崩溃", "不学了", "不玩了", "抗拒"],
+          "assessment_tools": ["BRIEF-2", "D-KEFS", "WCST"],
+          "family_verification": "简化任务后观察行为变化。例如：将 5 步任务简化为 2 步，观察孩子是否更愿意开始",
+          "developmental_milestone": "4-5 岁应能坚持 5-10 分钟任务，5-6 岁应能坚持 10-15 分钟"
+        },
+        {
+          "area": "情绪调节/挫折耐受",
+          "sub_areas": ["情绪识别", "自我安抚", "容忍延迟"],
+          "confidence": 0.7,
+          "evidence_keywords": ["哭闹", "生气", "不耐烦", "发脾气", "摔东西"],
+          "assessment_tools": ["Emotion Regulation Checklist", "CBCL", "DECA"],
+          "family_verification": "记录挫折事件后的恢复时间。例如：从哭闹到平静需要几分钟",
+          "developmental_milestone": "5-6 岁应能用语言而非行为表达挫折，如说'我不会'而非直接放弃"
+        }
+      ]
+    },
+    {
+      "function_hypothesis": "H_PROMPT_DEPENDENCE",
+      "function_name": "提示依赖",
+      "capability_areas": [
+        {
+          "area": "执行功能/工作记忆",
+          "sub_areas": ["视觉工作记忆", "听觉工作记忆", "序列记忆"],
+          "confidence": 0.8,
+          "evidence_keywords": ["记不住", "丢了前一步", "多步骤", "教完就忘", "不看就不会"],
+          "assessment_tools": ["WISC-V 工作记忆指数", "NEPSY-II", "CMS"],
+          "family_verification": "测试能记住几步指令。例如：1 步指令（拿杯子）→2 步指令（拿杯子放桌上）→3 步指令（拿杯子放桌上再拿纸巾）",
+          "developmental_milestone": "4 岁应能记住 2 步指令，5 岁应能记住 2-3 步相关指令"
+        },
+        {
+          "area": "语言理解/指令跟随",
+          "sub_areas": ["接收性语言", "指令理解", "听觉处理"],
+          "confidence": 0.6,
+          "evidence_keywords": ["听不懂", "没反应", "需要重复", "要看示范"],
+          "assessment_tools": ["CELF-5", "PLS-5", "Receptive One-Word Picture Vocabulary Test"],
+          "family_verification": "观察对简单指令 vs 复杂指令的反应。例如：'把球给我'vs'把球拿起来放到盒子里'",
+          "developmental_milestone": "4 岁应能理解 2 步相关指令，5 岁应能理解 3 步相关指令"
+        }
+      ]
+    },
+    {
+      "function_hypothesis": "H_ATTENTION",
+      "function_name": "寻求关注",
+      "capability_areas": [
+        {
+          "area": "社交认知/恰当关注获取",
+          "sub_areas": ["社交沟通", "互动发起", "回应他人"],
+          "confidence": 0.7,
+          "evidence_keywords": ["喊妈妈", "看我", "捣乱", "故意", "奇怪声音", "夸张动作"],
+          "assessment_tools": ["ADOS-2", "SRS-2", "Vineland-3 社交化领域"],
+          "family_verification": "记录用恰当方式（语言/手势）获取关注的频率。例如：说'妈妈看我'vs 直接推人",
+          "developmental_milestone": "4 岁应能用语言而非行为获取关注，5 岁应能等待适当时机发起互动"
+        },
+        {
+          "area": "情绪调节/情绪表达",
+          "sub_areas": ["情绪识别", "情绪命名", "恰当表达"],
+          "confidence": 0.5,
+          "evidence_keywords": ["停不下来", "越说越来劲", "控制不住", "兴奋过度"],
+          "assessment_tools": ["BASC-3", "DECA", "Emotion Regulation Checklist"],
+          "family_verification": "观察是否能用语言表达'看我/陪我玩'，而非用行为",
+          "developmental_milestone": "5 岁应能命名基本情绪（高兴/生气/难过），6 岁应能表达复杂情绪（失望/嫉妒）"
+        }
+      ]
+    },
+    {
+      "function_hypothesis": "H_SOCIAL_SKILLS",
+      "function_name": "社交技能不足",
+      "capability_areas": [
+        {
+          "area": "社交认知/观点采择",
+          "sub_areas": ["心理理论", "换位思考", "意图理解"],
+          "confidence": 0.8,
+          "evidence_keywords": ["以为别人", "没意识到", "不理解", "坚持己见", "只能我当"],
+          "assessment_tools": ["NEPSY-II 心理理论", "ToM 任务", "Strange Stories"],
+          "family_verification": "讨论故事人物感受，观察是否能推断。例如：'小明以为糖在盒子里，其实被移走了，他会去哪里找？'",
+          "developmental_milestone": "4 岁应能理解愿望不同，5 岁应能理解错误信念"
+        },
+        {
+          "area": "社交认知/非语言线索解读",
+          "sub_areas": ["面部表情", "肢体语言", "语调理解"],
+          "confidence": 0.7,
+          "evidence_keywords": ["看不出", "读不懂", "表情", "不高兴", "没眼色"],
+          "assessment_tools": ["DANVA-2", "TASIT", "NEPSY-II 情感识别"],
+          "family_verification": "用照片/视频测试表情识别。例如：'这个人是什么心情？你怎么知道的？'",
+          "developmental_milestone": "4 岁应能识别基本面部表情（高兴/生气/难过/害怕），6 岁应能识别复杂表情（惊讶/厌恶/轻蔑）"
+        },
+        {
+          "area": "社交认知/社交灵活性",
+          "sub_areas": ["规则适应", "轮流等待", "协商妥协"],
+          "confidence": 0.7,
+          "evidence_keywords": ["规则只有", "不停重复", "不能变", "必须这样", "轮流"],
+          "assessment_tools": ["BRIEF-2 认知灵活性", "D-KEFS 定式转换"],
+          "family_verification": "观察对规则变化的反应。例如：平时玩 A 游戏，今天提议玩 B 游戏，孩子能否接受",
+          "developmental_milestone": "5 岁应能接受小的规则变化，6 岁应能参与规则协商"
+        }
+      ]
+    },
+    {
+      "function_hypothesis": "H_AUTOMATIC",
+      "function_name": "自动强化/自我刺激",
+      "capability_areas": [
+        {
+          "area": "感觉处理/感觉寻求",
+          "sub_areas": ["前庭寻求", "本体寻求", "触觉寻求"],
+          "confidence": 0.8,
+          "evidence_keywords": ["转圈", "摇晃", "蹦跳", "踮脚尖", "排列物品", "看手"],
+          "assessment_tools": ["SPM", "Sensory Profile 2", "SIPT"],
+          "family_verification": "提供替代感觉活动观察是否满足。例如：提供蹦床替代转圈，观察是否接受",
+          "developmental_milestone": "感觉寻求本身不是问题，关键看是否影响日常功能（如学习/社交）"
+        },
+        {
+          "area": "自我调节/自我安抚",
+          "sub_areas": ["情绪调节", "感官调节", "行为抑制"],
+          "confidence": 0.6,
+          "evidence_keywords": ["自我刺激", "重复行为", "停不下来", "沉浸"],
+          "assessment_tools": ["BRIEF-2 抑制控制", "ERC", "CBCL 注意力问题"],
+          "family_verification": "记录行为发生前的情绪状态。例如：焦虑时转圈多还是无聊时转圈多",
+          "developmental_milestone": "5 岁应能用语言而非行为自我安抚，如说'我需要休息一下'"
+        }
+      ]
+    },
+    {
+      "function_hypothesis": "H_SENSORY_OVERLOAD",
+      "function_name": "感觉超载",
+      "capability_areas": [
+        {
+          "area": "感觉处理/感觉调节",
+          "sub_areas": ["听觉过滤", "视觉过滤", "多感官整合"],
+          "confidence": 0.8,
+          "evidence_keywords": ["人多就乱", "太吵了", "信息太多", "处理不过来", "崩溃"],
+          "assessment_tools": ["SPM", "Sensory Profile 2", "TPS"],
+          "family_verification": "比较安静环境 vs 嘈杂环境的表现差异。例如：一对一教学 vs 小组活动",
+          "developmental_milestone": "5 岁应能在中等噪音环境中保持注意，7 岁应能在嘈杂环境中过滤干扰"
+        }
+      ]
+    },
+    {
+      "function_hypothesis": "H_ESCAPE_SENSORY",
+      "function_name": "感觉逃避",
+      "capability_areas": [
+        {
+          "area": "感觉处理/感觉敏感",
+          "sub_areas": ["听觉敏感", "触觉敏感", "前庭敏感"],
+          "confidence": 0.8,
+          "evidence_keywords": ["捂耳朵", "怕声音", "不肯光脚", "躲避", "太亮了"],
+          "assessment_tools": ["SPM", "Sensory Profile 2", "SIPT"],
+          "family_verification": "记录触发敏感反应的具体刺激。例如：哪种声音/触感/光线",
+          "developmental_milestone": "感觉敏感本身不是问题，关键看是否回避必要活动（如理发/刷牙/户外活动）"
+        }
+      ]
+    }
+  ],
+  "assessment_tool_reference": {
+    "BRIEF-2": "行为评定量表 - 执行功能（家长/教师版）",
+    "D-KEFS": "德尔 - 卡普兰执行功能量表",
+    "WCST": "威斯康星卡片分类测试",
+    "WISC-V": "韦氏儿童智力量表 - 工作记忆指数",
+    "NEPSY-II": "神经心理评估 - 第二版",
+    "CMS": "儿童记忆量表",
+    "CELF-5": "临床评估语言基础 - 第五版",
+    "PLS-5": "学前语言量表 - 第五版",
+    "ADOS-2": "自闭症诊断观察量表 - 第二版",
+    "SRS-2": "社交反应量表 - 第二版",
+    "Vineland-3": "文兰适应行为量表 - 第三版",
+    "DANVA-2": "诊断分析非语言准确性测试",
+    "TASIT": "社会信息处理测试",
+    "SPM": "感觉处理测量表",
+    "Sensory Profile 2": "感觉剖面图 - 第二版",
+    "SIPT": "感觉整合与实践测试",
+    "CBCL": "儿童行为量表",
+    "DECA": "devereux 早期儿童评估",
+    "BASC-3": "儿童行为评估系统 - 第三版",
+    "ERC": "情绪调节检查表",
+    "TPS": "触觉、前庭、本体觉量表"
+  },
+  "developmental_milestone_reference": {
+    "source": "综合参考 CDC 发展里程碑、丹佛发展筛查测试、PEP-3 发展期望",
+    "note": "里程碑为典型发展儿童参考，谱系儿童可能存在 1-2 年延迟，需结合个体基线评估"
+  }
+}

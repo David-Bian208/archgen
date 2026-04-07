@@ -1,0 +1,73 @@
+{
+  "project": "behavior-recorder",
+  "loaded_skills": [
+    "generic/dev-context",
+    "generic/dev-logs",
+    "generic/dev-test",
+    "domains/behavior-recorder/clinical-rules",
+    "domains/behavior-recorder/report-style",
+    "domains/behavior-recorder/safety-check"
+  ],
+  "registry": {
+    "generic/dev-context": {
+      "path": "/home/admin/.openclaw/workspace/skills/generic/dev-context",
+      "skill_md": "/home/admin/.openclaw/workspace/skills/generic/dev-context/SKILL.md",
+      "executor": "/home/admin/.openclaw/workspace/skills/generic/dev-context/executor.py",
+      "info": {
+        "name": "dev-context Skill",
+        "description": "",
+        "wake_words": []
+      }
+    },
+    "generic/dev-logs": {
+      "path": "/home/admin/.openclaw/workspace/skills/generic/dev-logs",
+      "skill_md": "/home/admin/.openclaw/workspace/skills/generic/dev-logs/SKILL.md",
+      "executor": "/home/admin/.openclaw/workspace/skills/generic/dev-logs/executor.py",
+      "info": {
+        "name": "dev-logs Skill",
+        "description": "",
+        "wake_words": []
+      }
+    },
+    "generic/dev-test": {
+      "path": "/home/admin/.openclaw/workspace/skills/generic/dev-test",
+      "skill_md": "/home/admin/.openclaw/workspace/skills/generic/dev-test/SKILL.md",
+      "executor": "/home/admin/.openclaw/workspace/skills/generic/dev-test/executor.py",
+      "info": {
+        "name": "dev-test Skill",
+        "description": "",
+        "wake_words": []
+      }
+    },
+    "domains/behavior-recorder/clinical-rules": {
+      "path": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/clinical-rules",
+      "skill_md": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/clinical-rules/SKILL.md",
+      "executor": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/clinical-rules/executor.py",
+      "info": {
+        "name": "clinical-rules Skill",
+        "description": "",
+        "wake_words": []
+      }
+    },
+    "domains/behavior-recorder/report-style": {
+      "path": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/report-style",
+      "skill_md": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/report-style/SKILL.md",
+      "executor": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/report-style/executor.py",
+      "info": {
+        "name": "report-style Skill",
+        "description": "",
+        "wake_words": []
+      }
+    },
+    "domains/behavior-recorder/safety-check": {
+      "path": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/safety-check",
+      "skill_md": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/safety-check/SKILL.md",
+      "executor": "/home/admin/.openclaw/workspace/skills/domains/behavior-recorder/safety-check/executor.py",
+      "info": {
+        "name": "safety-check Skill",
+        "description": "",
+        "wake_words": []
+      }
+    }
+  }
+}

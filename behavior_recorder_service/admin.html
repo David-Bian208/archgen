@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>行为观察助手 V5.0 - 后台管理</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 { color: #333; margin-bottom: 20px; }
+    
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+    .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .stat-card h3 { color: #666; font-size: 14px; margin-bottom: 10px; }
+    .stat-card .number { font-size: 32px; font-weight: bold; color: #667eea; }
+    
+    .controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+    button { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+    .btn-secondary { background: white; border: 2px solid #e0e0e0; color: #666; }
+    .btn-secondary:hover { border-color: #667eea; color: #667eea; }
+    
+    .session-list { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; }
+    .session-item { border-bottom: 1px solid #e0e0e0; padding: 20px; }
+    .session-item:last-child { border-bottom: none; }
+    .session-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    .session-id { font-size: 12px; color: #999; background: #f0f0f0; padding: 4px 8px; border-radius: 4px; }
+    .session-time { font-size: 14px; color: #666; }
+    .conversation { background: #f8f9fa; padding: 15px; border-radius: 6px; margin-bottom: 15px; }
+    .message { margin-bottom: 15px; }
+    .message.user { border-left: 3px solid #667eea; padding-left: 15px; }
+    .message.ai { border-left: 3px solid #764ba2; padding-left: 15px; }
+    .message-label { font-size: 12px; color: #999; margin-bottom: 5px; }
+    .message-content { font-size: 14px; line-height: 1.6; color: #333; }
+    .report-section { background: #fff3cd; padding: 15px; border-radius: 6px; border-left: 3px solid #f59e0b; }
+    .report-section h4 { color: #92400e; margin-bottom: 10px; }
+    .export-area { margin-top: 20px; padding: 20px; background: white; border-radius: 8px; }
+    textarea { width: 100%; height: 400px; padding: 15px; border: 2px solid #e0e0e0; border-radius: 6px; font-family: monospace; font-size: 13px; resize: vertical; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📘 行为观察助手 V5.0 - 后台管理</h1>
+    
+    <div class="stats" id="stats">
+      <div class="stat-card">
+        <h3>总会话数</h3>
+        <div class="number" id="totalSessions">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>总对话数</h3>
+        <div class="number" id="totalConversations">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>已完成会话</h3>
+        <div class="number" id="completedSessions">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>平均对话轮次</h3>
+        <div class="number" id="avgTurns">-</div>
+      </div>
+    </div>
+    
+    <div class="controls">
+      <button class="btn-primary" onclick="loadData()">🔄 刷新数据</button>
+      <button class="btn-secondary" onclick="exportText()">📄 导出为文本</button>
+      <button class="btn-secondary" onclick="exportCSV()">📊 导出为 CSV</button>
+      <button class="btn-secondary" onclick="toggleAll()">👁️ 展开/收起全部</button>
+    </div>
+    
+    <div class="session-list" id="sessionList">
+      <div style="padding: 40px; text-align: center; color: #999;">加载中...</div>
+    </div>
+    
+    <div class="export-area" style="display: none;" id="exportArea">
+      <h3>导出数据</h3>
+      <textarea id="exportContent" readonly></textarea>
+    </div>
+  </div>
+
+  <script>
+    let allData = []
+    let allExpanded = false
+
+    // 辅助函数：安全提取字段（支持嵌套对象）
+    function formatField(obj, field) {
+      if (!obj) return '-'
+      const value = obj[field]
+      if (typeof value === 'object' && value !== null) {
+        return JSON.stringify(value, null, 2)
+      }
+      return value || '-'
+    }
+
+    async function loadData() {
+      try {
+        const response = await fetch('/api/v4/admin/conversations')
+        const data = await response.json()
+        allData = data
+        renderStats(data)
+        renderSessions(data)
+      } catch (error) {
+        document.getElementById('sessionList').innerHTML = `
+          <div style="padding: 40px; text-align: center; color: #f44336;">
+            ❌ 加载失败：${error.message}<br>
+            <small>请确保后端服务正在运行</small>
+          </div>
+        `
+      }
+    }
+
+    function renderStats(data) {
+      const sessions = new Set(data.map(d => d.session_id))
+      const completed = data.filter(d => {
+        try {
+          const ai = JSON.parse(d.ai_response)
+          return ai.status === 'completed'
+        } catch { return false }
+      }).map(d => d.session_id)
+      const completedSet = new Set(completed)
+      
+      document.getElementById('totalSessions').textContent = sessions.size
+      document.getElementById('totalConversations').textContent = data.length
+      document.getElementById('completedSessions').textContent = completedSet.size
+      document.getElementById('avgTurns').textContent = (data.length / sessions.size).toFixed(1)
+    }
+
+    function renderSessions(data) {
+      const sessions = {}
+      data.forEach(row => {
+        if (!sessions[row.session_id]) {
+          sessions[row.session_id] = {
+            id: row.session_id,
+            conversations: [],
+            firstTime: row.timestamp,
+            lastTime: row.timestamp,
+            report: null
+          }
+        }
+        sessions[row.session_id].conversations.push(row)
+        if (row.timestamp < sessions[row.session_id].firstTime) {
+          sessions[row.session_id].firstTime = row.timestamp
+        }
+        if (row.timestamp > sessions[row.session_id].lastTime) {
+          sessions[row.session_id].lastTime = row.timestamp
+        }
+        
+        // 提取完整报告
+        try {
+          const aiData = JSON.parse(row.ai_response)
+          // V5.0 数据结构：aiData.data.report 包含完整报告，aiData.data.intervention_plan 包含干预计划
+          if (aiData.data && aiData.data.report) {
+            sessions[row.session_id].report = aiData.data.report
+            sessions[row.session_id].intervention = aiData.data.intervention_plan || aiData.intervention_plan
+            // 调试日志
+            console.log('Session', row.session_id, 'has intervention:', sessions[row.session_id].intervention)
+          }
+        } catch (e) {
+          console.error('解析 AI 响应失败:', e)
+        }
+      })
+
+      const sortedSessions = Object.values(sessions).sort((a, b) => 
+        new Date(b.lastTime) - new Date(a.lastTime)
+      )
+
+      const container = document.getElementById('sessionList')
+      container.innerHTML = sortedSessions.map(session => {
+        const isTest = session.id.startsWith('test')
+        const hasReport = session.report !== null
+        
+        return `
+          <div class="session-item" style="${isTest ? 'opacity: 0.7;' : ''}">
+            <div class="session-header">
+              <div>
+                <span class="session-id">${session.id}</span>
+                ${isTest ? '<span style="margin-left: 10px; color: #f44336; font-size: 12px;">🧪 测试</span>' : ''}
+                ${hasReport ? '<span style="margin-left: 10px; color: #4caf50; font-size: 12px;">✅ 已生成报告</span>' : ''}
+              </div>
+              <div class="session-time">
+                📅 ${session.firstTime.replace(' ', ' ')} → ${session.lastTime.replace(' ', ' ')}
+                <span style="margin-left: 15px;">💬 ${session.conversations.length}轮对话</span>
+              </div>
+            </div>
+            
+            <div class="conversation">
+              ${session.conversations.map((conv, idx) => {
+                let aiMessage = '...'
+                try {
+                  const aiData = JSON.parse(conv.ai_response)
+                  aiMessage = aiData.message || JSON.stringify(aiData, null, 2)
+                } catch {
+                  aiMessage = conv.ai_response
+                }
+                
+                return `
+                  <div class="message user">
+                    <div class="message-label">👤 用户提问 ${idx + 1}</div>
+                    <div class="message-content">${conv.user_input}</div>
+                  </div>
+                  <div class="message ai">
+                    <div class="message-label">🤖 AI 回复 ${idx + 1}</div>
+                    <div class="message-content">${aiMessage.replace(/\n/g, '<br>')}</div>
+                  </div>
+                `
+              }).join('')}
+            </div>
+            
+            ${hasReport ? `
+              <div class="report-section">
+                <h4 style="color: #2e7d32; margin-bottom: 15px;">📘 完整分析报告</h4>
+                
+                <div style="margin-bottom: 15px;">
+                  <strong>📋 摘要：</strong><br>
+                  <span style="color: #555; line-height: 1.6;">${session.report.summary || session.report.observation || '-'}</span>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                  <strong>🔍 情境：</strong> ${session.report.context || '-'}<br>
+                  <strong>👶 孩子的表现：</strong> ${session.report.child_behavior || '-'}<br>
+                  <strong>👥 周围的反应：</strong> ${session.report.others_response || '-'}
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                  <strong>💡 核心洞察：</strong><br>
+                  <span style="color: #555; line-height: 1.6;">${session.report.core_insight || session.report.parent_insight || '-'}</span>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                  <strong>🎯 功能判断：</strong> ${session.report.functional_judgment || '-'}<br>
+                  <strong>🔬 专业视角：</strong><br>
+                  <span style="color: #555; line-height: 1.6;">${session.report.expert_view || '-'}</span>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                  <strong>🧩 能力缺口：</strong><br>
+                  <span style="color: #555; line-height: 1.6;">${session.report.core_capability_goal || '-'}</span>
+                </div>
+                
+                ${session.report.clinical_differential ? `
+                  <div style="margin-bottom: 15px;">
+                    <strong>📊 鉴别分析：</strong><br>
+                    <span style="color: #555; line-height: 1.6;">${session.report.clinical_differential.replace(/\n/g, '<br>')}</span>
+                  </div>
+                ` : ''}
+                
+                ${session.report.narrative_analysis ? `
+                  <div style="margin-bottom: 15px;">
+                    <strong>📖 叙事分析：</strong><br>
+                    <span style="color: #555; line-height: 1.6;">${session.report.narrative_analysis.observed_pattern || ''}<br>
+                    ${session.report.narrative_analysis.primary_attribution || ''}<br>
+                    ${session.report.narrative_analysis.capability_gaps || ''}</span>
+                  </div>
+                ` : ''}
+                
+                ${session.intervention ? `
+                  <div style="background: #e3f2fd; padding: 15px; border-radius: 6px; border-left: 3px solid #2196f3; margin-top: 15px;">
+                    <strong style="color: #1565c0;">🎯 支持计划：</strong><br><br>
+                    <strong>阶段：</strong> ${session.intervention.phase_name || '-'}<br>
+                    <strong>目标：</strong> ${session.intervention.goal || '-'}<br>
+                    <strong>核心原则：</strong> ${session.intervention.core_principle || '-'}<br><br>
+                    ${session.intervention.four_step_plan ? `
+                      <strong>四步计划：</strong><br>
+                      <span style="color: #555; line-height: 1.6; display: block; margin-top: 10px;">
+                        ${session.intervention.four_step_plan.core_idea ? `<div style="margin-bottom: 8px;">💡 <strong>核心思路：</strong>${session.intervention.four_step_plan.core_idea}</div>` : ''}
+                        ${session.intervention.four_step_plan.our_plan ? `<div style="margin-bottom: 8px;">📋 <strong>我们的计划：</strong>${session.intervention.four_step_plan.our_plan}</div>` : ''}
+                        ${session.intervention.four_step_plan.first_step ? `<div style="margin-bottom: 8px;">🚀 <strong>第一步：</strong>${session.intervention.four_step_plan.first_step}</div>` : ''}
+                        ${session.intervention.four_step_plan.success_picture ? `<div style="margin-bottom: 8px;">🎯 <strong>成功画面：</strong>${session.intervention.four_step_plan.success_picture}</div>` : ''}
+                      </span>
+                    ` : ''}
+                    ${session.intervention.observation_tool ? `<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #bbdefb;"><strong>📝 观察工具：</strong><br><span style="color: #555;">${session.intervention.observation_tool}</span></div>` : ''}
+                    ${session.intervention.why_effective ? `<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #bbdefb;"><strong>💡 为什么有效：</strong><br><span style="color: #555;">${session.intervention.why_effective}</span></div>` : ''}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
+            
+            <button class="btn-secondary" onclick="toggleSession(this)" style="font-size: 12px; padding: 6px 12px; margin-top: 10px;">
+              ${allExpanded ? '👁️ 收起' : '👁️ 展开'}
+            </button>
+          </div>
+        `
+      }).join('')
+    }
+
+    function toggleSession(btn) {
+      const conversation = btn.previousElementSibling
+      const isHidden = conversation.style.display === 'none'
+      conversation.style.display = isHidden ? 'block' : 'none'
+      btn.textContent = isHidden ? '👁️ 收起' : '👁️ 展开'
+    }
+
+    function toggleAll() {
+      allExpanded = !allExpanded
+      document.querySelectorAll('.conversation').forEach(el => {
+        el.style.display = allExpanded ? 'block' : 'none'
+      })
+      document.querySelectorAll('.session-item button').forEach(btn => {
+        btn.textContent = allExpanded ? '👁️ 收起' : '👁️ 展开'
+      })
+    }
+
+    function exportText() {
+      let text = '📘 行为观察助手 V5.0 - 完整对话记录\n'
+      text += '导出时间：' + new Date().toLocaleString('zh-CN') + '\n'
+      text += '='.repeat(80) + '\n\n'
+      
+      const sessions = {}
+      allData.forEach(row => {
+        if (!sessions[row.session_id]) {
+          sessions[row.session_id] = {
+            conversations: [],
+            report: null,
+            intervention: null
+          }
+        }
+        sessions[row.session_id].conversations.push(row)
+        
+        // 提取报告
+        try {
+          const aiData = JSON.parse(row.ai_response)
+          if (aiData.data && aiData.data.report) {
+            sessions[row.session_id].report = aiData.data
+            sessions[row.session_id].intervention = aiData.data.intervention_plan
+          }
+        } catch {}
+      })
+      
+      Object.entries(sessions).forEach(([id, session]) => {
+        const convs = session.conversations
+        const report = session.report
+        
+        text += `会话：${id}\n`
+        text += `时间：${convs[0].timestamp} → ${convs[convs.length - 1].timestamp}\n`
+        text += `对话轮次：${convs.length}\n`
+        text += '='.repeat(80) + '\n\n'
+        
+        // 对话记录
+        text += '【对话内容】\n'
+        convs.forEach((conv, idx) => {
+          text += `\n${idx + 1}. 👤 用户：${conv.user_input}\n`
+          try {
+            const aiData = JSON.parse(conv.ai_response)
+            text += `   🤖 AI: ${aiData.message}\n`
+            text += `   状态：${aiData.status}\n`
+          } catch {
+            text += `   🤖 AI: ${conv.ai_response}\n`
+          }
+        })
+        
+        // 完整报告
+        if (report) {
+          text += '\n\n【完整分析报告】\n'
+          text += '-'.repeat(80) + '\n'
+          text += `\n📋 摘要：${report.summary || report.observation || '-'}\n\n`
+          text += `🔍 情境：${report.context || '-'}\n`
+          text += `👶 孩子的表现：${report.child_behavior || '-'}\n`
+          text += `👥 周围的反应：${report.others_response || '-'}\n\n`
+          text += `💡 核心洞察：${report.core_insight || report.parent_insight || '-'}\n\n`
+          text += `🎯 功能判断：${report.functional_judgment || '-'}\n`
+          text += `🔬 专业视角：${report.expert_view || '-'}\n\n`
+          text += `🧩 能力缺口：${report.core_capability_goal || '-'}\n\n`
+          
+          if (report.clinical_differential) {
+            text += `📊 鉴别分析：\n${report.clinical_differential}\n\n`
+          }
+          
+          if (report.narrative_analysis) {
+            text += `📖 叙事分析：\n`
+            text += `观察到的模式：${report.narrative_analysis.observed_pattern || '-'}\n`
+            text += `主要归因：${report.narrative_analysis.primary_attribution || '-'}\n`
+            text += `能力缺口：${report.narrative_analysis.capability_gaps || '-'}\n\n`
+          }
+          
+          // 干预计划
+          if (session.intervention) {
+            const plan = session.intervention
+            text += `🎯 支持计划\n`
+            text += `-`.repeat(40) + '\n'
+            text += `阶段：${plan.phase_name || '-'}\n`
+            text += `目标：${plan.goal || '-'}\n`
+            text += `核心原则：${plan.core_principle || '-'}\n\n`
+            
+            if (plan.four_step_plan) {
+              text += `四步计划：\n`
+              if (plan.four_step_plan.core_idea) text += `💡 核心思路：${plan.four_step_plan.core_idea}\n`
+              if (plan.four_step_plan.our_plan) text += `📋 我们的计划：${plan.four_step_plan.our_plan}\n`
+              if (plan.four_step_plan.first_step) text += `🚀 第一步：${plan.four_step_plan.first_step}\n`
+            }
+          }
+        }
+        
+        text += '\n' + '='.repeat(80) + '\n\n'
+      })
+      
+      document.getElementById('exportContent').value = text
+      document.getElementById('exportArea').style.display = 'block'
+      document.getElementById('exportContent').select()
+    }
+
+    function exportCSV() {
+      let csv = '会话 ID,时间，用户提问，AI 回复，状态\n'
+      allData.forEach(row => {
+        let status = ''
+        try {
+          const aiData = JSON.parse(row.ai_response)
+          status = aiData.status || ''
+        } catch {}
+        
+        const user = row.user_input.replace(/"/g, '""')
+        let ai = row.ai_response.replace(/"/g, '""')
+        try {
+          const aiData = JSON.parse(row.ai_response)
+          ai = aiData.message.replace(/"/g, '""')
+        } catch {}
+        
+        csv += `"${row.session_id}","${row.timestamp}","${user}","${ai}","${status}"\n`
+      })
+      
+      document.getElementById('exportContent').value = csv
+      document.getElementById('exportArea').style.display = 'block'
+      document.getElementById('exportContent').select()
+    }
+
+    // 自动加载
+    loadData()
+  </script>
+</body>
+</html>

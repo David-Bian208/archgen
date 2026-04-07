@@ -737,25 +737,27 @@ class GuidedRecorderV4:
         logger.info(f"触发分析流程：session={state.session_id}")
         
         try:
-            # 1. 生成洞察
-            analyzer = InsightAnalyzer(self.llm)
-            insight = analyzer.analyze(
-                environment=state.collected_data.get("environment", ""),
-                antecedent=state.collected_data.get("context", ""),
-                behavior=state.collected_data.get("behavior", ""),
-                consequence=state.collected_data.get("response", ""),
-            )
-            
-            # 2. 生成干预计划
-            planner = InterventionPlanner()
-            # V4.2 修复：使用默认场景 key 而非空字符串
-            scenario_key = "task_disengagement"  # 默认使用任务脱离场景
+            # 1. 生成洞察 - P0 防护优化：传递 session_context
             session_context = {
                 "environment": state.collected_data.get("environment", ""),
                 "context": state.collected_data.get("context", ""),
                 "child_behavior": state.collected_data.get("behavior", ""),
                 "others_response": state.collected_data.get("response", ""),
             }
+            
+            analyzer = InsightAnalyzer(self.llm)
+            insight = analyzer.analyze(
+                environment=state.collected_data.get("environment", ""),
+                antecedent=state.collected_data.get("context", ""),
+                behavior=state.collected_data.get("behavior", ""),
+                consequence=state.collected_data.get("response", ""),
+                session_context=session_context,  # P0 防护优化新增
+            )
+            
+            # 2. 生成干预计划
+            planner = InterventionPlanner()
+            # V4.2 修复：使用默认场景 key 而非空字符串
+            scenario_key = "task_disengagement"  # 默认使用任务脱离场景
             plan = planner.generate_plan("H1", scenario_key, session_context)
             
             # 3. 保存结果

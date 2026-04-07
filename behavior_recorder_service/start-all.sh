@@ -1,20 +1,26 @@
 #!/bin/bash
-# V4.5.1 完整启动脚本
+# V4.10.6 启动脚本（自动检测路径 - 本地/阿里云通用）
+
+# 自动获取脚本所在目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=========================================="
-echo "🚀 行为记录助手 V4.5.1 启动"
+echo "🚀 行为记录助手 V4.10.6 启动"
 echo "=========================================="
+echo "📁 工作目录：$SCRIPT_DIR"
 echo ""
 
 # 停止旧进程
 echo "🛑 停止旧进程..."
+pkill -f "gunicorn" 2>/dev/null
+pkill -f "uvicorn" 2>/dev/null
 pkill -f "python3 main.py" 2>/dev/null
 pkill -f "vite --port 3000" 2>/dev/null
 sleep 2
 
 # 启动后端
 echo "📡 启动后端服务..."
-cd /home/admin/.openclaw/workspace/behavior_recorder_service
+cd "$SCRIPT_DIR"
 nohup python3 main.py > server.log 2>&1 &
 BACKEND_PID=$!
 echo "   后端 PID: $BACKEND_PID"
@@ -32,7 +38,7 @@ fi
 
 # 启动前端
 echo "🎨 启动前端服务..."
-cd /home/admin/.openclaw/workspace/behavior_recorder_service/frontend
+cd "$SCRIPT_DIR/frontend"
 nohup npm run dev -- --port 3000 --host > ../frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "   前端 PID: $FRONTEND_PID"
