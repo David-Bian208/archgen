@@ -114,12 +114,12 @@ def main():
     print("=" * 60)
     
     # 检查环境变量
-    if not os.getenv('DASHSCOPE_API_KEY'):
-        print("⚠️  警告：DASHSCOPE_API_KEY 未设置")
+    if not os.getenv('LLM_API_KEY'):
+        print("⚠️  警告：LLM_API_KEY 未设置")
         print("请设置环境变量后重试:")
-        print("  export DASHSCOPE_API_KEY='your_api_key'")
-        print("  export DASHSCOPE_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'")
-        print("  export DASHSCOPE_MODEL='qwen-plus'")
+        print("  export LLM_API_KEY='your_api_key'")
+        print("  export LLM_BASE_URL='https://api.deepseek.com'")
+        print("  export LLM_MODEL='deepseek-chat'")
         print("=" * 60)
         return 1
     

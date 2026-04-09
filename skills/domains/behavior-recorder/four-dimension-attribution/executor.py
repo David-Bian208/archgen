@@ -35,9 +35,9 @@ class FourDimensionAnalyzer:
         self.short_mode = short_mode
         self.prompt_template = FOUR_DIMENSION_PROMPT_SHORT if short_mode else FOUR_DIMENSION_PROMPT
         self.client = OpenAIClient(
-            api_key=os.getenv('DASHSCOPE_API_KEY', ''),
-            base_url=os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1'),
-            model=os.getenv('DASHSCOPE_MODEL', 'qwen-plus')
+            api_key=os.getenv('LLM_API_KEY', ''),
+            base_url=os.getenv('LLM_BASE_URL', 'https://api.deepseek.com'),
+            model=os.getenv('LLM_MODEL', 'deepseek-chat')
         )
     
     def analyze(self, behavior_description: str) -> Dict[str, Any]:
