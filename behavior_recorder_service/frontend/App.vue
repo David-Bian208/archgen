@@ -328,7 +328,7 @@ export default {
         const controller = new AbortController()
         this.abortController = controller
         
-        const response = await axios.post('http://localhost:8003/api/v4/analyze', {
+        const response = await axios.post('/api/v4/analyze', {
           session_id: this.sessionId,
           user_input: text,
         }, {
@@ -543,7 +543,7 @@ ${this.insightReport.expert_view}
       this.submittingFeedback = true
       
       try {
-        const response = await axios.post('http://localhost:8003/api/v4/feedback', {
+        const response = await axios.post('/api/v4/feedback', {
           session_id: this.sessionId,
           rating: this.feedbackForm.rating,
           accuracy: this.feedbackForm.accuracy || 'partial',

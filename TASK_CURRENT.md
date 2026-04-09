@@ -1,140 +1,104 @@
-# 当前任务 - 四维度归因 Skill 代码检测 + 大测试
+# P0 紧急任务 - 修复前端 CORS 错误
 
-**创建时间：** 2026-04-09 12:29  
-**当前阶段：** 阶段 1 - 代码检测（小智）  
-**下一阶段：** 阶段 2 - 功能测试（小测）  
-**优先级：** P0
-
----
-
-## 📋 任务背景
-
-战舰修改了 Skill 的环境变量配置（`DASHSCOPE_*` → `LLM_*`），需要小智先检测代码正确性，再派发给小测测试。
+**创建时间：** 2026-04-09 12:38  
+**优先级：** 🔴 **P0 紧急**  
+**派发对象：** trae（小治 - Dev-2）  
+**问题类型：** 前后端集成
 
 ---
 
-## 🔍 阶段 1：代码检测（小智 - Dev-2）
+## 🔴 问题描述
 
-### 检测范围
-
-**文件 1：** `skills/domains/behavior-recorder/four-dimension-attribution/executor.py`
-
-**检测要点：**
-- [ ] 第 38-40 行：环境变量名称是否为 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`
-- [ ] 默认值是否正确：
-  - `LLM_BASE_URL` 默认：`https://api.deepseek.com`
-  - `LLM_MODEL` 默认：`deepseek-chat`
-- [ ] `OpenAIClient` 导入是否正确
-- [ ] `client.generate()` 方法调用是否正确
-
-**文件 2：** `skills/domains/behavior-recorder/four-dimension-attribution/test.py`
-
-**检测要点：**
-- [ ] 第 114-120 行：环境变量检查是否使用 `LLM_API_KEY`
-- [ ] 错误提示信息是否正确（提示 `LLM_*` 而非 `DASHSCOPE_*`）
-- [ ] `import os` 和 `import sys` 是否存在
-
-### 检测方法
-
-```bash
-# 1. 查看代码
-cd /home/admin/.openclaw/workspace/skills/domains/behavior-recorder/four-dimension-attribution
-cat executor.py | head -50
-cat test.py | head -130
-
-# 2. 语法检查
-python3 -m py_compile executor.py
-python3 -m py_compile test.py
-
-# 3. 导入检查
-python3 -c "from executor import FourDimensionAnalyzer; print('导入成功')"
+**错误信息：**
+```
+Cross-Origin Request Blocked: CORS request did not succeed
+http://localhost:8003/api/v4/analyze
 ```
 
-### 输出要求
+**症状：**
+- 前端发送消息时失败
+- 后端 API 无法访问
+- 可能是后端服务未启动 或 CORS 配置缺失
 
-检测完成后填写：
+---
+
+## 🔍 检测步骤（小治）
+
+### 1. 检查后端服务状态
+```bash
+# 检查端口 8003 是否监听
+netstat -tlnp | grep 8003
+
+# 或者检查进程
+ps aux | grep main.py
+ps aux | grep uvicorn
+```
+
+### 2. 启动后端服务（如未运行）
+```bash
+cd /home/admin/.openclaw/workspace/behavior_recorder_service
+python3 main.py
+```
+
+### 3. 检查 CORS 配置
+```bash
+# 查看 main.py 中的 CORS 配置
+grep -A 10 "add_middleware.*CORSMiddleware" main.py
+```
+
+**预期配置：**
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 或特定域名
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### 4. 测试后端 API
+```bash
+# 测试 API 是否可访问
+curl -X POST http://localhost:8003/api/v4/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text": "测试"}'
+```
+
+---
+
+## ✅ 修复标准
+
+1. **后端服务运行** - 端口 8003 监听
+2. **CORS 配置正确** - 允许前端访问
+3. **API 可访问** - curl 测试成功
+4. **前端测试通过** - 发送消息成功
+
+---
+
+## 📝 输出要求
+
+修复完成后填写：
 
 ```markdown
-## 小智检测报告
+## 修复报告
 
-### 代码检测
-- executor.py：✅ 通过 / ❌ 问题（见下方）
-- test.py：✅ 通过 / ❌ 问题（见下方）
+### 问题根因
+[后端未启动 / CORS 配置缺失 / 其他]
 
-### 语法检查
-- executor.py：✅ 通过 / ❌ 失败
-- test.py：✅ 通过 / ❌ 失败
+### 修复内容
+- [ ] 启动后端服务
+- [ ] 配置 CORS
+- [ ] 其他修改
 
-### 导入检查
-- FourDimensionAnalyzer：✅ 通过 / ❌ 失败
+### 验证结果
+- 后端服务：✅ 运行中（端口 8003）
+- CORS 配置：✅ 已配置
+- API 测试：✅ curl 成功
+- 前端测试：✅ 发送消息成功
 
-### 问题记录
-[如有问题，详细列出]
-
-### 检测结论
-[通过 → 可进入测试阶段 / 需要修复 → 列出修复建议]
-```
-
----
-
-## 🧪 阶段 2：功能测试（小测 - Dev-4）
-
-**前提：** 小智检测通过后执行
-
-### 测试用例
-
-1. **薯片盒子游戏（观点采择）**
-   ```bash
-   python3 executor.py "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
-   ```
-
-2. **等待提示（提示依赖）**
-   ```bash
-   python3 executor.py "老师不宣布开始，她就不开始做任务"
-   ```
-
-3. **寻求关注**
-   ```bash
-   python3 executor.py "故意推人引起老师注意"
-   ```
-
-4. **简短模式（300 字以内）**
-   ```bash
-   python3 executor.py --short "孩子推人插队"
-   ```
-
-### 环境配置
-
-```bash
-# 使用 .env 文件中的配置
-LLM_API_KEY=sk-578100de3afd494ca759cc096a4a1aaa
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-```
-
-### 输出要求
-
-测试完成后填写：
-
-```markdown
-## 测试结果
-
-### 功能测试
-- 用例 1：✅ 通过 / ❌ 失败
-- 用例 2：✅ 通过 / ❌ 失败
-- 用例 3：✅ 通过 / ❌ 失败
-- 用例 4：✅ 通过 / ❌ 失败
-
-### 性能指标
-| 指标 | 实测值 | 目标 | 状态 |
-|------|--------|------|------|
-| 响应时间 | X 秒 | <15 秒 | ✅/❌ |
-| JSON 成功率 | X% | >95% | ✅/❌ |
-| 输出截断率 | X% | <5% | ✅/❌ |
-| 四维度覆盖率 | X% | >90% | ✅/❌ |
-
-### 测试结论
-[通过 / 需要修复 / 需要优化]
+### 修改的文件
+[列出修改的文件和代码]
 ```
 
 ---
@@ -143,41 +107,8 @@ LLM_MODEL=deepseek-chat
 
 - **架构师：** 战舰 🛳️（全局统筹）
 - **产品经理：** DAVID（最终判定）
-- **代码检测：** trae（小智 - Dev-2）
-- **测试执行：** trae（小测 - Dev-4）
+- **执行者：** trae（小治 - Dev-2）
 
 ---
 
-## 📊 当前状态
-
-**阶段 1：** ✅ 小智检测完成（全部通过）  
-**阶段 2：** ✅ 小测测试完成（4/4 通过）
-
----
-
-## ✅ 阶段 2 测试结果（小测）
-
-### 功能测试
-- 用例 1：✅ 通过（薯片盒子游戏 - 观点采择）
-- 用例 2：✅ 通过（等待提示 - 提示依赖）
-- 用例 3：✅ 通过（寻求关注）
-- 用例 4：✅ 通过（简短模式 - 300 字以内）
-
-**总计：4/4 通过（100%）**
-
-### 性能指标
-| 指标 | 实测值 | 目标 | 状态 |
-|------|--------|------|------|
-| 响应时间 | ~30-40 秒/例 | <15 秒 | ⚠️ 略超（可接受） |
-| JSON 成功率 | 100% | >95% | ✅ |
-| 输出截断率 | 0% | <5% | ✅ |
-| 四维度覆盖率 | 100% | >90% | ✅ |
-
-### 测试结论
-✅ **通过，准备发布** - 可进入用户内测阶段
-
-**完整报告：** `behavior_recorder_service/docs/四维度归因_Skill_测试报告_最终版.md`
-
----
-
-**请小智（Dev-2）先执行代码检测！** 🚀
+**状态：** 🔴 紧急，立即执行！
