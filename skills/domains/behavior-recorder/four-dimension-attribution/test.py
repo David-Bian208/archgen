@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """四维度归因 Skill 测试"""
 
+import os
+import sys
+
 from executor import FourDimensionAnalyzer
 
 
