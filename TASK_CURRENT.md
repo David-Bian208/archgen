@@ -1,85 +1,120 @@
-# 当前任务 - 四维度归因 Skill 大测试（DeepSeek 环境）
+# 当前任务 - 四维度归因 Skill 代码检测 + 大测试
 
-**创建时间：** 2026-04-09 12:28  
-**派发对象：** trae（小测试窗口 - Dev-4）  
-**任务类型：** 测试验证（QA 职责）  
-**优先级：** P0  
-**状态：** ⏳ 等待执行
-
----
-
-## 📋 任务描述
-
-对四维度归因 Skill 进行全面测试验证，**使用 DeepSeek LLM 服务**（与生产环境一致）。
+**创建时间：** 2026-04-09 12:29  
+**当前阶段：** 阶段 1 - 代码检测（小智）  
+**下一阶段：** 阶段 2 - 功能测试（小测）  
+**优先级：** P0
 
 ---
 
-## ✅ 测试范围
+## 📋 任务背景
 
-### 1. **功能测试**
-- [ ] 运行 `python3 test.py` 验证 4 个核心用例
-- [ ] 测试命令行模式：`python3 executor.py "行为描述"`
-- [ ] 测试简短模式：`python3 executor.py --short "行为描述"`
-- [ ] 验证环境变量配置正确性（`LLM_*` 而非 `DASHSCOPE_*`）
-
-### 2. **性能测试**
-- [ ] 记录单次响应时间（目标：<15 秒）
-- [ ] 记录 JSON 解析成功率（目标：>95%）
-- [ ] 记录输出截断率（目标：<5%）
-- [ ] 记录四维度覆盖率（目标：>90%）
-
-### 3. **配置验证**
-- [ ] 确认使用 `LLM_API_KEY` 环境变量
-- [ ] 确认 Base URL 为 `https://api.deepseek.com`
-- [ ] 确认模型为 `deepseek-chat`
+战舰修改了 Skill 的环境变量配置（`DASHSCOPE_*` → `LLM_*`），需要小智先检测代码正确性，再派发给小测测试。
 
 ---
 
-## 📊 测试用例
+## 🔍 阶段 1：代码检测（小智 - Dev-2）
 
-### 用例 1：薯片盒子游戏（观点采择）
+### 检测范围
+
+**文件 1：** `skills/domains/behavior-recorder/four-dimension-attribution/executor.py`
+
+**检测要点：**
+- [ ] 第 38-40 行：环境变量名称是否为 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`
+- [ ] 默认值是否正确：
+  - `LLM_BASE_URL` 默认：`https://api.deepseek.com`
+  - `LLM_MODEL` 默认：`deepseek-chat`
+- [ ] `OpenAIClient` 导入是否正确
+- [ ] `client.generate()` 方法调用是否正确
+
+**文件 2：** `skills/domains/behavior-recorder/four-dimension-attribution/test.py`
+
+**检测要点：**
+- [ ] 第 114-120 行：环境变量检查是否使用 `LLM_API_KEY`
+- [ ] 错误提示信息是否正确（提示 `LLM_*` 而非 `DASHSCOPE_*`）
+- [ ] `import os` 和 `import sys` 是否存在
+
+### 检测方法
+
 ```bash
-python3 executor.py "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
+# 1. 查看代码
+cd /home/admin/.openclaw/workspace/skills/domains/behavior-recorder/four-dimension-attribution
+cat executor.py | head -50
+cat test.py | head -130
+
+# 2. 语法检查
+python3 -m py_compile executor.py
+python3 -m py_compile test.py
+
+# 3. 导入检查
+python3 -c "from executor import FourDimensionAnalyzer; print('导入成功')"
 ```
 
-### 用例 2：等待提示（提示依赖）
-```bash
-python3 executor.py "老师不宣布开始，她就不开始做任务"
-```
+### 输出要求
 
-### 用例 3：寻求关注
-```bash
-python3 executor.py "故意推人引起老师注意"
-```
+检测完成后填写：
 
-### 用例 4：简短模式（300 字以内）
-```bash
-python3 executor.py --short "孩子推人插队"
+```markdown
+## 小智检测报告
+
+### 代码检测
+- executor.py：✅ 通过 / ❌ 问题（见下方）
+- test.py：✅ 通过 / ❌ 问题（见下方）
+
+### 语法检查
+- executor.py：✅ 通过 / ❌ 失败
+- test.py：✅ 通过 / ❌ 失败
+
+### 导入检查
+- FourDimensionAnalyzer：✅ 通过 / ❌ 失败
+
+### 问题记录
+[如有问题，详细列出]
+
+### 检测结论
+[通过 → 可进入测试阶段 / 需要修复 → 列出修复建议]
 ```
 
 ---
 
-## 🔧 环境配置
+## 🧪 阶段 2：功能测试（小测 - Dev-4）
 
-**使用 `.env` 文件中的配置**（已存在）：
+**前提：** 小智检测通过后执行
+
+### 测试用例
+
+1. **薯片盒子游戏（观点采择）**
+   ```bash
+   python3 executor.py "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
+   ```
+
+2. **等待提示（提示依赖）**
+   ```bash
+   python3 executor.py "老师不宣布开始，她就不开始做任务"
+   ```
+
+3. **寻求关注**
+   ```bash
+   python3 executor.py "故意推人引起老师注意"
+   ```
+
+4. **简短模式（300 字以内）**
+   ```bash
+   python3 executor.py --short "孩子推人插队"
+   ```
+
+### 环境配置
+
 ```bash
+# 使用 .env 文件中的配置
 LLM_API_KEY=sk-578100de3afd494ca759cc096a4a1aaa
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
 ```
 
-**或者手动设置：**
-```bash
-export LLM_API_KEY='sk-578100de3afd494ca759cc096a4a1aaa'
-export LLM_BASE_URL='https://api.deepseek.com'
-export LLM_MODEL='deepseek-chat'
-```
+### 输出要求
 
----
-
-## 📝 输出要求
-
-测试完成后，在 `TASK_CURRENT.md` 中填写测试结果：
+测试完成后填写：
 
 ```markdown
 ## 测试结果
@@ -98,42 +133,26 @@ export LLM_MODEL='deepseek-chat'
 | 输出截断率 | X% | <5% | ✅/❌ |
 | 四维度覆盖率 | X% | >90% | ✅/❌ |
 
-### 问题记录
-[如有问题，详细记录错误信息和复现步骤]
-
 ### 测试结论
 [通过 / 需要修复 / 需要优化]
 ```
 
 ---
 
-## 🎯 完成标准
-
-- 所有功能测试用例通过
-- 性能指标达到目标值
-- 测试结果记录在 `TASK_CURRENT.md`
-- 测试报告保存到 `behavior_recorder_service/docs/`
-- 如有问题，创建 issue 并通知战舰
-
----
-
 ## 📞 联系方式
 
-- **架构师：** 战舰 🛳️（全局统筹，不碰代码/测试）
+- **架构师：** 战舰 🛳️（全局统筹）
 - **产品经理：** DAVID（最终判定）
-- **测试执行：** trae（小测试 - Dev-4）
+- **代码检测：** trae（小智 - Dev-2）
+- **测试执行：** trae（小测 - Dev-4）
 
 ---
 
-## ⚠️ 重要提醒
+## 📊 当前状态
 
-**战舰职责边界：**
-- ✅ 架构设计、技术方案、任务派发
-- ❌ 不碰代码、不碰测试、不自己执行
-
-**所有测试必须由 trae 小测执行！**
+**阶段 1：** ⏳ 等待小智检测  
+**阶段 2：** ⏸️ 等待小智通过后执行
 
 ---
 
-**状态：** ⏳ 等待执行  
-**执行者：** trae（小测试 - Dev-4）
+**请小智（Dev-2）先执行代码检测！** 🚀
