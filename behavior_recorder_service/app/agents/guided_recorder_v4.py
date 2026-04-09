@@ -981,7 +981,7 @@ class GuidedRecorderV4:
             # 核心能力目标 - 从 expert_breakdown 映射
             "core_capability_goal": expert_breakdown.get("capability_gap", "提升在无实时外部提示下，维持任务序列的工作记忆能力。"),
             
-            # 临床鉴别思考
+            # 专业鉴别思考
             "clinical_differential": insight.get("clinical_differential", "基于观察到的行为模式，我们考虑了多种可能性，包括提示依赖、自我刺激、感觉逃避等。结合'有提示时表现良好'这一关键信息，提示依赖的可能性最高。"),
             
             # 反思与赋能

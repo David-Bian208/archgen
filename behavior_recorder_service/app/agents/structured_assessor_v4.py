@@ -1,5 +1,5 @@
 """
-结构化临床评估引导器 V4.5.10 - 对话流程修复版
+结构化专业评估引导器 V4.5.10 - 对话流程修复版
 在 V4.3 结构化框架基础上，新增动态假设推理层
 
 V4.5 新增能力：
@@ -161,7 +161,7 @@ class StructuredAssessmentState:
 
 
 class ClinicalAssessmentFramework:
-    """临床评估框架加载与管理"""
+    """专业评估框架加载与管理"""
     
     def __init__(self, framework_path: str):
         self.path = Path(framework_path)
@@ -227,7 +227,7 @@ class ClinicalAssessmentFramework:
 
 class StructuredAssessorV4:
     """
-    结构化临床评估引导器 V4.5 - 临床推理引擎集成版
+    结构化专业评估引导器 V4.5 - 专业推理引擎集成版
     
     核心方法：
     1. process(): 主处理流程
@@ -238,7 +238,7 @@ class StructuredAssessorV4:
     6. _generate_report(): 触发报告生成（含叙事增强）
     
     V4.5 新增：
-    - reasoning_engine: 临床推理引擎，负责假设追踪和信念更新
+    - reasoning_engine: 专业推理引擎，负责假设追踪和信念更新
     """
     
     def __init__(self, llm_client: LLMClient, framework_path: str):
@@ -246,11 +246,11 @@ class StructuredAssessorV4:
         self.framework = ClinicalAssessmentFramework(framework_path)
         self.sessions: Dict[str, StructuredAssessmentState] = {}
         
-        # V4.5 新增：临床推理引擎
+        # V4.5 新增：专业推理引擎
         network_path = "app/knowledge/hypothesis_network.json"
         self.reasoning_engine = ClinicalReasoningEngine(llm_client, network_path)
         
-        logger.info("StructuredAssessorV4 初始化完成 - V4.5 临床推理引擎集成版")
+        logger.info("StructuredAssessorV4 初始化完成 - V4.5 专业推理引擎集成版")
     
     def _create_session(self, session_id: Optional[str] = None) -> StructuredAssessmentState:
         """创建新会话（V4.5.12 新增：重置推理引擎假设）"""
@@ -314,7 +314,7 @@ class StructuredAssessorV4:
         missing_required = [f for f in required_fields if not state.is_field_filled(f)]
         priority_hint = f"当前最需要填充的字段：{', '.join(missing_required)}" if missing_required else "所有必填字段已填充"
         
-        extraction_prompt = f"""从用户输入中提取信息，填充到临床评估框架字段中。
+        extraction_prompt = f"""从用户输入中提取信息，填充到专业评估框架字段中。
 
 【评估框架字段定义】
 {all_fields_text}
@@ -1761,7 +1761,7 @@ class StructuredAssessorV4:
             if inferred_env:
                 state.set_field_value("inferred_setting", inferred_env, confidence=0.7, is_auto_inferred=True)
         
-        # 5. V4.5.7 增强：临床推理引擎更新信念 + 矛盾证据处理
+        # 5. V4.5.7 增强：专业推理引擎更新信念 + 矛盾证据处理
         filled_data_dict = {k: v.value for k, v in state.filled_data.items() if v.value}
         hypothesis_confidences = self.reasoning_engine.update_beliefs(user_input, filled_data_dict)
         

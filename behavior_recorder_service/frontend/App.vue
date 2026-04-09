@@ -5,7 +5,7 @@
       <!-- 导航栏 -->
       <nav class="navbar">
         <div class="navbar-brand">
-          <h1>📘 行为观察助手 V4.11.2</h1>
+          <h1>📘 行为观察助手 V4.11.0</h1>
         </div>
         <div class="navbar-nav">
           <button @click="activeTab = 'chat'" :class="{ active: activeTab === 'chat' }" class="nav-btn">
@@ -48,7 +48,7 @@
             <!-- V4.5 洞察报告（会话完成时） -->
             <div v-if="insightReport" class="insight-report v35-report">
               <div class="report-header-section">
-                <h2>📘 行为观察助手 V4.11.2</h2>
+                <h2>📘 行为观察助手 V4.11.0</h2>
                 <div class="report-meta">
                   <span><strong>场景：</strong>{{ reportData.scene || '行为观察' }}</span>
                   <span><strong>分析日期：</strong>{{ today }}</span>
@@ -262,7 +262,7 @@
       </main>
 
       <footer class="footer">
-        <p>行为观察助手 V4.11.2 | 测试版</p>
+        <p>行为观察助手 V4.11.0 | 测试版</p>
       </footer>
     </div>
   </div>

@@ -1,5 +1,5 @@
 """
-临床推理引擎 V4.6.0 - 知识配置工程化版
+专业推理引擎 V4.6.0 - 知识配置工程化版
 从"规则驱动评估"升级为"假设驱动推理"
 
 核心能力：
@@ -103,7 +103,7 @@ class HypothesisNetwork:
 
 class ClinicalReasoningEngine:
     """
-    临床推理引擎 V4.5
+    专业推理引擎 V4.5
     
     核心方法：
     1. update_beliefs(): 根据新证据更新所有假设的置信度
@@ -374,7 +374,7 @@ class ClinicalReasoningEngine:
         
         使用 LLM 识别用户输入中包含的证据类型
         """
-        extraction_prompt = f"""从用户输入和已填数据中，提取能支持或反对临床假设的证据断言。
+        extraction_prompt = f"""从用户输入和已填数据中，提取能支持或反对专业假设的证据断言。
 
 【用户输入】
 {user_input}
@@ -803,7 +803,7 @@ class ClinicalReasoningEngine:
             for ev in hyp.evidence:
                 evidence_summary.append(f"- {hyp.name}: {ev.get('evidence_text', '')} ({ev.get('type', '')})")
         
-        return f"""基于以下临床推理结果，生成一份整合性的行为分析报告。
+        return f"""基于以下专业推理结果，生成一份整合性的行为分析报告。
 
 【高置信度假设】
 {hyp_summary}
