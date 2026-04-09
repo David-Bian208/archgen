@@ -55,106 +55,81 @@
                 </div>
               </div>
 
-              <!-- 摘要 -->
-              <div class="summary">
-                <h3>📋 核心洞察</h3>
-                <div class="summary-text" v-html="formatMarkdown(insightReport.core_insight || insightReport.parent_insight)"></div>
-              </div>
-
-              <!-- 详细信息 -->
-              <div class="detail-list">
-                <div class="detail-item">
-                  <strong>情境：</strong>{{ reportData.context }}
-                </div>
-                <div class="detail-item">
-                  <strong>孩子的表现：</strong>{{ reportData.child_behavior }}
-                </div>
-                <div class="detail-item">
-                  <strong>周围的反应：</strong>{{ reportData.others_response }}
-                </div>
-                <div class="detail-item">
-                  <strong>环境：</strong>{{ insightReport.environment || '未明确' }}
-                </div>
-                <div class="detail-item">
-                  <strong>孩子年龄：</strong>{{ insightReport.child_age || '未明确' }}
+              <!-- 第一部分：📝 场景描述 -->
+              <div class="scene-section">
+                <h3>📝 场景描述</h3>
+                <div class="scene-content">
+                  <div class="scene-item">
+                    <span class="scene-label">情境：</span>
+                    <span class="scene-text">{{ reportData.context || '未明确' }}</span>
+                  </div>
+                  <div class="scene-item">
+                    <span class="scene-label">孩子的表现：</span>
+                    <span class="scene-text">{{ reportData.child_behavior || '未明确' }}</span>
+                  </div>
+                  <div class="scene-item">
+                    <span class="scene-label">周围的反应：</span>
+                    <span class="scene-text">{{ reportData.others_response || '未明确' }}</span>
+                  </div>
+                  <div class="scene-item">
+                    <span class="scene-label">孩子年龄：</span>
+                    <span class="scene-text">{{ insightReport.child_age || '未明确' }}</span>
+                  </div>
                 </div>
               </div>
 
-              <!-- 功能判断 -->
-              <div class="hypothesis-box">
-                <h3>🎯 行为功能判断</h3>
-                <div class="functional-judgment-content">
-                  <!-- 总的问题判断 -->
-                  <div class="main-judgment">
-                    <span class="judgment-label">功能判断：</span>
-                    <span class="judgment-text">{{ insightReport.functional_judgment || insightReport.expert_view }}</span>
+              <!-- 第二部分：🔍 行为分析 -->
+              <div class="analysis-section">
+                <h3>🔍 行为分析</h3>
+                <div class="analysis-content">
+                  <!-- 行为功能 -->
+                  <div class="analysis-item">
+                    <span class="analysis-label">行为功能：</span>
+                    <div class="analysis-text" v-html="formatMarkdown(insightReport.functional_judgment || insightReport.expert_view)"></div>
                   </div>
                   
-                  <!-- 核心能力目标 -->
-                  <div class="capability-goals" v-if="insightReport.core_capability_goal">
-                    <h4>核心能力目标：</h4>
-                    <div class="goal-list" v-html="formatMarkdown(insightReport.core_capability_goal)"></div>
+                  <!-- 核心能力缺口 -->
+                  <div class="analysis-item" v-if="insightReport.core_capability_goal">
+                    <span class="analysis-label">核心能力缺口：</span>
+                    <div class="analysis-text" v-html="formatMarkdown(insightReport.core_capability_goal)"></div>
+                  </div>
+                  
+                  <!-- 观察到的问题 -->
+                  <div class="analysis-item" v-if="insightReport.core_insight">
+                    <span class="analysis-label">观察到的问题：</span>
+                    <div class="analysis-text" v-html="formatMarkdown(insightReport.core_insight)"></div>
                   </div>
                 </div>
               </div>
 
-              <!-- 临床鉴别思考 -->
-              <div v-if="insightReport.clinical_differential" class="clinical-differential">
-                <h3>🔍 临床鉴别思考</h3>
-                <div v-html="formatClinicalDifferential(insightReport.clinical_differential)"></div>
-              </div>
-
-              <!-- 干预计划 -->
-              <div v-if="interventionPlan" class="intervention-plan">
-                <h3>📚 干预建议</h3>
-                <div class="plan-details">
-                  <!-- 目标 -->
-                  <div class="plan-item goal-item">
-                    <h4>🎯 目标</h4>
-                    <div class="goal-content">
-                      <p>{{ interventionPlan.goal || '提升相关能力' }}</p>
-                    </div>
+              <!-- 第三部分：💡 心伴解读 -->
+              <div class="heart-section">
+                <h3>💡 心伴解读</h3>
+                <div class="heart-content">
+                  <!-- 我们觉得 -->
+                  <div class="heart-item">
+                    <span class="heart-label">我们觉得：</span>
+                    <div class="heart-text" v-html="formatMarkdown(insightReport.parent_insight || insightReport.reflection)"></div>
                   </div>
                   
-                  <!-- 具体策略 -->
-                  <div class="plan-item strategy-item">
-                    <h4>🎮 具体策略</h4>
-                    <div class="gamified-strategy">
-                      <p v-if="interventionPlan.strategy_details_gamified || interventionPlan.strategy_details">{{ interventionPlan.strategy_details_gamified || interventionPlan.strategy_details }}</p>
-                      <div v-else class="strategy-placeholder">
-                        <p>📋 正在生成具体策略...</p>
-                        <p class="placeholder-hint">请稍候，AI 正在为您定制个性化的干预策略</p>
-                      </div>
-                    </div>
+                  <!-- 优先解决的卡点 -->
+                  <div class="heart-item" v-if="interventionPlan && interventionPlan.goal">
+                    <span class="heart-label">优先解决的卡点：</span>
+                    <div class="heart-text">{{ interventionPlan.goal }}</div>
                   </div>
                   
-                  <!-- 成功标准 -->
-                  <div class="plan-item success-item">
-                    <h4>✅ 成功标准</h4>
-                    <div class="success-criteria">
-                      <p v-if="interventionPlan.success_criteria">{{ interventionPlan.success_criteria }}</p>
-                      <p v-else class="placeholder-text">将根据具体策略生成成功标准</p>
-                    </div>
+                  <!-- 建议 -->
+                  <div class="heart-item" v-if="interventionPlan && (interventionPlan.strategy_details_gamified || interventionPlan.strategy_details)">
+                    <span class="heart-label">建议：</span>
+                    <div class="heart-text" v-html="formatMarkdown(interventionPlan.strategy_details_gamified || interventionPlan.strategy_details)"></div>
                   </div>
                   
-                  <!-- 观察小工具 -->
-                  <div class="plan-item observation-tool" @click="toggleObservationTool">
-                    <div class="tool-header">
-                      <h4>📝 观察小工具</h4>
-                      <span class="tool-toggle">{{ showObservationTool ? '▼' : '▶' }}</span>
-                    </div>
-                    <div class="tool-content" v-show="showObservationTool">
-                      <p v-if="interventionPlan.parent_observation_task">{{ interventionPlan.parent_observation_task }}</p>
-                      <p v-else class="placeholder-text">将生成观察记录模板</p>
-                    </div>
+                  <!-- 赋能思考 -->
+                  <div class="heart-item" v-if="insightReport.empowerment_question">
+                    <span class="heart-label">赋能思考：</span>
+                    <div class="heart-text">{{ insightReport.empowerment_question }}</div>
                   </div>
                 </div>
-              </div>
-
-              <!-- 反思与展望 -->
-              <div class="future-section">
-                <h3>🌟 反思与展望</h3>
-                <div v-html="formatMarkdown(insightReport.reflection + '<br/><br/><strong>赋能思考：</strong>' + (insightReport.empowerment_question || ''))"></div>
               </div>
 
               <!-- V4.10.4 新增：用户反馈区域 -->
@@ -3212,5 +3187,153 @@ textarea:disabled {
   background: #fee2e2;
   color: #991b1b;
   border: 1px solid #fca5a5;
+}
+
+/* ========== V4.12.0 三部分报告结构样式 ========== */
+
+/* 📝 场景描述部分 */
+.v35-report .scene-section {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border-left: 4px solid #0284c7;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 25px;
+}
+
+.v35-report .scene-section h3 {
+  color: #0369a1;
+  font-size: 1.3em;
+  font-weight: 600;
+  margin: 0 0 15px 0;
+}
+
+.v35-report .scene-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.v35-report .scene-item {
+  display: flex;
+  gap: 10px;
+  line-height: 1.7;
+}
+
+.v35-report .scene-label {
+  font-weight: 600;
+  color: #0369a1;
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.v35-report .scene-text {
+  color: #334155;
+  flex: 1;
+}
+
+/* 🔍 行为分析部分 */
+.v35-report .analysis-section {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-left: 4px solid #f59e0b;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 25px;
+}
+
+.v35-report .analysis-section h3 {
+  color: #b45309;
+  font-size: 1.3em;
+  font-weight: 600;
+  margin: 0 0 15px 0;
+}
+
+.v35-report .analysis-content {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.v35-report .analysis-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.v35-report .analysis-label {
+  font-weight: 600;
+  color: #b45309;
+  font-size: 1.05em;
+}
+
+.v35-report .analysis-text {
+  color: #334155;
+  line-height: 1.8;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+/* 💡 心伴解读部分 */
+.v35-report .heart-section {
+  background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%);
+  border-left: 4px solid #ec4899;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 25px;
+}
+
+.v35-report .heart-section h3 {
+  color: #be185d;
+  font-size: 1.3em;
+  font-weight: 600;
+  margin: 0 0 15px 0;
+}
+
+.v35-report .heart-content {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.v35-report .heart-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.v35-report .heart-label {
+  font-weight: 600;
+  color: #be185d;
+  font-size: 1.05em;
+}
+
+.v35-report .heart-text {
+  color: #334155;
+  line-height: 1.8;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .v35-report .scene-item,
+  .v35-report .analysis-item,
+  .v35-report .heart-item {
+    flex-direction: column;
+  }
+  
+  .v35-report .scene-label,
+  .v35-report .analysis-label,
+  .v35-report .heart-label {
+    min-width: auto;
+    margin-bottom: 4px;
+  }
+  
+  .v35-report .scene-text,
+  .v35-report .analysis-text,
+  .v35-report .heart-text {
+    padding: 8px;
+  }
 }
 </style>
