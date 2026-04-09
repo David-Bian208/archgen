@@ -22,16 +22,16 @@ class OpenAIClient(LLMClient):
         初始化 LLM 客户端
 
         Args:
-            api_key: API 密钥，默认从 DASHSCOPE_API_KEY 读取
-            base_url: API 基础 URL，默认从 DASHSCOPE_BASE_URL 读取
-            model: 模型名称，默认从 DASHSCOPE_MODEL 读取
+            api_key: API 密钥，默认从 LLM_API_KEY 读取（兼容 DASHSCOPE_API_KEY）
+            base_url: API 基础 URL，默认从 LLM_BASE_URL 读取（兼容 DASHSCOPE_BASE_URL）
+            model: 模型名称，默认从 LLM_MODEL 读取（兼容 DASHSCOPE_MODEL）
         """
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        self.base_url = base_url or os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        self.model = model or os.getenv("DASHSCOPE_MODEL", "qwen-plus")
+        self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+        self.base_url = base_url or os.getenv("LLM_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.model = model or os.getenv("LLM_MODEL") or os.getenv("DASHSCOPE_MODEL", "qwen-plus")
 
         if not self.api_key:
-            raise ValueError("API 密钥未设置，请设置 DASHSCOPE_API_KEY 环境变量")
+            raise ValueError("API 密钥未设置，请设置 LLM_API_KEY 或 DASHSCOPE_API_KEY 环境变量")
 
         self.session = requests.Session()
         self.session.headers.update({
@@ -91,6 +91,17 @@ class OpenAIClient(LLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        
+        # 提取 markdown 代码块中的 JSON
+        if "```json" in text:
+            start = text.find("```json") + 7
+            end = text.find("```", start)
+            text = text[start:end].strip()
+        elif "```" in text:
+            start = text.find("```") + 3
+            end = text.find("```", start)
+            text = text[start:end].strip()
+        
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
