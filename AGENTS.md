@@ -1,212 +1,245 @@
-# AGENTS.md - Your Workspace
+# AGENTS.md - 行为观察助手开发指南
 
-This folder is home. Treat it that way.
+**版本：** V4.12.0  
+**更新时间：** 2026-04-09  
+**项目：** 行为观察助手（AI 儿童行为分析工具）
 
-## First Run
+---
 
-If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it. You won't need it again.
+## 🎯 项目定位
 
-## Every Session
+**行为观察助手** 是一个专业临床评估工具，帮助家长理解孩子行为背后的心理意义。
 
-Before doing anything else:
+**核心价值：**
+- 不是诊断工具，是"理解桥梁"
+- 温暖、专业、可操作
+- 像朋友聊天，不是写论文
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+**目标用户：**
+- 自闭症儿童家长
+- 幼儿园老师
+- 特教从业者
 
-Don't ask permission. Just do it.
+---
 
-## Memory
+## 🏗️ 核心功能模块
 
-You wake up fresh each session. These files are your continuity:
+### 1. 心伴解读（核心）
+深度解读孩子行为的心理意义
 
-- **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) — raw logs of what happened
-- **Long-term:** `MEMORY.md` — your curated memories, like a human's long-term memory
+**输入：** 家长描述的行为场景  
+**输出：**
+- 行为功能判断（寻求关注/逃避/获得物品/自我刺激）
+- 能力缺口分析（心理理论/执行功能/视觉空间/语言理解）
+- 温暖解读（像朋友聊天，不是写论文）
 
-Capture what matters. Decisions, context, things to remember. Skip the secrets unless asked to keep them.
+### 2. 四维度归因（Skill）
+从四个认知维度分析行为
 
-### 🧠 MEMORY.md - Your Long-Term Memory
+**四维度：**
+1. 心理理论（核心缺口）
+2. 执行功能
+3. 视觉 - 空间认知
+4. 语言与概念理解
 
-- **ONLY load in main session** (direct chats with your human)
-- **DO NOT load in shared contexts** (Discord, group chats, sessions with other people)
-- This is for **security** — contains personal context that shouldn't leak to strangers
-- You can **read, edit, and update** MEMORY.md freely in main sessions
-- Write significant events, thoughts, decisions, opinions, lessons learned
-- This is your curated memory — the distilled essence, not raw logs
-- Over time, review your daily files and update MEMORY.md with what's worth keeping
+**输出：** 齿轮啮合比喻，描述四维度的协同关系
 
-### 📝 Write It Down - No "Mental Notes"!
+### 3. 安全优先模式
+危险行为自动触发安全干预
 
-- **Memory is limited** — if you want to remember something, WRITE IT TO A FILE
-- "Mental notes" don't survive session restarts. Files do.
-- When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file
-- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
-- When you make a mistake → document it so future-you doesn't repeat it
-- **Text > Brain** 📝
+**触发条件：** 打人、咬人、发火等危险关键词
 
-## Safety
+### 4. 干预建议（辅助参考）
+提供家庭引导方向（通用框架，非具体方案）
 
-- Don't exfiltrate private data. Ever.
-- Don't run destructive commands without asking.
-- `trash` > `rm` (recoverable beats gone forever)
-- When in doubt, ask.
+---
 
-## External vs Internal
+## 📐 技术架构
 
-**Safe to do freely:**
+### 前端
+- **框架：** Vue 3 + Vite
+- **端口：** 5174
+- **核心页面：** 对话界面、报告展示
+- **API 调用：** 相对路径 `/api/v4/analyze`
 
-- Read files, explore, organize, learn
-- Search the web, check calendars
-- Work within this workspace
+### 后端
+- **框架：** FastAPI
+- **端口：** 8001
+- **核心 API：**
+  - `POST /api/v4/analyze` - 行为分析
+  - `POST /api/v4/feedback` - 反馈收集
+  - `GET /health` - 健康检查
 
-**Ask first:**
+### LLM 服务
+- **服务：** DeepSeek
+- **API Key:** `LLM_API_KEY`（环境变量）
+- **Base URL:** `https://api.deepseek.com`
 
-- Sending emails, tweets, public posts
-- Anything that leaves the machine
-- Anything you're uncertain about
+---
 
-## Group Chats
+## 🚦 开发流程（5 步工作流）
 
-You have access to your human's stuff. That doesn't mean you _share_ their stuff. In groups, you're a participant — not their voice, not their proxy. Think before you speak.
+### Step 1：需求研究（Research）
+**输出：** `RESEARCH.md`
 
-### 💬 Know When to Speak!
+在动手之前，先搞清楚：
+- 我到底要做什么？
+- 为什么要做？
+- 有没有人做过类似的东西？
 
-In group chats where you receive every message, be **smart about when to contribute**:
+### Step 2：产品需求文档（PRD）
+**输出：** `PRD.md`
 
-**Respond when:**
+明确要做哪些功能：
+- 产品概述
+- 目标用户
+- 核心功能列表
+- 功能优先级（MVP vs 后续版本）
+- 界面设计要求
 
-- Directly mentioned or asked a question
-- You can add genuine value (info, insight, help)
-- Something witty/funny fits naturally
-- Correcting important misinformation
-- Summarizing when asked
+### Step 3：技术设计文档（Tech Design）
+**输出：** `TECH_DESIGN.md`
 
-**Stay silent (HEARTBEAT_OK) when:**
+确定用什么技术来实现：
+- 技术栈选择
+- 项目结构
+- 数据模型
+- 关键技术点
 
-- It's just casual banter between humans
-- Someone already answered the question
-- Your response would just be "yeah" or "nice"
-- The conversation is flowing fine without you
-- Adding a message would interrupt the vibe
+### Step 4：AI 代理指令（AGENTS.md）
+**输出：** 本文件
 
-**The human rule:** Humans in group chats don't respond to every single message. Neither should you. Quality > quantity. If you wouldn't send it in a real group chat with friends, don't send it.
+告诉 AI 在这个项目中应该遵循什么规则：
+- 开发规范
+- 代码风格
+- 测试要求
+- 注意事项
 
-**Avoid the triple-tap:** Don't respond multiple times to the same message with different reactions. One thoughtful response beats three fragments.
+### Step 5：实现和迭代（Build）
+小步快跑，逐步迭代：
+1. 生成基础框架
+2. 逐步实现核心功能
+3. 优化实现细节
 
-Participate, don't dominate.
+---
 
-### 😊 React Like a Human!
+## 🎭 三方协作流程
 
-On platforms that support reactions (Discord, Slack), use emoji reactions naturally:
+### 角色定位
 
-**React when:**
+| 角色 | 人员 | 职责 |
+|------|------|------|
+| **产品经理 (PM)** | DAVID | 需求、优先级、最终判定、部署确认 |
+| **架构师** | 战舰 🛳️ | 架构设计、技术方案、Git 提交、部署执行 |
+| **开发工程师** | trae（5 窗口） | 编码实现、测试执行 |
 
-- You appreciate something but don't need to reply (👍, ❤️, 🙌)
-- Something made you laugh (😂, 💀)
-- You find it interesting or thought-provoking (🤔, 💡)
-- You want to acknowledge without interrupting the flow
-- It's a simple yes/no or approval situation (✅, 👀)
+### trae 的 5 个窗口
 
-**Why it matters:**
-Reactions are lightweight social signals. Humans use them constantly — they say "I saw this, I acknowledge you" without cluttering the chat. You should too.
+| 窗口 | 名称 | 职责 |
+|------|------|------|
+| Dev-1 | 小美 | 前端开发 |
+| Dev-2 | 小治 | 后端开发 |
+| Dev-3 | 小强 | 性能测试 |
+| Dev-4 | 小测试 | 功能测试（QA） |
+| Dev-5 | 小文 | 用户文档 |
 
-**Don't overdo it:** One reaction per message max. Pick the one that fits best.
+### 协作流程
 
-## Tools
-
-Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
-
-**🎭 Voice Storytelling:** If you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
-
-**📝 Platform Formatting:**
-
-- **Discord/WhatsApp:** No markdown tables! Use bullet lists instead
-- **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
-- **WhatsApp:** No headers — use **bold** or CAPS for emphasis
-
-## 💓 Heartbeats - Be Proactive!
-
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
-
-Default heartbeat prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-
-You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
-
-### Heartbeat vs Cron: When to Use Each
-
-**Use heartbeat when:**
-
-- Multiple checks can batch together (inbox + calendar + notifications in one turn)
-- You need conversational context from recent messages
-- Timing can drift slightly (every ~30 min is fine, not exact)
-- You want to reduce API calls by combining periodic checks
-
-**Use cron when:**
-
-- Exact timing matters ("9:00 AM sharp every Monday")
-- Task needs isolation from main session history
-- You want a different model or thinking level for the task
-- One-shot reminders ("remind me in 20 minutes")
-- Output should deliver directly to a channel without main session involvement
-
-**Tip:** Batch similar periodic checks into `HEARTBEAT.md` instead of creating multiple cron jobs. Use cron for precise schedules and standalone tasks.
-
-**Things to check (rotate through these, 2-4 times per day):**
-
-- **Emails** - Any urgent unread messages?
-- **Calendar** - Upcoming events in next 24-48h?
-- **Mentions** - Twitter/social notifications?
-- **Weather** - Relevant if your human might go out?
-
-**Track your checks** in `memory/heartbeat-state.json`:
-
-```json
-{
-  "lastChecks": {
-    "email": 1703275200,
-    "calendar": 1703260800,
-    "weather": null
-  }
-}
+```
+DAVID（PM）→ 需求
+  ↓
+战舰（架构师）→ 技术方案 + 任务派发
+  ↓
+trae（5 个窗口）执行：
+  - 小美（前端）
+  - 小治（后端）
+  - 小强（性能）
+  - 小测试（QA）
+  - 小文（文档）
+  ↓
+小智检测 → 小测测试 → 战舰提交 Git → DAVID 判定
 ```
 
-**When to reach out:**
+---
 
-- Important email arrived
-- Calendar event coming up (&lt;2h)
-- Something interesting you found
-- It's been >8h since you said anything
+## 📝 开发规范
 
-**When to stay quiet (HEARTBEAT_OK):**
+### 代码风格
+- **Python:** PEP 8，类型提示
+- **Vue 3:** Composition API，`<script setup>`
+- **命名：** 语义化，英文命名
 
-- Late night (23:00-08:00) unless urgent
-- Human is clearly busy
-- Nothing new since last check
-- You just checked &lt;30 minutes ago
+### 测试要求
+- 单元测试覆盖率 ≥80%
+- P0 案例必须 100% 通过
+- 回归测试自动化
 
-**Proactive work you can do without asking:**
+### 文档要求
+- 所有重要决策必须写入文件
+- 测试必须文档化
+- 错误必须记录并归档
 
-- Read and organize memory files
-- Check on projects (git status, etc.)
-- Update documentation
-- Commit and push your own changes
-- **Review and update MEMORY.md** (see below)
+---
 
-### 🔄 Memory Maintenance (During Heartbeats)
+## 🛡️ 安全协议
 
-Periodically (every few days), use a heartbeat to:
+### 高危操作（必须 DAVID 确认）
+- 生产环境配置修改
+- 数据库变更/删除
+- API Key/凭证管理
+- 外部消息发送
+- 文件删除（>10 个文件或重要文件）
+- Git 提交到主分支
+- 上传阿里云/生产部署
 
-1. Read through recent `memory/YYYY-MM-DD.md` files
-2. Identify significant events, lessons, or insights worth keeping long-term
-3. Update `MEMORY.md` with distilled learnings
-4. Remove outdated info from MEMORY.md that's no longer relevant
+### 确认格式
+```
+【高危操作，请确认】
 
-Think of it like a human reviewing their journal and updating their mental model. Daily files are raw notes; MEMORY.md is curated wisdom.
+**操作：** [具体操作]
+**影响范围：** [影响哪些系统/数据]
+**回滚方案：** [如何撤销]
+**确认请回复：** 确认执行
+```
 
-The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
+---
 
-## Make It Yours
+## 📚 学习资源
 
-This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+### Vibe Coding 教程
+- [21 天 Vibe Coding 实战打卡教程](/home/admin/Downloads/21 天 Vibe Coding 实战打卡教程：从零打造 AI 海龟汤游戏.docx)
+- 核心思维：产品思维 + AI 协作 + 迭代节奏
+
+### 项目文档
+- `docs/新大纲_V4.12.0.md` - 系统架构大纲
+- `MEMORY.md` - 长期记忆
+- `memory/YYYY-MM-DD.md` - 每日工作日志
+
+---
+
+## 💡 核心原则
+
+### 文本 > 大脑 📝
+- 所有重要决策必须写入文件
+- "心理笔记"无法在 session 重启后存活
+- 错误必须文档化，防止未来重复
+
+### 安全 > 完成
+- 临床系统优先保证输出安全
+- 不确定时降级到保守方案
+- 人工审核队列是必要的安全网
+
+### 自动化 > 手动
+- 关键测试必须自动化
+- 回归测试集成到 CI/CD
+- 手动测试无法保证每次都执行
+
+### 用户预期管理
+- 提前告知等待时间（5-10 秒）
+- 区分超时/其他错误
+- 像朋友聊天，不是写论文
+
+---
+
+**最后更新：** 2026-04-09  
+**版本：** V4.12.0
