@@ -1,102 +1,99 @@
-# 前端修复验证 - Vite 依赖重建
+# 前端功能测试 - MIME type 错误修复验证
 
-**创建时间：** 2026-04-09 13:10  
+**创建时间：** 2026-04-09 13:15  
 **优先级：** 🔴 **P0**  
-**派发对象：** trae（小智 - Dev-2）  
-**任务类型：** 代码检测
+**派发对象：** trae（小测 - Dev-4）  
+**任务类型：** 前端功能测试
 
 ---
 
 ## 📋 任务背景
 
-小美已完成 Vite 缓存修复，现在需要小智检测修复结果。
+小美已修复 Vite 缓存问题，小智检测通过。现在需要小测进行前端功能测试。
 
 ---
 
-## ✅ 小美修复摘要
+## ✅ 前置条件（小智检测通过）
 
-### 根因
-Vite 依赖预构建缓存损坏 - `metadata.json` 有记录但 `deps/` 目录缺少文件
+| 检测项 | 状态 | 说明 |
+|--------|------|------|
+| **Vite 缓存完整性** | ✅ 通过 | 8 个文件完整（axios.js、vue.js 等） |
+| **Vite 服务状态** | ✅ 通过 | 双进程运行，端口 5174 监听 |
+| **前端页面加载** | ✅ 通过 | HTML 响应正常 |
+| **main.js 导入** | ✅ 通过 | Vue/App/工具函数导入正确 |
+| **axios 导入** | ✅ 通过 | App.vue 导入 + Vite 缓存完整 |
 
-### 修复内容
-- 清理 Vite 缓存（`rm -rf node_modules/.vite/deps`）
-- 重启 Vite 服务（新端口 5174）
-- 缓存自动重建
-
-### 验证结果
-| 文件 | 状态 | 大小 |
-|------|------|------|
-| axios.js | ✅ 已重建 | 87KB |
-| chunk-SSYGV25P.js | ✅ 已重建 | 234B |
-| vue.js | ✅ 已重建 | 381KB |
-
-**前端服务：** `http://localhost:5174`
+**前端访问地址：** `http://localhost:5174`
 
 ---
 
-## 🔍 检测步骤（小智）
+## 🧪 测试步骤（小测）
 
-### 1. 验证 Vite 缓存完整性
-```bash
-cd /home/admin/.openclaw/workspace/behavior_recorder_service/frontend
-ls -la node_modules/.vite/deps/
+### 1. 打开前端页面
+```
+http://localhost:5174
 ```
 
-**预期输出：**
-- ✅ `axios.js` (约 87KB)
-- ✅ `chunk-SSYGV25P.js` (约 234B)
-- ✅ `vue.js` (约 381KB)
-- ✅ `_metadata.json`
-
-### 2. 验证 Vite 服务状态
-```bash
-lsof -i :5174 | grep LISTEN
+### 2. 检查浏览器控制台（F12 → Console）
+**应该看到：**
+```
+[vite] connecting...
+[vite] connected.
 ```
 
-**预期：** Vite 进程监听 5174 端口
-
-### 3. 验证前端页面加载
-```bash
-curl -s http://localhost:5174/ | grep "<title>"
+**不应该看到：**
+```
+❌ Loading module from "...axios.js" was blocked because of a disallowed MIME type
+❌ Loading failed for the module with source "...chunk-SSYGV25P.js"
+❌ NS_ERROR_CORRUPTED_CONTENT
 ```
 
-**预期：** `<title>行为观察助手 V5.0</title>`
+### 3. 测试消息发送
+1. 在输入框输入测试消息
+2. 点击发送
+3. 观察控制台日志
 
-### 4. 验证 main.js 导入
-```bash
-curl -s http://localhost:5174/main.js | grep -E "axios|vue" | head -5
+**预期日志：**
+```
+[App] sendMessage 开始
+[App] 发送请求前 { sessionId: ..., messagesCount: 1 }
+[App] 收到响应 { ... }
 ```
 
-**预期：** 包含 axios 和 vue 的导入语句
-
----
-
-## ✅ 检测标准
-
-- [ ] Vite 缓存目录完整（所有依赖文件存在）
-- [ ] Vite 服务运行正常（端口 5174 监听）
-- [ ] 前端页面可访问（HTML 正常返回）
-- [ ] main.js 导入正确（无 MIME type 错误）
+### 4. 验证要点
+- [ ] **无 MIME type 错误**
+- [ ] **无 CORS 错误**
+- [ ] **无 Network 错误**
+- [ ] **axios 调用成功**
+- [ ] **收到后端响应**
 
 ---
 
 ## 📝 输出要求
 
-检测完成后填写：
+测试完成后填写：
 
 ```markdown
-## 小智检测报告
+## 前端测试结果（小测）
+
+### 测试环境
+- 浏览器：[Chrome/Firefox/...]
+- 前端端口：5174
+- 后端端口：8001
 
 ### 验证结果
 | 检查项 | 状态 | 说明 |
 |--------|------|------|
-| Vite 缓存完整性 | ✅/❌ | [详情] |
-| Vite 服务状态 | ✅/❌ | [详情] |
-| 前端页面加载 | ✅/❌ | [详情] |
-| main.js 导入 | ✅/❌ | [详情] |
+| MIME type 错误 | ✅/❌ | [详情] |
+| CORS 错误 | ✅/❌ | [详情] |
+| Network 错误 | ✅/❌ | [详情] |
+| 消息发送 | ✅/❌ | [详情] |
 
-### 检测结论
-[通过 → 进入小测测试 / 需要修复 → 列出问题]
+### 控制台日志
+[粘贴关键日志]
+
+### 测试结论
+[通过 / 需要修复]
 ```
 
 ---
@@ -106,8 +103,34 @@ curl -s http://localhost:5174/main.js | grep -E "axios|vue" | head -5
 - **架构师：** 战舰 🛳️（全局统筹）
 - **产品经理：** DAVID（最终判定）
 - **前端修复：** 小美（Dev-1）← 已完成
-- **代码检测：** 小智（Dev-2）← 当前任务
+- **代码检测：** 小智（Dev-2）← 已完成
+- **功能测试：** 小测（Dev-4）← 当前任务
 
 ---
 
-**状态：** ⏳ 等待小智检测
+**状态：** ✅ 小测测试完成（P0 通过）
+
+---
+
+## ✅ 小测测试结果（P0 前端功能测试）
+
+### 测试结果
+| 检查项 | 状态 | 说明 |
+|--------|------|------|
+| 前端服务 | ✅ 通过 | HTTP 200，页面正常加载 |
+| 后端服务 | ✅ 通过 | HTTP 200，健康检查通过 |
+| MIME type 错误 | ✅ 通过 | JS 文件返回正确的 `application/javascript` |
+| CORS 错误 | ✅ 通过 | API 调用成功，无跨域限制 |
+| Network 错误 | ✅ 通过 | 所有资源加载正常 |
+| 消息发送 | ✅ 通过 | API 正常响应，对话逻辑正确 |
+
+**总计：6/6 通过（100%）**
+
+### 验证结论
+✅ **P0 通过** - MIME type 错误已修复，前端功能正常
+
+**完整报告：** `behavior_recorder_service/docs/P0_前端功能测试报告_MIME_type 修复验证.md`
+
+---
+
+**下一步：** 战舰提交 Git → DAVID 判定
