@@ -94,9 +94,13 @@ if __name__ == "__main__":
     import uvicorn
 
     config = get_config()
+    
+    # V4.11.1 性能优化：多 worker 配置
     uvicorn.run(
         "main:app",
         host=config.server_host,
         port=config.server_port,
-        reload=config.debug,
+        workers=4,  # 4 个 worker 进程，提升并发能力
+        reload=False,  # 生产环境关闭 reload
+        access_log=True,
     )
