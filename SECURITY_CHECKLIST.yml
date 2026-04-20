@@ -1,0 +1,182 @@
+# SECURITY_CHECKLIST.yml - 安全检查清单
+# 版本：V6.0.2 | 创建时间：2026-04-20
+
+version: 1.0
+description: 行为观察助手安全检查清单（OWASP Top 10 核心风险）
+
+checks:
+  # ========== 高危风险（Critical） ==========
+  
+  - id: no-hardcoded-api-keys
+    description: 禁止硬编码 API 密钥
+    pattern: "(?i)(api[_-]?key|apikey|api[_-]?secret)\\s*=\\s*['\"][^'\"]{8,}['\"]"
+    severity: critical
+    files: ["*.py", "*.js", "*.ts", "*.vue"]
+    message: "API 密钥应使用环境变量，不要硬编码在代码中"
+    fix: "使用 os.environ.get('API_KEY') 或 process.env.API_KEY"
+  
+  - id: no-hardcoded-passwords
+    description: 禁止硬编码密码
+    pattern: "(?i)(password|passwd|pwd)\\s*=\\s*['\"][^'\"]+['\"]"
+    severity: critical
+    files: ["*.py", "*.js", "*.ts", "*.vue"]
+    message: "密码应使用环境变量或密钥管理服务"
+    fix: "使用环境变量或密钥管理服务"
+  
+  - id: no-sql-injection
+    description: 禁止 SQL 拼接（防止 SQL 注入）
+    pattern: "(?i)(execute|cursor\\.execute|query)\\s*\\(\\s*['\"].*%s|f['\"].*\\{.*\\}.*['\"]"
+    severity: critical
+    files: ["*.py", "*.js", "*.ts"]
+    message: "使用参数化查询，不要拼接 SQL 字符串"
+    fix: "使用 cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,))"
+  
+  # ========== 高风险（High） ==========
+  
+  - id: no-eval-usage
+    description: 禁止使用 eval()
+    pattern: "\\beval\\s*\\("
+    severity: high
+    files: ["*.py", "*.js", "*.ts"]
+    message: "eval() 可能执行恶意代码"
+    fix: "使用 ast.literal_eval() 或 JSON.parse()"
+  
+  - id: no-exec-usage
+    description: 禁止使用 exec()
+    pattern: "\\bexec\\s*\\("
+    severity: high
+    files: ["*.py", "*.js", "*.ts"]
+    message: "exec() 可能执行恶意代码"
+    fix: "重构代码避免动态执行"
+  
+  - id: no-xss-innerhtml
+    description: 禁止直接使用 innerHTML（防止 XSS）
+    pattern: "\\.innerHTML\\s*="
+    severity: high
+    files: ["*.js", "*.ts", "*.vue"]
+    message: "innerHTML 可能导致 XSS 攻击"
+    fix: "使用 textContent 或 Vue 的 {{ }} 插值"
+  
+  - id: no-dangerous-v-html
+    description: 禁止使用 v-html（Vue XSS 风险）
+    pattern: "v-html\\s*="
+    severity: high
+    files: ["*.vue"]
+    message: "v-html 可能渲染恶意脚本"
+    fix: "使用纯文本插值或 sanitize 用户输入"
+  
+  - id: no-console-log-production
+    description: 禁止在生产代码中使用 console.log
+    pattern: "console\\.(log|debug|info)\\s*\\("
+    severity: high
+    files: ["*.js", "*.ts", "*.vue"]
+    message: "console.log 可能泄露敏感信息"
+    fix: "使用日志库或在构建时移除"
+  
+  # ========== 中风险（Medium） ==========
+  
+  - id: no-debugger-statements
+    description: 禁止 debugger 语句
+    pattern: "\\bdebugger\\b"
+    severity: medium
+    files: ["*.js", "*.ts", "*.vue"]
+    message: "debugger 语句会暂停生产环境代码执行"
+    fix: "移除所有 debugger 语句"
+  
+  - id: no-todo-fixme
+    description: 禁止 TODO/FIXME 注释（技术债务）
+    pattern: "(?i)#?\\s*(TODO|FIXME|XXX|HACK)\\b"
+    severity: medium
+    files: ["*.py", "*.js", "*.ts", "*.vue"]
+    message: "TODO/FIXME 注释表示未完成的工作"
+    fix: "完成或移除这些注释"
+  
+  - id: no-empty-except
+    description: 禁止空 except 块（Python）
+    pattern: "except\\s*:\\s*\\n\\s*\\n"
+    severity: medium
+    files: ["*.py"]
+    message: "空 except 块会吞掉异常，难以调试"
+    fix: "至少记录异常或重新抛出"
+  
+  - id: no-broad-except
+    description: 避免过宽的异常捕获
+    pattern: "except\\s+(?:Exception|BaseException)\\s*:"
+    severity: medium
+    files: ["*.py"]
+    message: "捕获所有异常可能掩盖问题"
+    fix: "捕获具体的异常类型"
+  
+  - id: no-weak-crypto
+    description: 禁止使用弱加密算法
+    pattern: "(?i)(md5|sha1)\\s*\\("
+    severity: medium
+    files: ["*.py", "*.js", "*.ts"]
+    message: "MD5/SHA1 已不安全"
+    fix: "使用 SHA-256 或更强的算法"
+  
+  # ========== 低风险（Low） ==========
+  
+  - id: no-print-statements
+    description: 避免 print 语句（生产代码）
+    pattern: "\\bprint\\s*\\("
+    severity: low
+    files: ["*.py"]
+    message: "print 语句应替换为日志"
+    fix: "使用 logging 模块"
+  
+  - id: no-magic-numbers
+    description: 避免魔术数字
+    pattern: "if\\s+\\w+\\s*[<>=]+\\s*\\d{2,}"
+    severity: low
+    files: ["*.py", "*.js", "*.ts"]
+    message: "魔术数字应定义为常量"
+    fix: "定义为有意义的常量名"
+  
+  - id: no-long-functions
+    description: 避免过长函数（>50 行）
+    pattern: "def\\s+\\w+\\s*\\([^)]*\\)\\s*:"
+    severity: low
+    files: ["*.py"]
+    message: "过长函数难以维护"
+    fix: "拆分为多个小函数"
+  
+  - id: no-deep-nesting
+    description: 避免过深嵌套（>4 层）
+    pattern: "if\\s+.*:\\s*\\n\\s*if\\s+.*:\\s*\\n\\s*if\\s+.*:\\s*\\n\\s*if\\s+.*:\\s*\\n\\s*if\\s+"
+    severity: low
+    files: ["*.py", "*.js", "*.ts"]
+    message: "过深嵌套降低可读性"
+    fix: "使用提前返回或拆分函数"
+
+# 扫描配置
+scan_config:
+  # 排除目录
+  exclude_dirs:
+    - node_modules
+    - __pycache__
+    - .git
+    - dist
+    - build
+    - venv
+    - .venv
+    - tests
+  
+  # 最大文件数限制
+  max_files: 500
+  
+  # 超时时间（秒）
+  timeout_seconds: 30
+  
+  # 报告格式
+  report_formats:
+    - human
+    - json
+    - sarif
+
+# 告警阈值
+alert_thresholds:
+  critical: 0  # 0 个容忍
+  high: 0      # 0 个容忍
+  medium: 5    # 最多 5 个
+  low: 10      # 最多 10 个
