@@ -1,11 +1,11 @@
 {
-  "version": "V4.7.2-rc1",
+  "version": "V4.7.3",
   "name": "意图识别关键词映射表",
   "description": "临床假设与意图关键词的映射关系",
-  "last_updated": "2026-03-14",
+  "last_updated": "2026-04-24",
   "bcba_reviewed": true,
-  "review_notes": "BCBA 审核通过 + 评估量表整合 + 词库优化 (精简 3 词)",
-  "total_keywords": 263
+  "review_notes": "V6.4.1 新增：视觉辨别类别（认知错误型行为）",
+  "total_keywords": 283,
   
   "intent_mapping": {
     "H_AUTOMATIC": [
@@ -98,6 +98,13 @@
     "H_VISUAL_PROCESSING": [
       "视觉提示无效", "看不懂图片", "视觉理解", "视觉信息", "看图困难",
       "视觉搜索", "找不到", "视觉辨别", "分不清", "视觉空间"
+    ],
+    
+    "H_VISUAL_DISCRIMINATION": [
+      "看错", "搞反", "搞混", "弄错", "弄反", "弄混",
+      "看反", "说反", "听反", "认错", "混淆", "分不清",
+      "颠倒", "左右不分", "方向搞反", "方向感差", "镜像错误",
+      "6 和 9 看错", "b d 分不清", "p q 分不清"
     ],
     
     "H_AUDITORY_PROCESSING": [
