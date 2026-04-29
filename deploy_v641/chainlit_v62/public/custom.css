@@ -1,0 +1,29 @@
+/* Chainlit 自定义样式 */
+/* 隐藏右上角"说明"按钮 */
+a[aria-label="Read the documentation"],
+button[aria-label="Read the documentation"],
+[data-testid="read-doc-button"],
+.header-doc-link {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* 隐藏主题切换按钮（太阳/月亮图标） */
+button[aria-label="Toggle dark mode"],
+button[aria-label="Toggle light mode"],
+.theme-toggle-btn,
+[role="button"][aria-label*="theme"],
+[role="button"][aria-label*="Theme"],
+button[data-testid="theme-toggle"],
+[data-testid*="theme"],
+button[aria-label*="dark"],
+button[aria-label*="light"],
+.theme-switch,
+.mode-toggle {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}

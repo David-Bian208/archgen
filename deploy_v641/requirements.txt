@@ -1,0 +1,22 @@
+# Behavior Recorder Service 依赖
+# 后端依赖
+
+# Web 框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# HTTP 客户端
+httpx>=0.25.0
+
+# 配置
+pyyaml>=6.0
+
+# 开发/测试
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# 工具
+python-dotenv>=1.0.0
+
+# 文件操作（starlette 依赖）
+aiofiles>=23.0.0
