@@ -181,6 +181,16 @@
             "supporting": ["知道怎么做但动作慢", "需要示范才能模仿", "动作不协调"],
             "contradicting": ["动作流畅无需示范"]
           }
+        },
+        {
+          "id": "H_VISUAL_DISCRIMINATION",
+          "name": "视觉辨别挑战",
+          "description": "在方向辨别、镜像识别或空间关系理解上存在困难",
+          "prior_probability": 0.25,
+          "evidence_rules": {
+            "supporting": ["看错", "搞反", "方向搞反", "左右不分", "6和9看错", "b和d分不清", "p和q分不清", "镜像错误", "说反", "听反", "混淆"],
+            "contradicting": ["视觉辨别任务表现正常", "无方向混淆表现"]
+          }
         }
       ]
     }
