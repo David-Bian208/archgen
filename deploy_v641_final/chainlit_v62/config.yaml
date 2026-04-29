@@ -1,0 +1,13 @@
+features:
+  multi_modal: false
+
+project:
+  id: behavior_observer_v62
+
+ui:
+  default_theme: light
+  name: 行为观察助手
+
+# Disable avatar loading for authors with Chinese characters
+# This prevents 400 errors on /avatars/ endpoints
+# author_avatar_url is disabled by default, no action needed
