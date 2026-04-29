@@ -1,8 +1,8 @@
 #!/bin/bash
 # 行为观察助手 Chainlit 服务启动脚本
-# 固定端口：8006
+# 固定端口：8002
 
-PORT=8006
+PORT=8002
 PROJECT_DIR="/home/admin/.openclaw/workspace/behavior_recorder_service/chainlit_v62"
 
 echo "🔍 检查端口 $PORT 是否被占用..."

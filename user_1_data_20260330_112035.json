@@ -1,0 +1,29 @@
+{
+  "user_id": 1,
+  "children": [
+    {
+      "id": 2,
+      "user_id": 1,
+      "name": "测试儿童",
+      "gender": "男",
+      "birth_date": "2021-01-01",
+      "age": 5,
+      "notes": "测试备注",
+      "created_at": "2026-03-30 03:20:34",
+      "updated_at": "2026-03-30 03:20:34"
+    },
+    {
+      "id": 1,
+      "user_id": 1,
+      "name": "测试儿童",
+      "gender": "男",
+      "birth_date": "2021-01-01",
+      "age": 5,
+      "notes": "测试备注",
+      "created_at": "2026-03-30 03:20:33",
+      "updated_at": "2026-03-30 03:20:33"
+    }
+  ],
+  "sessions": [],
+  "exported_at": "2026-03-30T11:20:35.184911"
+}

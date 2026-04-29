@@ -1,0 +1,18 @@
+id: skill_api_contract
+name: API 契约生成
+description: 根据路由/参数生成 OpenAPI 3.0 标准 JSON/YAML
+triggers: ["接口", "API", "契约", "OpenAPI", "Swagger", "路由", "endpoint", "api"]
+parameters:
+  type: object
+  properties:
+    route:
+      type: string
+      description: "HTTP 方法 + 路径，如 GET /users/{id}"
+    format:
+      type: string
+      enum: [json, yaml]
+      default: json
+  required: [route]
+examples:
+  - input: "生成 POST /login 的接口文档"
+    output: "call skill_api_contract(route='POST /login', format='json')"

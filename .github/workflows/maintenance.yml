@@ -1,0 +1,76 @@
+name: 🛡️ AI Stack Maintenance Patrol
+
+# 定时巡检工作流
+# 功能：
+# 1. 每日自动巡检（北京时间 10:00）
+# 2. 检查技能健康状态
+# 3. 清理过期缓存
+# 4. 生成 ROI 看板报告
+
+on:
+  schedule:
+    # 每日 UTC 02:00（北京时间 10:00）
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}  # 支持手动触发
+
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. 检出代码
+      - uses: actions/checkout@v4
+      
+      # 2. 设置 Python 环境
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      
+      # 3. 安装依赖
+      - name: 📦 Install Dependencies
+        run: |
+          pip install pyyaml requests
+      
+      # 4. 技能健康巡检
+      - name: 🛡️ Skill Health Patrol
+        run: |
+          python3 .claw/skill_guard.py
+      
+      # 5. 清理过期缓存
+      - name: 🧹 Clean Stale Cache
+        run: |
+          python3 -c "from .claw.runtime_optimizer import clean_stale_cache; count = clean_stale_cache(60); print(f'清理 {count} 个过期缓存')"
+      
+      # 6. 生成 ROI 看板（如果存在）
+      - name: 📊 Generate ROI Dashboard
+        run: |
+          if [ -f "metrics_dashboard.py" ]; then
+            python3 metrics_dashboard.py || true
+          fi
+      
+      # 7. 上传巡检报告
+      - name: 📤 Upload Patrol Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: patrol-report
+          path: |
+            .claw/skill_alerts.md
+            .claw/generated/skill_bypass.md
+          retention-days: 30
+      
+      # 8. 失败时发送通知（如果配置了 Webhook）
+      - name: 🚨 Notify Failure
+        if: failure()
+        env:
+          NOTIFY_WEBHOOK: ${{ secrets.NOTIFY_WEBHOOK }}
+          NOTIFY_PLATFORM: ${{ secrets.NOTIFY_PLATFORM || 'dingtalk' }}
+        run: |
+          if [ -n "$NOTIFY_WEBHOOK" ]; then
+            pip install requests
+            python3 -c "
+import sys
+sys.path.append('.')
+from .claw.plugins.notify import send_alert
+send_alert('❌ 定时巡检失败', 'GitHub Actions 定时巡检未通过，请检查日志。')
+"
+          fi

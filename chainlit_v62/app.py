@@ -34,8 +34,7 @@ llm_client = OpenAIClient(
     base_url=config.llm_base_url,
     model=config.llm_model
 )
-network_path = os.path.join(os.path.dirname(__file__), '..', 'app', 'knowledge', 'hypothesis_network.json')
-engine = ClinicalReasoningEngine(llm_client, network_path)
+engine = ClinicalReasoningEngine(llm_client)
 
 
 @cl.on_chat_start

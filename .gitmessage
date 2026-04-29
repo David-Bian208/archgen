@@ -1,0 +1,40 @@
+## 变更说明
+[简要描述本次变更的内容，例如：修复 FOLLOW_UP vs ASK_FIELD 类型不匹配问题]
+
+## 问题描述
+[描述遇到的问题，例如：追问流程失效，用户输入不完整信息时返回通用追问而非具体字段追问]
+
+## 根本原因
+[Bug 的根本原因，例如：_decide_next_action_with_reasoning() 返回 {"type": "FOLLOW_UP"}，但 process() 检查的是 "ASK_FIELD"]
+
+## 修复方案
+[具体修复方案，例如：将返回值改为 {"type": "ASK_FIELD", "field_id": next_field}]
+
+## 测试验证
+[如何验证修复有效，例如：运行 test_e2e_flow.py，测试短消息→追问路径]
+
+## 经验教训
+[可提炼为知识库的内容，例如：
+- 返回值类型必须与消费端匹配
+- 重构时必须检查所有调用点
+- 添加类型检查测试防止回归
+]
+
+## 关联知识库
+[关联到现有知识库条目，例如：
+- memory/lessons/小治.md（FOLLOW_UP vs ASK_FIELD 类型不匹配）
+- docs/CODE_REVIEW_CHECKLIST.md（返回值匹配检查）
+]
+
+## 影响范围
+- [ ] 后端 API
+- [ ] 前端组件
+- [ ] 测试用例
+- [ ] 文档更新
+
+##  Checklist
+- [ ] 代码逻辑正确
+- [ ] 测试覆盖充分（新增/更新测试用例）
+- [ ] 遵循最佳实践（参考 docs/）
+- [ ] 经验已记录到 memory/lessons/
+- [ ] 相关文档已更新

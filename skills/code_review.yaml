@@ -1,0 +1,18 @@
+id: skill_code_review
+name: 代码安全与规范审查
+description: 静态分析代码，输出结构化安全/规范报告
+triggers: ["审查", "安全", "lint", "漏洞", "规范", "review", "code review"]
+parameters:
+  type: object
+  properties:
+    file_path:
+      type: string
+      description: "目标文件相对路径"
+    level:
+      type: string
+      enum: [strict, standard, loose]
+      default: standard
+  required: [file_path]
+examples:
+  - input: "查一下 auth.py 有没有安全问题"
+    output: "call skill_code_review(file_path='auth.py', level='strict')"

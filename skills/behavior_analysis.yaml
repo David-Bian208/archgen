@@ -1,0 +1,26 @@
+id: skill_behavior_analysis
+name: 行为观察分析
+description: 基于 ABC 理论的行为观察与评估（自闭症儿童）
+triggers: ["行为", "观察", "分析", "评估", "自闭症", "鉴赏", "推荐", "干预"]
+parameters:
+  type: object
+  properties:
+    abc_data:
+      type: object
+      description: "ABC 数据（antecedent/behavior/consequence）"
+      properties:
+        antecedent: { type: string, description: "前因/情境" }
+        behavior: { type: string, description: "行为" }
+        consequence: { type: string, description: "后果/回应" }
+    child_age:
+      type: integer
+      description: "孩子年龄"
+    analysis_type:
+      type: string
+      enum: [assessment, intervention, recommendation]
+      default: assessment
+      description: "分析类型（评估/干预/推荐）"
+  required: [abc_data, child_age]
+examples:
+  - input: "基于 ABC 数据做行为分析，孩子 5 岁"
+    output: "call skill_behavior_analysis(abc_data={...}, child_age=5, analysis_type='assessment')"

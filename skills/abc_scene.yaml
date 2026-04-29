@@ -1,0 +1,17 @@
+id: skill_abc_scene
+name: ABC 场景提取
+description: 从家长自然语言描述中提取结构化 ABC 信息（前因/行为/后果/孩子年龄）
+triggers: ["ABC", "场景", "前因", "行为", "后果", "孩子", "年龄", "提取", "结构化"]
+parameters:
+  type: object
+  properties:
+    user_input:
+      type: string
+      description: "家长的自然语言描述（如'老师好，OK 玩薯片盒子游戏...'）"
+    child_age:
+      type: integer
+      description: "孩子年龄（可选，如 5）"
+  required: [user_input]
+examples:
+  - input: "老师好，OK 玩薯片盒子游戏，问她妈妈会看到什么，她说糖"
+    output: "call skill_abc_scene(user_input='老师好，OK 玩薯片盒子游戏...', child_age=5)"

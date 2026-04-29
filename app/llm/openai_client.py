@@ -38,10 +38,13 @@ class OpenAIClient(LLMClient):
         self.model = model
         self.timeout = timeout
 
-        # 确保 base_url 以 /chat/completions 结尾或我们手动添加
+        # 确保 base_url 以 /chat/completions 结尾
         if not self.base_url.endswith("/chat/completions"):
-            # 移除可能存在的末尾斜杠后添加
-            self.base_url = self.base_url.rstrip("/") + "/v1/chat/completions"
+            # 检查是否已包含 /v1，避免重复
+            if self.base_url.endswith("v1"):
+                self.base_url = self.base_url + "/chat/completions"
+            else:
+                self.base_url = self.base_url + "/v1/chat/completions"
 
         logger.info(
             f"OpenAIClient 初始化：model={model}, base_url={self.base_url}"

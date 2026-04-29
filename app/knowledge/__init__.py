@@ -120,6 +120,7 @@ class BehaviorKnowledgeBase:
 
 # 全局知识库实例
 _knowledge_base: Optional[BehaviorKnowledgeBase] = None
+_capability_mapping_cache: Optional[dict] = None
 
 
 def get_knowledge_base() -> BehaviorKnowledgeBase:
@@ -128,3 +129,47 @@ def get_knowledge_base() -> BehaviorKnowledgeBase:
     if _knowledge_base is None:
         _knowledge_base = BehaviorKnowledgeBase()
     return _knowledge_base
+
+
+def get_function_to_capability_mapping() -> dict:
+    """获取功能→能力映射表"""
+    global _capability_mapping_cache
+    
+    if _capability_mapping_cache is None:
+        mapping_path = Path(__file__).parent / "function_to_capability_mapping.json"
+        
+        if not mapping_path.exists():
+            logger.warning(f"映射表文件不存在：{mapping_path}")
+            return {"mapping_rules": []}
+        
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                _capability_mapping_cache = json.load(f)
+            logger.info(f"✅ 功能→能力映射表加载完成：{len(_capability_mapping_cache.get('mapping_rules', []))} 条规则")
+        except Exception as e:
+            logger.error(f"映射表加载失败：{e}")
+            return {"mapping_rules": []}
+    
+    return _capability_mapping_cache
+
+
+def map_function_to_capabilities(function_hypothesis: str) -> list[dict]:
+    """
+    将功能假设映射到能力领域
+    
+    Args:
+        function_hypothesis: 功能假设 ID（如 "H_ESCAPE_DIFFICULTY"）
+    
+    Returns:
+        能力领域列表（按置信度排序）
+    """
+    mapping = get_function_to_capability_mapping()
+    
+    for rule in mapping.get("mapping_rules", []):
+        if rule.get("function_hypothesis") == function_hypothesis:
+            capability_areas = rule.get("capability_areas", [])
+            # 按置信度排序
+            return sorted(capability_areas, key=lambda x: x.get("confidence", 0), reverse=True)
+    
+    logger.warning(f"未找到功能假设 {function_hypothesis} 的映射规则")
+    return []

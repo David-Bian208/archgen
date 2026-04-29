@@ -1,32 +1,67 @@
 """
-干预规划器 V4.3 Hotfix - 功能判断驱动的个性化干预
+干预规划器 V4.5.21 P0 Fix + V4.11 规则注册表集成
 核心修复：根据 functional_judgment 选择完全不同的干预模板
 
 V4.3 核心原则：
 - 提示依赖 → 建立视觉/动作锚点，将外部提示内化
 - 逃避难度 → 任务分解，降低起点，高频成功体验
 - 严禁混用模板！
+
+V4.11 新增：
+- 专业规则注册表集成（可测试、可审计）
+- 规则匹配辅助评估
 """
 
 import logging
 import re
 import html
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from app.knowledge import get_knowledge_base
+from app.knowledge.clinical_rules_registry import get_clinical_rules_registry, RuleMatch
 
 logger = logging.getLogger(__name__)
 
 
 class InterventionPlanner:
-    """干预规划器 V4.5.21 P0 Fix - 安全校验 + 强制映射 + 输出前校验"""
+    """干预规划器 V4.11 - 规则注册表集成版"""
 
     def __init__(self):
         """初始化规划器"""
         self.knowledge_base = get_knowledge_base()
-        logger.info("InterventionPlanner V4.5.21 P0 Fix 初始化完成")
+        self.rules_registry = get_clinical_rules_registry()
+        logger.info("InterventionPlanner V4.11 初始化完成（规则注册表已加载）")
     
     # ========== V4.5.21 P0 核心修复 ==========
+    
+    def _analyze_with_rules(self, session_context: Optional[dict] = None) -> List[RuleMatch]:
+        """
+        V4.11 新增：使用专业规则注册表进行分析
+        
+        将行为描述和情境输入规则注册表，获取匹配的规则
+        
+        Args:
+            session_context: 会话上下文
+            
+        Returns:
+            List[RuleMatch]: 匹配的规则列表，按置信度排序
+        """
+        if not session_context:
+            return []
+        
+        # 构建待分析文本
+        child_behavior = session_context.get("child_behavior", "")
+        context = session_context.get("context", "")
+        antecedent = session_context.get("antecedent", "")
+        consequence = session_context.get("consequence", "")
+        
+        analysis_text = f"{antecedent} {child_behavior} {context} {consequence}"
+        
+        # 使用规则注册表评估
+        matches = self.rules_registry.evaluate(analysis_text)
+        
+        logger.info(f"规则分析：{len(matches)} 条匹配 | 文本：{analysis_text[:80]}...")
+        return matches
     
     def _check_safety_priority(self, session_context: Optional[dict] = None) -> bool:
         """
@@ -102,6 +137,9 @@ class InterventionPlanner:
             "phase_name": f"针对{activity}的'安全优先'计划",
             "goal": f"确保孩子安全的前提下处理行为问题",
             "core_principle": "安全永远是第一原则。任何行为干预都不能以牺牲安全为代价。",
+            "strategy_details": f"1. **立即消除危险**：检查并移除环境中的危险因素（如锁好窗户、收好利器、安装防护栏）。\n2. **安全前提下最小化反应**：在确保环境安全后，对问题行为保持冷静，避免过度情绪反应强化行为。\n3. **教授安全替代行为**：教孩子用安全的方式满足相同需求（如用蹦床替代爬高）。\n4. **持续监控**：定期检查安全状况，确保防护措施有效。",
+            "success_criteria": f"在 1 周内，危险行为频率下降 50% 以上，且未发生安全事故。",
+            "parent_observation_task": f"记录每天的危险行为次数和是否有安全事故（应该为 0）。重点是确保'零事故'。",
             "four_step_plan": {
                 "core_idea": f"既然行为涉及安全风险，那么我们的首要任务是确保环境安全，然后再处理行为功能。绝不能简单'忽视'危险行为。",
                 
@@ -121,10 +159,10 @@ class InterventionPlanner:
         """
         V4.5.21 P0-3: 输出前校验
         
-        校验诊断结论与干预策略是否匹配，防止"开错药"
+        校验评估结论与干预策略是否匹配，防止"开错药"
         
         Args:
-            diagnosis: 诊断/功能判断文本
+            diagnosis: 评估/功能判断文本
             plan: 生成的干预计划字典
         
         Returns:
@@ -133,7 +171,7 @@ class InterventionPlanner:
         if not diagnosis or not plan:
             return True  # 无法校验时放过
         
-        # 定义不允许的诊断 - 干预组合（"开错药"模式）
+        # 定义不允许的评估 - 干预组合（"开错药"模式）
         forbidden_combinations = [
             # 社交技能不足 × 行为管理模板
             ("社交技能", "忽视"),
@@ -173,13 +211,13 @@ class InterventionPlanner:
                 # V4.5.21 P0-3 修复日志
                 logger.warning(
                     f"⚠️ P0-3 校验失败，已降级到 fallback 计划 | "
-                    f"诊断：{diagnosis[:80]} | "
+                    f"评估：{diagnosis[:80]} | "
                     f"禁止组合：'{diagnosis_keyword}' × '{forbidden_word}' | "
                     f"建议人工审核"
                 )
                 return False
         
-        logger.debug(f"P0-3 校验通过：诊断'{diagnosis[:50]}'与干预匹配")
+        logger.debug(f"P0-3 校验通过：评估'{diagnosis[:50]}'与干预匹配")
         return True
     
     def _generate_fallback_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
@@ -195,7 +233,7 @@ class InterventionPlanner:
         # V4.5.21 P0-3 修复日志
         logger.warning(
             f"⚠️ P0-3 使用 fallback 计划 | "
-            f"原因：诊断 - 干预校验失败或无匹配模板 | "
+            f"原因：评估 - 干预校验失败或无匹配模板 | "
             f"建议人工审核此案例"
         )
         
@@ -203,6 +241,10 @@ class InterventionPlanner:
             "phase_name": f"针对{activity}的'观察 + 支持'计划",
             "goal": f"通过观察和适度支持，帮助孩子更好地参与{activity}",
             "core_principle": "先观察理解，再提供适度支持。",
+            "strategy_details": f"1) 记录行为发生的时间、情境和后果；2) 提供适度的环境调整；3) 观察孩子的反应；4) 根据观察结果调整策略。",
+            "strategy_details_gamified": f"让我们和宝贝一起玩一个'行为侦探'游戏吧！\n\n1. **侦探任务**：记录行为发生的时间、情境和后果\n2. **环境调整**：像整理房间一样调整环境\n3. **观察反应**：看看孩子有什么变化\n4. **灵活调整**：根据观察结果调整策略\n\n记住，每一次观察都是一次有趣的发现！",
+            "success_criteria": f"在 1 周内，通过观察记录找到行为模式，为后续精准干预提供依据。",
+            "parent_observation_task": f"记录 ABC：前因（Antecedent）、行为（Behavior）、后果（Consequence）。每天花 2 分钟记录即可。",
             "four_step_plan": {
                 "core_idea": f"既然我们还在了解孩子的需求，那么我们的核心思路是：先观察记录行为模式，同时提供温和的支持，逐步找到最适合孩子的干预方式。",
                 "our_plan": f"1) 记录行为发生的时间、情境和后果；2) 提供适度的环境调整；3) 观察孩子的反应；4) 根据观察结果调整策略。",
@@ -230,6 +272,10 @@ class InterventionPlanner:
             "phase_name": f"针对{activity}的干预方向（仅供参考）",
             "goal": f"帮助孩子逐步接受小的变化，提升灵活性",
             "core_principle": "坚持同一性反映了孩子对可预测性的需求。我们通过预告增加可预测性，通过渐进变化培养灵活性。",
+            "strategy_details": f"1. **预告**：变化发生前 5-10 分钟告知孩子\n2. **微小变化**：从极小的变化开始（如换一支笔的颜色）\n3. **选择权**：在可接受范围内给孩子选择\n4. **积极反馈**：当孩子接受变化时给予具体表扬",
+            "strategy_details_gamified": f"让我们和孩子一起玩'变化大冒险'游戏吧！\n\n1. **预告魔法**：提前 5-10 分钟用计时器或提示卡告诉孩子'马上要变化啦'\n2. **微小挑战**：从超级小的变化开始（如换一支笔的颜色），像闯关一样\n3. **选择权力**：给孩子两个选择'你想先换颜色还是先换位置？'\n4. **成功庆祝**：孩子接受变化时，热烈庆祝'你做到了！'\n\n记住，每一次小变化都是一次大冒险！",
+            "success_criteria": f"在 1 周内，孩子能接受 3 次以上小的变化（如换路线、换餐具）而不崩溃。",
+            "parent_observation_task": f"记录孩子接受了哪种小变化，以及反应如何（平静/轻微不适/崩溃）。重点是记录'成功接受'的时刻。",
             "four_step_plan": {
                 "core_idea": f"针对'坚持固定模式'这一困难，干预核心是：通过提前预告增加可预测性，通过微小的、可控的变化逐步培养灵活性。",
                 
@@ -244,6 +290,126 @@ class InterventionPlanner:
             # V4.10.2 简化：通用衔接说明
             "scene_bridge": f"针对'{activity}'中孩子的困难，干预重点通常是'认知灵活性'能力的培养。"
         }
+    
+    # ========== V6.0 Harness Engineering 新增方法 ==========
+    
+    def _extract_capability_keywords(self, capability_gap: str) -> list[str]:
+        """
+        V6.0 Harness Engineering：从能力缺口描述中提取关键词
+        
+        Args:
+            capability_gap: 能力缺口描述
+            
+        Returns:
+            关键词列表
+        """
+        if not capability_gap:
+            return []
+        
+        # 常见能力关键词
+        capability_keywords = {
+            "观点采择": ["观点采择", "换位思考", "视角转换", "心理理论"],
+            "工作记忆": ["工作记忆", "记不住", "忘记步骤", "多步骤"],
+            "认知灵活性": ["认知灵活性", "灵活性", "变化", "转换"],
+            "社交信号监测": ["社交信号", "监测", "观察反应", "眼神接触"],
+            "情绪识别": ["情绪识别", "表情", "面部表情", "情绪"],
+            "执行功能": ["执行功能", "计划", "组织", "抑制控制"],
+            "共同调控": ["共同调控", "同步", "节奏匹配", "互动"],
+            "沟通圈": ["沟通圈", "互动回合", "轮流", "对话"],
+        }
+        
+        keywords = []
+        for category, category_keywords in capability_keywords.items():
+            for kw in category_keywords:
+                if kw in capability_gap:
+                    keywords.append(kw)
+        
+        logger.info(f"提取能力关键词：{keywords}")
+        return keywords
+    
+    def _query_knowledge_base(self, capability_keywords: list[str], functional_judgment: str) -> Optional[Dict[str, Any]]:
+        """
+        V6.0 Harness Engineering：查询知识库获取标准化干预
+        
+        知识库匹配逻辑：
+        1. 根据能力关键词匹配干预类型
+        2. 根据功能判断调整干预重点
+        3. 返回标准化干预模板
+        
+        Args:
+            capability_keywords: 能力关键词列表
+            functional_judgment: 功能判断
+            
+        Returns:
+            标准化干预模板，未匹配则返回 None
+        """
+        if not capability_keywords:
+            return None
+        
+        # 知识库干预模板（V6.0 新增）
+        knowledge_interventions = {
+            "观点采择": {
+                "goal": "帮助孩子学会从他人视角看问题",
+                "core_principle": "通过具体的视觉提示和角色扮演，让孩子体验'不同位置看到不同内容'",
+                "four_step_plan": {
+                    "core_idea": "观点采择能力是社交认知的核心。我们通过'视觉化'和'身体化'的练习，帮助孩子理解'你看到的≠我看到的'。",
+                    "our_plan": "**推荐练习：视角游戏**\n\n1. 薯片盒游戏：把薯片盒洗干净，在里面放糖果。让孩子站在一个位置，家长站在另一个位置，问'妈妈会看到什么？'\n2. 逐步升级：从简单物品（杯子）到复杂场景（图画书）\n3. 录像回放：录下孩子的表现，和孩子一起看，暂停问'这时候妈妈看到了什么？'\n4. 真实场景：在游乐场、幼儿园等自然情境中练习",
+                    "success_picture": "孩子能在换位思考任务中正确推断他人看到的内容，而不只是'我知道是糖'。",
+                    "first_step": "今天就可以开始：找一个透明盒子，放一个孩子熟悉的物品，和孩子玩'妈妈会看到什么'的游戏。"
+                },
+                "observation_tool": "记录孩子有几次能正确推断他人视角，以及在什么情境下成功的。重点是发现'成功时刻'的模式。"
+            },
+            "工作记忆": {
+                "goal": "帮助孩子记住多步骤任务的执行序列",
+                "core_principle": "将抽象的任务序列转化为具体的视觉提示",
+                "four_step_plan": {
+                    "core_idea": "工作记忆短板不是'不认真'，而是'记不住多步骤'。我们用视觉提示卡替代'口头提醒'，减少认知负荷。",
+                    "our_plan": "**推荐工具：视觉提示卡**\n\n1. 制作步骤卡：把任务分解为 3-5 个步骤，每个步骤画一张图\n2. 按顺序排列：用魔术贴或磁贴按顺序排列\n3. 执行时指卡：不口头提醒，只指下一张卡\n4. 逐步撤退：从全提示→部分提示→独立",
+                    "success_picture": "孩子能在视觉提示下独立完成多步骤任务，而不需要成人反复口头提醒。",
+                    "first_step": "选择一个孩子每天都会做的任务（如洗手、整理书包），制作 3-5 步的视觉提示卡。"
+                },
+                "observation_tool": "记录孩子在视觉提示下独立完成的步骤数，以及需要提示的次数。"
+            },
+            "认知灵活性": {
+                "goal": "帮助孩子逐步接受小的变化",
+                "core_principle": "通过预告增加可预测性，通过微小变化培养灵活性",
+                "four_step_plan": {
+                    "core_idea": "认知灵活性不是'不固执'，而是'能切换'。我们通过'预告 + 小变化'的组合，逐步提升孩子的适应能力。",
+                    "our_plan": "**推荐练习：规则变变变**\n\n1. 提前预告：变化前 5-10 分钟告知\n2. 微小变化：从极小的变化开始（换一支笔的颜色）\n3. 提供选择权：在可接受范围内给孩子选择\n4. 成功强化：接受变化时给予具体反馈",
+                    "success_picture": "孩子能接受小的变化而不崩溃，成功的标志是'能接受了'。",
+                    "first_step": "选择一个孩子能接受的小变化（如换一种颜色的杯子），提前 5 分钟预告，观察并记录反应。"
+                },
+                "observation_tool": "记录孩子接受了哪种小变化，以及反应如何（平静/轻微不适/崩溃）。"
+            },
+            "社交信号监测": {
+                "goal": "帮助孩子学会观察他人的社交信号",
+                "core_principle": "将抽象的'社交状态'转化为具体的'可监测信号'",
+                "four_step_plan": {
+                    "core_idea": "社交信号监测弱不是'不理人'，而是'读不懂信号'。我们用'慢动作回放'和'暂停提问'，帮助孩子学会监测。",
+                    "our_plan": "**推荐练习：社交信号侦探**\n\n1. 看动画片时暂停，问'他现在感觉如何？你怎么知道的？'\n2. 制作表情卡片，练习识别高兴/生气/难过/惊讶\n3. 真实场景：在游乐场观察其他小朋友的表情，猜测他们的感受\n4. 录像回放：录下互动场景，和孩子一起分析'这时候他是什么意思'",
+                    "success_picture": "孩子能在互动中主动观察对方的表情、眼神、肢体动作，并适当回应。",
+                    "first_step": "今晚看动画片时，尝试暂停 3 次，问孩子'他现在感觉如何？'"
+                },
+                "observation_tool": "记录孩子有几次主动观察对方反应，以及在什么情境下成功的。"
+            },
+        }
+        
+        # 匹配最相关的能力领域
+        best_match = None
+        best_score = 0
+        
+        for capability, intervention in knowledge_interventions.items():
+            score = sum(1 for kw in capability_keywords if kw in capability)
+            if score > best_score:
+                best_score = score
+                best_match = intervention
+        
+        if best_match and best_score > 0:
+            logger.info(f"知识库匹配成功：{best_match['goal'][:50]}... (匹配度：{best_score})")
+            return best_match
+        
+        logger.info(f"知识库未匹配，关键词：{capability_keywords}")
+        return None
     
     # ========== V4.5.21 P0 修复结束 ==========
     
@@ -330,6 +496,10 @@ class InterventionPlanner:
                 "phase_name": f"针对{activity}的干预方向（仅供参考）",
                 "goal": f"帮助孩子在对话/介绍时学会观察对方反应",
                 "core_principle": "将'说完话要看对方反应'转化为可练习的具体步骤",
+                "strategy_details": f"1. 家庭模拟对话场景，练习'说完→看脸→等反应'的完整链条\n2. 使用视觉提示卡，提醒孩子观察对方反应\n3. 在真实场景前给予简短提示",
+                "strategy_details_gamified": f"让我们和孩子一起玩'说完看脸'游戏吧！\n\n1. **家庭剧场**：模拟对话场景，练习'说完→看脸→等反应'\n2. **视觉提示卡**：制作'眼睛看'提示卡，说完后提醒孩子\n3. **真实挑战**：去真实场景前，简短提示'说完名字要做什么？'\n\n记住，每一次眼神接触都是进步！",
+                "success_criteria": f"在 1 周内，孩子能在对话/介绍后主动观察对方反应至少 3 次。",
+                "parent_observation_task": f"记录孩子有几次'说完后看了对方'，以及对方的反应。重点是发现孩子的进步模式。",
                 "four_step_plan": {
                     "core_idea": f"针对'介绍时忽略他人反应'这一困难，干预核心是：将抽象的社交状态（'对方是否在听'）转化为具体的、可练习的动作信号。",
                     
@@ -351,6 +521,10 @@ class InterventionPlanner:
                 "phase_name": f"针对{activity}的干预方向（仅供参考）",
                 "goal": f"帮助孩子逐步接受小的变化，提升灵活性",
                 "core_principle": "通过预告增加可预测性，通过微小变化培养灵活性",
+                "strategy_details": f"1. 变化发生前 5-10 分钟预告，使用视觉提示卡或计时器\n2. 从极小的变化开始（如换一支笔的颜色）\n3. 在可接受范围内给孩子选择权\n4. 当孩子接受变化时，给予具体的积极反馈",
+                "strategy_details_gamified": f"让我们和孩子一起玩'变化大冒险'游戏吧！\n\n1. **预告魔法**：提前 5-10 分钟用计时器告诉孩子'马上要变化啦'\n2. **微小挑战**：从超级小的变化开始（如换笔的颜色），像闯关一样\n3. **选择权力**：给孩子两个选择'你想先换颜色还是先换位置？'\n4. **成功庆祝**：孩子接受变化时，热烈庆祝'你做到了！'\n\n记住，每一次小变化都是一次大冒险！",
+                "success_criteria": f"在 1 周内，孩子能接受 3 次以上小的变化而不崩溃。",
+                "parent_observation_task": f"记录孩子接受了哪种小变化，以及反应如何（平静/轻微不适/崩溃）。",
                 "four_step_plan": {
                     "core_idea": f"针对'坚持固定模式'这一困难，干预核心是：通过提前预告增加可预测性，通过微小的、可控的变化逐步培养灵活性。",
                     
@@ -371,6 +545,10 @@ class InterventionPlanner:
                 "phase_name": f"针对{activity}的干预方向（仅供参考）",
                 "goal": f"帮助孩子理解并尊重自己和他人的身体边界",
                 "core_principle": "将抽象的'身体边界'转化为可视化的具体概念",
+                "strategy_details": f"1. 用视觉化方法（如画图）展示每个人的'身体泡泡'\n2. 通过体验式游戏（如呼啦圈）演示'舒适距离'\n3. 角色扮演练习'轻轻抱'vs'用力抱'的区别\n4. 建立非语言提醒信号（如手势）",
+                "strategy_details_gamified": f"让我们和孩子一起玩'身体泡泡'游戏吧！\n\n1. **画泡泡**：和孩子一起画每个人的'身体泡泡'，解释这是舒适距离\n2. **呼啦圈体验**：用呼啦圈演示'舒适距离'，让孩子感受\n3. **玩偶练习**：用玩偶练习'轻轻抱'vs'用力抱'的区别\n4. **秘密手势**：建立非语言提醒信号（如手势）\n\n记住，尊重身体边界是重要的社交技能！",
+                "success_criteria": f"在 1 周内，孩子能在拥抱/靠近前停顿调整至少 3 次。",
+                "parent_observation_task": f"记录孩子调整拥抱力度/距离的次数，以及对方的反应。",
                 "four_step_plan": {
                     "core_idea": f"针对'身体边界感不足'这一困难，干预核心是：用视觉化和体验式的方法，让孩子理解每个人都有'舒适距离'。",
                     
@@ -391,6 +569,10 @@ class InterventionPlanner:
                 "phase_name": f"针对{activity}的干预方向（仅供参考）",
                 "goal": f"帮助孩子识别和理解他人的情绪信号",
                 "core_principle": "将情绪识别转化为可练习的'侦探游戏'",
+                "strategy_details": f"1. 制作表情卡片（高兴/生气/难过/惊讶），每天认一认\n2. 看照片/视频片段，猜测人物感受\n3. 讨论什么情况下会有什么表情\n4. 在真实情境中引导孩子注意他人情绪",
+                "strategy_details_gamified": f"让我们和孩子一起玩'情绪小侦探'游戏吧！\n\n1. **表情卡片**：制作高兴/生气/难过/惊讶卡片，每天玩'认一认'\n2. **照片猜谜**：看照片/视频片段，暂停问'他现在感觉如何？'\n3. **情境讨论**：讨论什么情况下会有什么表情\n4. **真实挑战**：在真实情境中引导孩子注意他人情绪\n\n记住，每一次正确识别都是进步！",
+                "success_criteria": f"在 1 周内，孩子能正确识别至少 5 种基本表情。",
+                "parent_observation_task": f"记录孩子正确识别他人情绪的次数和情境。",
                 "four_step_plan": {
                     "core_idea": f"针对'情绪识别困难'这一困难，干预核心是：用游戏化的方式，让孩子像侦探一样寻找'情绪线索'。",
                     
@@ -411,6 +593,10 @@ class InterventionPlanner:
                 "phase_name": f"针对{activity}的干预方向（仅供参考）",
                 "goal": f"帮助孩子判断自己是否被同伴真正接纳",
                 "core_principle": "将抽象的'我们是否在一起玩'转化为具体的身体动作信号",
+                "strategy_details": f"1. 设定专属'连接信号'，作为游戏开始的标志\n2. 在家演练：游戏前完成'连接信号'\n3. 过程中可随时暂停，用信号'重启'\n4. 真实场景前给予简短提示",
+                "strategy_details_gamified": f"让我们和孩子一起玩'连接信号'游戏吧！\n\n1. **发明信号**：和孩子一起发明专属'开始信号'（如击掌 + 说'开始！'）\n2. **家庭演练**：在家玩任何游戏前，必须先完成这个'连接信号'\n3. **暂停重启**：游戏过程中可随时喊'暂停！'，用信号'重启'\n4. **真实挑战**：去游乐场前提示'今天试试看，能不能和小朋友对暗号？'\n\n记住，每一次主动寻求信号都是进步！",
+                "success_criteria": f"在 1 周内，孩子能在游戏前主动使用约定的连接信号至少 3 次。",
+                "parent_observation_task": f"记录孩子主动确认'是否在一起玩'的次数，以及对方的回应。",
                 "four_step_plan": {
                     "core_idea": f"针对'社交信号监测弱'这一困难，干预核心是：将抽象的社交状态转化为具体的、可练习的动作信号。",
                     
@@ -429,53 +615,75 @@ class InterventionPlanner:
 
     def generate_plan(self, matched_hypothesis_id: str, scenario_key: str, session_context: Optional[dict] = None) -> Optional[Dict[str, Any]]:
         """
-        V4.10.1 P1 场景化干预：根据场景类型 + 功能判断生成精准干预计划
+        V6.0 Harness Engineering：三段式干预生成逻辑
         
-        核心修复：
-        1. 优先使用场景分类匹配精准干预（V4.10.1 P1）
-        2. 功能判断作为辅助校验（V4.5.21 P0）
-
+        核心逻辑：
+        1. 知识库匹配（能回答的）→ 标准化干预
+        2. 场景映射（不能回答的提示）→ 场景化干预
+        3. 大模型推理（知识库没有的）→ 通用框架
+        
         Args:
-            matched_hypothesis_id: 匹配的假设 ID（如 "H1"）
-            scenario_key: 场景键（如 "task_disengagement"）
-            session_context: 会话上下文（包含 functional_judgment 等关键信息）
+            matched_hypothesis_id: 匹配的假设 ID
+            scenario_key: 场景键
+            session_context: 会话上下文
 
         Returns:
-            干预计划字典，包含四步结构
+            干预计划字典
         """
-        # V4.10.1 P1 核心：场景分类驱动的精准干预
-        scene_type = self._classify_scene_type(session_context)
+        # === 阶段 1：知识库匹配（能回答的）===
         capability_gap = session_context.get("capability_gap", "") if session_context else ""
         functional_judgment = session_context.get("primary_hypothesis", "") if session_context else ""
         
-        logger.info(f"V4.10.1 P1 场景分类：{scene_type}, capability_gap={capability_gap[:50] if capability_gap else 'N/A'}...")
+        logger.info(f"V6.0 Harness Engineering：开始三段式干预生成")
         
-        # === V4.10.1 P1 核心：根据场景类型生成精准干预 ===
-        # 优先使用场景→干预映射（解决"诊断正确但开错药"问题）
-        plan = self._get_scene_intervention(scene_type, session_context)
+        # 尝试从知识库获取标准化干预
+        if capability_gap and functional_judgment:
+            # 提取能力缺口关键词
+            capability_keywords = self._extract_capability_keywords(capability_gap)
+            
+            # 查询知识库
+            knowledge_intervention = self._query_knowledge_base(capability_keywords, functional_judgment)
+            
+            if knowledge_intervention:
+                logger.info(f"✅ 阶段 1：知识库匹配成功，返回标准化干预")
+                return knowledge_intervention
         
-        # V4.5.21 P0 校验：确保诊断 - 干预匹配
-        if plan and self._validate_diagnosis_intervention_match(functional_judgment, plan):
-            logger.info(f"✅ V4.10.1 P1：场景化干预生成成功（{scene_type}）")
-            return plan
+        # === 阶段 2：场景映射（不能回答的提示）===
+        scene_type = self._classify_scene_type(session_context)
+        logger.info(f"阶段 2：场景分类={scene_type}")
         
-        # 降级方案：使用原有逻辑
-        logger.info("⚠️ V4.10.1 P1：场景化干预校验失败，降级到 V4.5.21 逻辑")
+        scene_intervention = self._get_scene_intervention(scene_type, session_context)
+        
+        if scene_intervention and self._validate_diagnosis_intervention_match(functional_judgment, scene_intervention):
+            logger.info(f"✅ 阶段 2：场景映射成功，返回场景化干预")
+            return scene_intervention
+        
+        # === 阶段 3：大模型推理（知识库没有的）===
+        logger.info(f"⚠️ 阶段 3：知识库和场景映射都未匹配，使用通用框架")
         return self._generate_fallback_plan(session_context)
     
     def generate_plan_with_narrative(self, matched_hypothesis_id: str, scenario_key: str, session_context: Optional[dict] = None, narrative: Optional[dict] = None) -> Optional[Dict[str, Any]]:
         """
-        V4.5.21 P0 修复：基于功能判断生成干预计划 + 安全校验 + 输出前校验
+        V4.5.21 P0 修复 + V4.11 规则注册表集成
         
         核心原则：干预计划必须与功能判断严格匹配！
-        诊断是"提示依赖"→干预必须是"建立视觉/动作锚点"
-        诊断是"逃避难度"→干预必须是"任务分解，降低起点"
-        诊断是"寻求关注"→干预必须是"关注重定向"
+        评估是"提示依赖"→干预必须是"建立视觉/动作锚点"
+        评估是"逃避难度"→干预必须是"任务分解，降低起点"
+        评估是"寻求关注"→干预必须是"关注重定向"
         
         V4.5.21 P0 新增：
         - 安全优先检查（危险行为不能简单忽视）
-        - 输出前校验（防止诊断 - 干预断裂）
+        - 输出前校验（防止评估 - 干预断裂）
+        
+        V4.11 新增：
+        - 规则注册表分析（辅助评估）
+        - 规则匹配日志
         """
+        # V4.11 新增：规则注册表分析
+        rule_matches = self._analyze_with_rules(session_context)
+        if rule_matches:
+            logger.info(f"V4.11 规则分析：Top 匹配 = {[(m.rule.name, m.confidence) for m in rule_matches[:3]]}")
+        
         # V4.5.21 P0-2 核心：安全优先检查
         if self._check_safety_priority(session_context):
             logger.warning("V4.5.21 P0-2: 检测到危险行为，启用安全优先模式")
@@ -1087,119 +1295,45 @@ class InterventionPlanner:
             "observation_tool": f"记录是为了看见专注力的进步。您只需：在日历上，记录孩子每次专注的时长（秒）和分心的次数。",
         }
     
-    # ========== V6.0 P0: 社交技能干预模板 - 能力缺口优先匹配 ==========
-    
-    def _match_social_scene(self, child_behavior: str) -> tuple:
-        """
-        V6.0 P0 新增：场景匹配降级方法
-        
-        当 capability_gap 不明确时，降级到场景匹配
-        注意：场景匹配条件必须精确，避免过度匹配
-        
-        Args:
-            child_behavior: 孩子行为描述
-        
-        Returns:
-            (game_name, game_steps, why_effective) 元组
-        """
-        # 1. 社交监测场景（精确匹配：判断是否被接纳）
-        if any(kw in child_behavior for kw in ["以为", "监测", "介绍", "参与", "加入"]):
-            game_name = "我们开始玩了吗信号练习"
-            game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
-            why_effective = "孩子目前难以在复杂的实时互动中判断'别人是否在和我玩'。这个练习绕开了复杂的社交解读，直接给她一个明确、可执行的外在规则，作为她内部'社交监测'能力的脚手架。这是构建更复杂社交能力的第一步。"
-        
-        # 2. 身体边界场景
-        elif any(kw in child_behavior for kw in ["拥抱", "轻重", "触碰", "边界"]):
-            game_name = "轻柔的手练习游戏"
-            game_steps = "1. 准备道具：毛绒玩具或气球\n2. 练习轻柔：让孩子轻轻摸玩具，说'这是轻柔的手'\n3. 对比练习：先用力抱（说'太紧了'），再轻柔抱（说'刚刚好'）"
-            why_effective = "通过具体道具和对比练习，帮助孩子建立身体边界感的触觉记忆"
-        
-        # 3. 规则理解/认知灵活性场景
-        elif any(kw in child_behavior for kw in ["规则", "僵化", "重复", "必须", "一定"]):
-            game_name = "规则变变变游戏"
-            game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'"
-            why_effective = "在安全环境中练习规则变化，培养认知灵活性"
-        
-        # 4. 轮流等待场景
-        elif any(kw in child_behavior for kw in ["轮流", "等待", "争当", "抢"]):
-            game_name = "轮流当队长游戏"
-            game_steps = "1. 准备计时器：设定 2 分钟\n2. 轮流规则：计时器响了就换人当队长\n3. 引导等待：在孩子等待时说'轮到你时我会提醒你'"
-            why_effective = "用可视化的计时器帮助孩子理解'轮流'的抽象概念"
-        
-        # 5. 通用场景（兜底）
-        else:
-            game_name = "社交技能假装游戏"
-            game_steps = "1. 模拟当前场景\n2. 练习恰当的社交技能\n3. 给予积极反馈"
-            why_effective = "在安全环境中练习，逐步泛化到真实场景"
-        
-        return game_name, game_steps, why_effective
+    # ========== V4.5.20 P0: 社交技能干预模板 ==========
     
     def _generate_social_skills_plan(self, session_context: Optional[dict] = None) -> Dict[str, Any]:
         """
-        V6.0 P0 修复版：社交技能不足干预模板 - 能力缺口优先匹配
+        V4.7.0 行动种子版：社交技能不足干预模板
         
-        V6.0 P0 核心修复：
-        1. 优先使用 capability_gap 字段进行精确匹配
-        2. 场景匹配降级为兜底方案
-        3. 避免不同能力缺口得到相同干预
-        
-        能力缺口→干预映射：
-        - 社交信号监测 → 社交信号侦探游戏
-        - 观点采择 → 视角游戏：妈妈会看到什么
-        - 工作记忆 → 视觉提示卡游戏
-        - 认知灵活性 → 规则变变变游戏
-        - 情绪识别 → 情绪小侦探游戏
-        - 共同调控 → 我们开始玩了吗信号练习
+        V4.7.0 修复：干预建议不能是万金油，要提供具体可操作的游戏
+        核心策略：从一个关键信号开始，搭建能力桥梁
         """
         context_activity = session_context.get("context", "") if session_context else ""
         child_behavior = session_context.get("child_behavior", "") if session_context else ""
         capability_gap = session_context.get("capability_gap", "") if session_context else ""
         
-        # V6.0 P0 核心：能力缺口优先匹配
-        if capability_gap:
-            # 1. 社交信号监测（优先检查，避免被覆盖）
-            if any(kw in capability_gap for kw in ["社交信号", "监测", "观察反应", "眼神接触"]):
-                game_name = "社交信号侦探游戏"
-                game_steps = "1. 准备表情卡片：制作高兴/生气/难过/惊讶等表情卡片\n2. 侦探游戏：给孩子一张卡片，让他在家中找到'匹配这个表情'的人\n3. 记录发现：每次找到后，记录'谁 + 什么表情 + 为什么'\n4. 真实场景：在游乐场观察其他小朋友的表情，猜测他们的感受"
-                why_effective = "针对'社交信号监测弱'这一能力缺口，通过游戏化的'侦探'角色，让孩子主动观察和解读他人的面部表情和身体语言，逐步建立社交信号监测能力。"
-            
-            # 2. 观点采择
-            elif any(kw in capability_gap for kw in ["观点采择", "换位思考", "视角转换", "心理理论"]):
-                game_name = "视角游戏：妈妈会看到什么"
-                game_steps = "1. 准备道具：一个不透明的盒子，里面放一个玩具\n2. 视角差异：妈妈看到盒子外面，孩子可以看到里面\n3. 提问练习：问孩子'妈妈知道盒子里是什么吗？为什么？'\n4. 引导理解：帮助孩子理解'我知道的，别人不一定知道'"
-                why_effective = "针对'观点采择困难'这一能力缺口，通过具体的视觉差异场景，帮助孩子理解不同人有不同的视角和知识，逐步发展心理理论能力。"
-            
-            # 3. 工作记忆
-            elif any(kw in capability_gap for kw in ["工作记忆", "记不住", "忘记步骤", "序列"]):
-                game_name = "视觉提示卡游戏"
-                game_steps = "1. 制作步骤卡：将任务分解为 3-4 个步骤，每步一张卡片\n2. 排序练习：让孩子按顺序排列卡片\n3. 执行任务：按照卡片提示完成任务\n4. 渐褪支持：逐步减少卡片数量，让孩子记忆步骤"
-                why_effective = "针对'工作记忆弱'这一能力缺口，通过视觉化提示降低记忆负荷，同时逐步训练序列记忆能力。"
-            
-            # 4. 认知灵活性
-            elif any(kw in capability_gap for kw in ["认知灵活性", "灵活性", "变化", "转换"]):
-                game_name = "规则变变变游戏"
-                game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'\n4. 庆祝适应：当孩子接受变化时，给予积极反馈"
-                why_effective = "针对'认知灵活性不足'这一能力缺口，在安全环境中练习规则变化，培养孩子适应变化的能力。"
-            
-            # 5. 情绪识别
-            elif any(kw in capability_gap for kw in ["情绪识别", "表情", "面部表情", "情绪"]):
-                game_name = "情绪小侦探游戏"
-                game_steps = "1. 准备表情卡片：高兴/生气/难过/惊讶/害怕\n2. 猜表情：展示卡片，让孩子猜测是什么情绪\n3. 情境匹配：讨论'什么时候会有这个表情'\n4. 真实观察：在看动画片时暂停，猜测角色情绪"
-                why_effective = "针对'情绪识别困难'这一能力缺口，通过游戏化的方式让孩子学习识别基本情绪表情，为更复杂的社交互动打基础。"
-            
-            # 6. 共同调控
-            elif any(kw in capability_gap for kw in ["共同调控", "同步", "节奏匹配", "互动节奏"]):
-                game_name = "我们开始玩了吗信号练习"
-                game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
-                why_effective = "针对'共同调控能力弱'这一能力缺口，通过明确的开始/暂停信号，帮助孩子学习互动节奏的同步，建立共同调控能力。"
-            
-            # 7. 降级到场景匹配
-            else:
-                game_name, game_steps, why_effective = self._match_social_scene(child_behavior)
-        
-        # 无 capability_gap 时，降级到场景匹配
+        # V4.8.0 核心：基于具体场景生成"行动种子"游戏 + 深度原理解释
+        if "以为" in child_behavior or "监测" in child_behavior or "介绍" in child_behavior or "参与" in child_behavior:
+            # 抓人游戏/社交监测场景（核心问题：难以判断是否真的被接纳）
+            game_name = "我们开始玩了吗信号练习"
+            game_steps = "1. 设定专属信号：和孩子一起发明一个代表'我们开始一起玩啦'的秘密信号（如击掌、对暗号）\n2. 家庭演练：在家玩任何游戏前，必须先完成这个'连接信号'\n3. 过程中，您可以随时喊'暂停！'，所有人定格，再次用信号'重启'游戏\n4. 真实场景提示：去游乐场前说'今天试试看，如果想和小朋友玩，能不能先和他对个暗号？'"
+            why_effective = "孩子目前难以在复杂的实时互动中判断'别人是否在和我玩'。这个练习绕开了复杂的社交解读，直接给她一个明确、可执行的外在规则，作为她内部'社交监测'能力的脚手架。这是构建更复杂社交能力的第一步。"
+        elif "拥抱" in child_behavior or "轻重" in child_behavior:
+            # 身体边界场景
+            game_name = "轻柔的手练习游戏"
+            game_steps = "1. 准备道具：毛绒玩具或气球\n2. 练习轻柔：让孩子轻轻摸玩具，说'这是轻柔的手'\n3. 对比练习：先用力抱（说'太紧了'），再轻柔抱（说'刚刚好'）"
+            why_effective = "通过具体道具和对比练习，帮助孩子建立身体边界感的触觉记忆"
+        elif "规则" in child_behavior or "僵化" in child_behavior or "重复" in child_behavior:
+            # 规则理解场景
+            game_name = "规则变变变游戏"
+            game_steps = "1. 设定基础规则：如'队长只能当 1 分钟'\n2. 中途变规则：突然说'现在队长要跳着走'\n3. 引导适应：问孩子'规则变了，我们该怎么办？'"
+            why_effective = "在安全环境中练习规则变化，培养认知灵活性"
+        elif "轮流" in child_behavior or "等待" in child_behavior or "争当" in child_behavior:
+            # 轮流等待场景
+            game_name = "轮流当队长游戏"
+            game_steps = "1. 准备计时器：设定 2 分钟\n2. 轮流规则：计时器响了就换人当队长\n3. 引导等待：在孩子等待时说'轮到你时我会提醒你'"
+            why_effective = "用可视化的计时器帮助孩子理解'轮流'的抽象概念"
         else:
-            game_name, game_steps, why_effective = self._match_social_scene(child_behavior)
+            # 通用场景
+            game_name = "社交技能假装游戏"
+            game_steps = "1. 模拟当前场景\n2. 练习恰当的社交技能\n3. 给予积极反馈"
+            why_effective = "在安全环境中练习，逐步泛化到真实场景"
         
         return {
             "phase_name": "行动起点",
@@ -1215,8 +1349,11 @@ class InterventionPlanner:
                 "first_step": f"今天，您就可以开始第一步：{game_steps.split(chr(10))[0]}。记住，第一次玩不重要，重要的是开始！"
             },
             "observation_tool": f"记录孩子今天是否能使用约定的信号（如击掌），以及在什么情境下使用的。重点是记录'成功时刻'。",
+            "strategy_details_gamified": f"一个可尝试的游戏：**{game_name}**\n\n{game_steps}",
+            "success_criteria": "在 1 周内，孩子能在游戏前主动使用约定的信号（如主动击掌）",
+            "parent_observation_task": f"记录孩子今天是否能使用约定的信号（如击掌），以及在什么情境下使用的。重点是记录'成功时刻'。",
             
-            # V6.0 P0 新增：原理解释
+            # V4.7.0 新增：原理解释
             "why_effective": why_effective,
         }
-    # ========== V6.0 P0 修复结束 ==========
+    # ========== V4.5.20 P0 结束 ==========

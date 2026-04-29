@@ -1,0 +1,131 @@
+{
+  "test_results": [
+    {
+      "test_case": "TC-001",
+      "name": "Agent 3 超时降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-002",
+      "name": "策略库未匹配降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-003",
+      "name": "数据格式错误降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-004",
+      "name": "降级输出包含 L1 通用原则",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-005",
+      "name": "降级输出包含友好提示",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-006",
+      "name": "降级机制不抛出异常",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-007",
+      "name": "降级响应时间",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-008",
+      "name": "不同场景下的降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-009",
+      "name": "降级干预策略结构",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-010",
+      "name": "降级输出一致性",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-001",
+      "name": "Agent 3 超时降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-002",
+      "name": "策略库未匹配降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-003",
+      "name": "数据格式错误降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-004",
+      "name": "降级输出包含 L1 通用原则",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-005",
+      "name": "降级输出包含友好提示",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-006",
+      "name": "降级机制不抛出异常",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-007",
+      "name": "降级响应时间",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-008",
+      "name": "不同场景下的降级",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-009",
+      "name": "降级干预策略结构",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    },
+    {
+      "test_case": "TC-010",
+      "name": "降级输出一致性",
+      "status": "SKIP",
+      "error": "cannot import name 'InterventionPlanner' from 'app.agents.agent3_intervention' (/home/admin/.openclaw/workspace/behavior_recorder_service/app/agents/agent3_intervention.py)"
+    }
+  ],
+  "summary": {
+    "total_tests": 20,
+    "passed": 0,
+    "failed": 20,
+    "skipped": 20,
+    "pass_rate": "0.0%"
+  }
+}

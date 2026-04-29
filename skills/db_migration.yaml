@@ -1,0 +1,23 @@
+id: skill_db_migration
+name: 数据库迁移脚本生成
+description: 生成兼容 Alembic/TypeORM 的迁移代码
+triggers: ["迁移", "数据库", "schema", "migration", "表结构", "alter", "create table"]
+parameters:
+  type: object
+  properties:
+    action:
+      type: string
+      enum: [create, alter, drop]
+      description: "迁移操作类型"
+    table_name:
+      type: string
+      description: "目标表名"
+    columns:
+      type: array
+      items:
+        type: string
+      description: "字段定义，如 'id:INT PRIMARY KEY'"
+  required: [action, table_name]
+examples:
+  - input: "创建一个 users 表"
+    output: "call skill_db_migration(action='create', table_name='users', columns=['id:INT PRIMARY KEY', 'username:VARCHAR(50)'])"

@@ -1,0 +1,253 @@
+{
+  "results": [
+    {
+      "name": "OK 心智理论场景（薯片盒子实验）",
+      "score": 60,
+      "details": [
+        "✅ 场景识别正确",
+        "✅ 假设针对性强",
+        "✅ 证据引用正确（2条）",
+        "✅ 机制解释完整（含比喻）",
+        "✅ 策略完整（2个，都有'为什么有效'）",
+        "✅ 质量验证通过（无错误）"
+      ],
+      "full_result": {
+        "scene_type": "B",
+        "scene_name": "认知与心智理论",
+        "core_challenge": "错误信念理解",
+        "recognition_basis": "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思",
+        "hypotheses": [
+          {
+            "id": "H1",
+            "content": "OK 可能尚未完全发展出错误信念理解能力，无法区分自己知道的内容与他人可能知道的内容",
+            "confidence": 0.85,
+            "evidence": "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
+          },
+          {
+            "id": "H2",
+            "content": "OK 可能将'看到'理解为物理视觉接触，而非心理表征",
+            "confidence": 0.6,
+            "evidence": "问她'妈妈会看到什么'"
+          }
+        ],
+        "evidence_examination": [
+          {
+            "hypothesis_id": "H1",
+            "supporting_evidence": [
+              "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
+            ],
+            "contradicting_evidence": [
+              "无"
+            ],
+            "decision": "保留",
+            "reason": "有明确的错误信念表现"
+          },
+          {
+            "hypothesis_id": "H2",
+            "supporting_evidence": [
+              "问她'妈妈会看到什么'"
+            ],
+            "contradicting_evidence": [
+              "无"
+            ],
+            "decision": "保留",
+            "reason": "符合 4-5 岁儿童典型表现"
+          }
+        ],
+        "cognitive_mechanism": "心智理论（Theory of Mind）尚未完全发展，特别是错误信念理解能力。孩子能够理解自己的知识状态，但难以推断他人可能拥有与自己不同的信念。",
+        "metaphor": "这就像孩子的大脑里有一个'知识同步器'，但她还以为所有人的大脑都自动同步了她看到的内容。就像一个程序员以为所有用户都能看到自己屏幕上的代码，却不知道别人看到的是不同的界面。",
+        "developmental_perspective": "4-5 岁是心智理论发展的关键期，大多数儿童在 4 岁左右开始理解错误信念，但个体差异很大。OK 的表现符合这个年龄段的典型发展轨迹。",
+        "intervention_strategies": [
+          {
+            "name": "错误信念游戏",
+            "description": "继续玩类似的'意外转移'游戏，如把玩具从一个盒子移到另一个盒子，问孩子'爸爸会去哪里找'",
+            "why_effective": "通过重复的错误信念任务，帮助孩子练习区分'我知道的'和'别人知道的'，强化心智理论的神经连接",
+            "based_on_mechanism": "心智理论发展"
+          },
+          {
+            "name": "视角切换对话",
+            "description": "在日常生活中多问'你觉得 XX 会怎么想'，引导孩子思考他人的视角",
+            "why_effective": "将抽象的心智理论概念嵌入日常对话，让孩子在自然情境中练习视角采择",
+            "based_on_mechanism": "视角采择能力"
+          }
+        ]
+      }
+    },
+    {
+      "name": "逃避难度场景",
+      "score": 60,
+      "details": [
+        "✅ 场景识别正确",
+        "✅ 假设针对性强",
+        "✅ 证据引用正确（1条）",
+        "✅ 机制解释完整（含比喻）",
+        "✅ 策略完整（1个，都有'为什么有效'）",
+        "✅ 质量验证通过（无错误）"
+      ],
+      "full_result": {
+        "scene_type": "C",
+        "scene_name": "执行功能与灵活性",
+        "core_challenge": "任务坚持与挫折耐受",
+        "recognition_basis": "一遇到难题就说'我不会'，然后就不做了",
+        "hypotheses": [
+          {
+            "id": "H1",
+            "content": "孩子可能缺乏应对挫折的策略，遇到困难时习惯用'我不会'来逃避",
+            "confidence": 0.8,
+            "evidence": "一遇到难题就说'我不会'，然后就不做了"
+          }
+        ],
+        "evidence_examination": [
+          {
+            "hypothesis_id": "H1",
+            "supporting_evidence": [
+              "一遇到难题就说'我不会'，然后就不做了"
+            ],
+            "contradicting_evidence": [
+              "无"
+            ],
+            "decision": "保留",
+            "reason": "行为模式清晰"
+          }
+        ],
+        "cognitive_mechanism": "执行功能中的任务坚持能力尚未充分发展，面对挫折时缺乏有效的自我调节策略。",
+        "metaphor": "这就像孩子的大脑里有一个'困难探测器'，但它太敏感了，一遇到小石头就拉响警报说'前面有大山'，然后孩子就停下来了。",
+        "developmental_perspective": "任务坚持能力在学龄前逐步发展，需要成人的脚手架支持。",
+        "intervention_strategies": [
+          {
+            "name": "任务分解策略",
+            "description": "将大任务拆分成小步骤，每完成一步给予具体反馈",
+            "why_effective": "降低认知负荷，让孩子体验成功感，逐步建立'我能行'的自我效能感",
+            "based_on_mechanism": "执行功能发展"
+          }
+        ]
+      }
+    },
+    {
+      "name": "寻求关注场景",
+      "score": 60,
+      "details": [
+        "✅ 场景识别正确",
+        "✅ 假设针对性强",
+        "✅ 证据引用正确（1条）",
+        "✅ 机制解释完整（含比喻）",
+        "✅ 策略完整（1个，都有'为什么有效'）",
+        "✅ 质量验证通过（无错误）"
+      ],
+      "full_result": {
+        "scene_type": "A",
+        "scene_name": "社交互动与沟通",
+        "core_challenge": "寻求关注的社交行为",
+        "recognition_basis": "我一不理他他就开始闹",
+        "hypotheses": [
+          {
+            "id": "H1",
+            "content": "孩子可能尚未掌握适当的社交发起技能，用'闹'来获取关注",
+            "confidence": 0.75,
+            "evidence": "我一不理他他就开始闹"
+          }
+        ],
+        "evidence_examination": [
+          {
+            "hypothesis_id": "H1",
+            "supporting_evidence": [
+              "我一不理他他就开始闹"
+            ],
+            "contradicting_evidence": [
+              "无"
+            ],
+            "decision": "保留",
+            "reason": "行为 - 结果关联清晰"
+          }
+        ],
+        "cognitive_mechanism": "社交沟通技能发展不均衡，孩子知道如何获取关注，但尚未学会适当的社交发起方式。",
+        "metaphor": "这就像孩子手里只有一把锤子，看什么都是钉子。他只有'闹'这一个工具来获取关注，还没有学会用语言、手势等更精细的社交工具。",
+        "developmental_perspective": "社交技能需要逐步学习和练习，孩子正在探索哪些行为能有效获取关注。",
+        "intervention_strategies": [
+          {
+            "name": "替代行为教学",
+            "description": "教孩子用语言说'妈妈看看我'来替代'闹'的行为",
+            "why_effective": "提供更有效的社交工具，让孩子体验到适当行为也能获得关注",
+            "based_on_mechanism": "社交沟通技能"
+          }
+        ]
+      }
+    },
+    {
+      "name": "新场景泛化能力测试",
+      "score": 50,
+      "details": [
+        "❌ 场景识别错误：期望A，实际B",
+        "✅ 假设针对性强",
+        "✅ 证据引用正确（2条）",
+        "✅ 机制解释完整（含比喻）",
+        "✅ 策略完整（2个，都有'为什么有效'）",
+        "✅ 质量验证通过（无错误）"
+      ],
+      "full_result": {
+        "scene_type": "B",
+        "scene_name": "认知与心智理论",
+        "core_challenge": "错误信念理解",
+        "recognition_basis": "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思",
+        "hypotheses": [
+          {
+            "id": "H1",
+            "content": "OK 可能尚未完全发展出错误信念理解能力，无法区分自己知道的内容与他人可能知道的内容",
+            "confidence": 0.85,
+            "evidence": "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
+          },
+          {
+            "id": "H2",
+            "content": "OK 可能将'看到'理解为物理视觉接触，而非心理表征",
+            "confidence": 0.6,
+            "evidence": "问她'妈妈会看到什么'"
+          }
+        ],
+        "evidence_examination": [
+          {
+            "hypothesis_id": "H1",
+            "supporting_evidence": [
+              "她以为我看到盒子里还是糖，不太理解我看到的是薯片的意思"
+            ],
+            "contradicting_evidence": [
+              "无"
+            ],
+            "decision": "保留",
+            "reason": "有明确的错误信念表现"
+          },
+          {
+            "hypothesis_id": "H2",
+            "supporting_evidence": [
+              "问她'妈妈会看到什么'"
+            ],
+            "contradicting_evidence": [
+              "无"
+            ],
+            "decision": "保留",
+            "reason": "符合 4-5 岁儿童典型表现"
+          }
+        ],
+        "cognitive_mechanism": "心智理论（Theory of Mind）尚未完全发展，特别是错误信念理解能力。孩子能够理解自己的知识状态，但难以推断他人可能拥有与自己不同的信念。",
+        "metaphor": "这就像孩子的大脑里有一个'知识同步器'，但她还以为所有人的大脑都自动同步了她看到的内容。就像一个程序员以为所有用户都能看到自己屏幕上的代码，却不知道别人看到的是不同的界面。",
+        "developmental_perspective": "4-5 岁是心智理论发展的关键期，大多数儿童在 4 岁左右开始理解错误信念，但个体差异很大。OK 的表现符合这个年龄段的典型发展轨迹。",
+        "intervention_strategies": [
+          {
+            "name": "错误信念游戏",
+            "description": "继续玩类似的'意外转移'游戏，如把玩具从一个盒子移到另一个盒子，问孩子'爸爸会去哪里找'",
+            "why_effective": "通过重复的错误信念任务，帮助孩子练习区分'我知道的'和'别人知道的'，强化心智理论的神经连接",
+            "based_on_mechanism": "心智理论发展"
+          },
+          {
+            "name": "视角切换对话",
+            "description": "在日常生活中多问'你觉得 XX 会怎么想'，引导孩子思考他人的视角",
+            "why_effective": "将抽象的心智理论概念嵌入日常对话，让孩子在自然情境中练习视角采择",
+            "based_on_mechanism": "视角采择能力"
+          }
+        ]
+      }
+    }
+  ],
+  "average_score": 57.5,
+  "pass": true,
+  "test_count": 4
+}
