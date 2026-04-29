@@ -1,7 +1,0 @@
-.env
-__pycache__/
-*.pyc
-*.pyo
-.chainlit/translations/
-deploy_v641/
-*.tar.gz

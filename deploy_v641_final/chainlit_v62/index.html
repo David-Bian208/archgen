@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>行为观察助手 V6.2 - 流式测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .step { margin: 10px 0; padding: 10px; border-radius: 5px; }
+        .step-start { background: #e0e0e0; }
+        .step-result { background: #d4edda; }
+        .step-error { background: #f8d7da; }
+        input { width: 70%; padding: 10px; }
+        button { padding: 10px 20px; cursor: pointer; }
+        #output { margin-top: 20px; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>📘 行为观察助手 V6.2 - SSE 流式测试</h1>
+    <div>
+        <input type="text" id="input" placeholder="输入行为描述..." value="孩子不和其他小朋友玩，总是自己转圈">
+        <button onclick="analyze()">开始分析</button>
+    </div>
+    <div id="output"></div>
+
+    <script>
+        function analyze() {
+            const input = document.getElementById('input').value;
+            const output = document.getElementById('output');
+            output.innerHTML = '';
+            
+            const url = `http://localhost:8080/api/v6/stream?input=${encodeURIComponent(input)}`;
+            const eventSource = new EventSource(url);
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('Received:', data);
+                
+                let html = '';
+                switch(data.type) {
+                    case 'start':
+                        html = `<div class="step step-start">🚀 ${data.message}</div>`;
+                        break;
+                    case 'step_start':
+                        html = `<div class="step step-start">⏳ Step ${data.step}/5: ${data.name}...</div>`;
+                        break;
+                    case 'step_result':
+                        html = `<div class="step step-result">✅ Step ${data.step}/5: ${data.name} 完成</div>`;
+                        // Show brief summary
+                        if (data.step === 1) {
+                            html += `<div>场景: ${data.data.scene_type}类 - ${data.data.scene_name}</div>`;
+                        } else if (data.step === 2) {
+                            html += `<div>假设: ${data.data.hypotheses ? data.data.hypotheses.length : 0} 个</div>`;
+                        } else if (data.step === 4) {
+                            html += `<div>比喻: ${(data.data.metaphor || '').substring(0, 50)}...</div>`;
+                        } else if (data.step === 5) {
+                            html += `<div>策略: ${data.data.intervention_strategies ? data.data.intervention_strategies.length : 0} 个</div>`;
+                        }
+                        break;
+                    case 'report':
+                        html = `<div class="step step-result">📝 完整报告生成</div>`;
+                        break;
+                    case 'complete':
+                        html = `<div class="step step-result">✅ 推理完成！</div>`;
+                        eventSource.close();
+                        break;
+                    case 'error':
+                        html = `<div class="step step-error">❌ 错误: ${data.message}</div>`;
+                        eventSource.close();
+                        break;
+                }
+                output.innerHTML += html;
+            };
+            
+            eventSource.onerror = function() {
+                output.innerHTML += '<div class="step step-error">❌ 连接错误</div>';
+                eventSource.close();
+            };
+        }
+    </script>
+</body>
+</html>
