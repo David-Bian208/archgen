@@ -231,5 +231,27 @@
 
 ---
 
-**最后更新：** 2026-04-01  
-**下次回顾：** 2026-04-07
+## 📎 重要变更（2026-05-12）
+
+### AGENTS.md 已移除
+- ❌ `behavior_recorder_service/AGENTS.md` 已删除
+- 原因：防止 trae 每次自动读取过时内容
+- 后续：DAVID 想好新版内容后再重建
+
+### 协作规则已迁移至 OpenClaw Skills
+三方协作规则不再依赖项目内 AGENTS.md，而是由 OpenClaw SKILL 系统管理：
+
+| 规则 | SKILL 位置 |
+|------|-----------|
+| 三方分工/任务模板/禁令 | `/home/admin/.openclaw/workspace/skills/三方协作/SKILL.md` |
+| 交接/上班触发 | `/home/admin/.openclaw/workspace/skills/handoff/SKILL.md` |
+| 流程控制 | `/home/admin/.openclaw/workspace/skills/flow-master/SKILL.md` |
+
+### 上班触发机制
+- DAVID 说"上班"/"开工"/"开始" → 战舰自动读取 HANDOFF.md 汇报进度
+- 包含：当前进度、待办事项、阻塞项
+
+---
+
+**最后更新：** 2026-05-12  
+**下次回顾：** DAVID 确认

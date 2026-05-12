@@ -5,7 +5,7 @@
   "last_updated": "2026-03-14",
   "bcba_reviewed": true,
   "review_notes": "BCBA 审核通过 + 评估量表整合 + 词库优化 (精简 3 词)",
-  "total_keywords": 283,
+  "total_keywords": 263,
   
   "intent_mapping": {
     "H_AUTOMATIC": [
@@ -108,13 +108,6 @@
     "H_MOTOR_PLANNING": [
       "动作慢", "动作不协调", "模仿困难", "动作计划", "执行动作",
       "精细动作", "大运动", "笨拙", "动作笨", "知道但做不出"
-    ],
-    
-    "H_VISUAL_DISCRIMINATION": [
-      "看错", "搞反", "搞混", "弄错", "弄反", "弄混",
-      "看反", "说反", "听反", "认错", "混淆", "分不清",
-      "颠倒", "左右不分", "方向搞反", "方向感差", "镜像错误",
-      "6和9看错", "b和d分不清", "p和q分不清"
     ],
     
     "pep3_terms": [
