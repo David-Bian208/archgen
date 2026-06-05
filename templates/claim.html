@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 主张型架构图</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="central-claim">
+            {{ central_claim }}
+        </div>
+        
+        <div class="supporting-points">
+            {% for point in supporting_points %}
+            <div class="point" style="opacity: {{ point.weight }}">
+                <strong>{{ point.label }}</strong>
+                <p>{{ point.text }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        
+        {% if evidence %}
+        <div class="evidence">
+            <h3>支撑证据</h3>
+            <ul>
+            {% for item in evidence %}
+                <li>{{ item }}</li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        
+        <div class="conclusion">{{ conclusion }}</div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 时间管理矩阵</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="time-matrix">
+            <div class="quadrant q1">
+                <div class="quadrant-header">
+                    <span class="icon">🔥</span>
+                    <h3>Q1 重要且紧急</h3>
+                    <span class="tag">立即做</span>
+                </div>
+                <ul class="tasks">
+                    {% for task in q1_important_urgent %}
+                    <li>
+                        <strong>{{ task.name }}</strong>
+                        {% if task.description %}
+                        <p>{{ task.description }}</p>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="quadrant q2">
+                <div class="quadrant-header">
+                    <span class="icon">📅</span>
+                    <h3>Q2 重要不紧急</h3>
+                    <span class="tag">计划做</span>
+                </div>
+                <ul class="tasks">
+                    {% for task in q2_important_not_urgent %}
+                    <li>
+                        <strong>{{ task.name }}</strong>
+                        {% if task.description %}
+                        <p>{{ task.description }}</p>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="quadrant q3">
+                <div class="quadrant-header">
+                    <span class="icon">⚡</span>
+                    <h3>Q3 不重要但紧急</h3>
+                    <span class="tag">委派做</span>
+                </div>
+                <ul class="tasks">
+                    {% for task in q3_not_important_urgent %}
+                    <li>
+                        <strong>{{ task.name }}</strong>
+                        {% if task.description %}
+                        <p>{{ task.description }}</p>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="quadrant q4">
+                <div class="quadrant-header">
+                    <span class="icon">🗑️</span>
+                    <h3>Q4 不重要不紧急</h3>
+                    <span class="tag">减少做</span>
+                </div>
+                <ul class="tasks">
+                    {% for task in q4_not_important_not_urgent %}
+                    <li>
+                        <strong>{{ task.name }}</strong>
+                        {% if task.description %}
+                        <p>{{ task.description }}</p>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        
+        {% if summary %}
+        <div class="summary">
+            <h3>总结建议</h3>
+            <p>{{ summary }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 商业模式画布</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="canvas-grid">
+            <div class="cell key-partnerships">
+                <h3>🤝 合作伙伴</h3>
+                <ul>
+                    {% for item in key_partnerships %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell key-activities">
+                <h3>🔧 关键业务</h3>
+                <ul>
+                    {% for item in key_activities %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell value-propositions">
+                <h3>🎯 价值主张</h3>
+                <ul>
+                    {% for item in value_propositions %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell customer-relationships">
+                <h3>❤️ 客户关系</h3>
+                <ul>
+                    {% for item in customer_relationships %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell customer-segments">
+                <h3>👥 客户细分</h3>
+                <ul>
+                    {% for item in customer_segments %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell key-resources">
+                <h3>📦 核心资源</h3>
+                <ul>
+                    {% for item in key_resources %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell channels">
+                <h3>📢 渠道通路</h3>
+                <ul>
+                    {% for item in channels %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell cost-structure">
+                <h3>💰 成本结构</h3>
+                <ul>
+                    {% for item in cost_structure %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="cell revenue-streams">
+                <h3>💵 收入来源</h3>
+                <ul>
+                    {% for item in revenue_streams %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

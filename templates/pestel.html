@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - PESTEL 分析</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="pestel-grid">
+            <div class="pestel-item political">
+                <div class="pestel-header">
+                    <span class="icon">🏛️</span>
+                    <h3>Political 政治</h3>
+                </div>
+                <ul>
+                    {% for item in political %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="pestel-item economic">
+                <div class="pestel-header">
+                    <span class="icon">📈</span>
+                    <h3>Economic 经济</h3>
+                </div>
+                <ul>
+                    {% for item in economic %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="pestel-item social">
+                <div class="pestel-header">
+                    <span class="icon">👥</span>
+                    <h3>Social 社会</h3>
+                </div>
+                <ul>
+                    {% for item in social %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="pestel-item technological">
+                <div class="pestel-header">
+                    <span class="icon">💻</span>
+                    <h3>Technological 技术</h3>
+                </div>
+                <ul>
+                    {% for item in technological %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="pestel-item environmental">
+                <div class="pestel-header">
+                    <span class="icon">🌍</span>
+                    <h3>Environmental 环境</h3>
+                </div>
+                <ul>
+                    {% for item in environmental %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="pestel-item legal">
+                <div class="pestel-header">
+                    <span class="icon">⚖️</span>
+                    <h3>Legal 法律</h3>
+                </div>
+                <ul>
+                    {% for item in legal %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        
+        {% if summary %}
+        <div class="summary">
+            <h3>总结建议</h3>
+            <p>{{ summary }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

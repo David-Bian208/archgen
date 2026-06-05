@@ -1,0 +1,45 @@
+app:
+  name: "ArchGen"
+  version: "0.1.0"
+  host: "0.0.0.0"
+  port: 8938
+  debug: false
+
+llm:
+  provider: "deepseek"
+  api_key: "sk-0018a9cbec8749c28164657dd3e897f6"
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  max_tokens: 4096
+  temperature: 0.1
+  timeout: 30
+  retry_times: 3
+  retry_delay: 2
+
+database:
+  type: "sqlite"
+  path: "data/archgen.db"
+
+screenshot:
+  browser: "chromium"
+  headless: true
+  default_width: 1200
+  default_height: 800
+  wait_for_fonts: true
+  font_timeout: 5000
+
+storage:
+  output_dir: "output"
+  temp_dir: "data/temp"
+  max_file_size_mb: 10
+  cleanup_after_hours: 24
+
+knowledge_base:
+  root_path: "knowledge_base"
+  mode: "local"  # local / mcp / upload
+  allowed_extensions: [".md", ".txt", ".json", ".yaml"]
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/archgen.log"

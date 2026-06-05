@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 用户旅程地图</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        {% if persona %}
+        <div class="persona">
+            <span class="label">用户角色：</span>
+            <span>{{ persona }}</span>
+        </div>
+        {% endif %}
+        
+        <div class="journey-timeline">
+            {% for stage in stages %}
+            <div class="stage">
+                <div class="stage-number">{{ stage.order }}</div>
+                <div class="stage-content">
+                    <h3 class="stage-name">{{ stage.name }}</h3>
+                    {% if stage.description %}
+                    <p class="stage-desc">{{ stage.description }}</p>
+                    {% endif %}
+                    
+                    {% if stage.touchpoints %}
+                    <div class="touchpoints">
+                        <strong>触点：</strong>
+                        <ul>
+                            {% for tp in stage.touchpoints %}
+                            <li>{{ tp }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                    
+                    {% if stage.pain_points %}
+                    <div class="pain-points">
+                        <strong>痛点：</strong>
+                        <ul>
+                            {% for pp in stage.pain_points %}
+                            <li>{{ pp }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                    
+                    {% if stage.emotion %}
+                    <div class="emotion">
+                        情绪评分：
+                        <span class="emotion-score emotion-{{ stage.emotion }}">{{ '⭐' * stage.emotion }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        {% if summary %}
+        <div class="summary">
+            <h3>总结建议</h3>
+            <p>{{ summary }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
