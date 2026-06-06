@@ -16,6 +16,7 @@ from src.extractor_agent import StructureExtractor
 from src.html_generator import HTMLGenerator
 from src.screenshot import ScreenshotService
 from src.local_folder_reader import LocalFolderReader
+from src.source_tag_processor import SourceTagProcessor, get_source_tag_processor
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,92 @@ async def get_kb_categories():
         return _success(categories)
     except Exception as e:
         logger.error(f"获取知识库分类失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/ai-auto")
+async def ai_auto_supplement(request: Dict = Body(...)):
+    """AI 自动补充：根据缺失项描述和MCP摘要，AI自动生成补充内容"""
+    session_id = request.get("session_id", "")
+    missing_item = request.get("missing_item", "")
+    mcp_summary = request.get("mcp_summary", "")
+
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "deepseek-chat")
+    timeout = llm_config.get("timeout", 60)
+
+    persona_summary = ""
+    try:
+        persona_parsed = _get_persona_parsed()
+        if persona_parsed:
+            persona_summary = persona_parsed.get("summary", "")
+    except:
+        pass
+
+    prompt = f"""你是一个内容策划专家。请根据以下信息，为指定的缺失项生成补充内容。
+
+【重要约束】
+- 你必须严格基于以下【MCP素材摘要】中的信息来生成补充内容
+- 绝对不能编造与MCP素材无关的内容
+- 如果MCP素材中确实没有足够信息，请在内容开头标注【AI推断】，并只基于常识做合理延伸
+- 生成内容必须与【缺失项】高度相关，不能跑题
+
+【缺失项】
+{missing_item}
+
+【MCP 素材摘要】（你必须基于这些信息生成）
+{mcp_summary}
+
+【作者身份定位】（只影响语言风格，不影响内容事实）
+{persona_summary}
+
+请为这个缺失项生成补充内容，要求：
+1. 内容必须紧扣缺失项的描述
+2. 如果MCP摘要中有相关案例/数据，优先提取和整理
+3. 如果MCP摘要中没有相关信息，基于常识做最小化的合理推断，并明确标注【AI推断】
+4. 语言风格要符合作者身份定位（简洁、实战导向）
+5. 内容要具体、可操作
+
+返回 JSON 格式（不要 markdown 代码块）：
+{{
+  "content": "生成的补充内容",
+  "source_note": "说明内容来源（如：'基于MCP摘要中的X内容提取'或'AI推断'）"
+}}
+
+注意：
+- 宁可内容少而精，不要编造
+- 如果完全无法基于MCP摘要生成，返回："抱歉，MCP素材中没有足够信息来补充此项。建议您手动补充或上传相关文件。"
+
+请直接返回 JSON：
+"""
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 2048,
+                    "temperature": 0.3,
+                    "seed": 42,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        parsed_content = result["choices"][0]["message"]["content"].strip()
+        parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
+        import json as json_mod
+        supplement = json_mod.loads(parsed_content)
+
+        return _success(supplement)
+    except Exception as e:
+        logger.error(f"AI 自动补充失败: {e}")
         return _error(msg=str(e))
 
 
@@ -1034,6 +1121,13 @@ async def generate_content_structure(request: Dict = Body(...)):
 {section_outline}
 {persona_context}{mcp_needed_context}
 
+【内容比例策略】
+- 理论内容≤20%，实战内容≥80%
+- 如果案例/素材不足，请在提纲中标注【案例占位符】位置
+- 每个段落的 evidence 字段应该明确标注：
+  * 有真实案例 → 案例简述（1-2句）
+  * 无真实案例 → [📌 待补充：xxx 类型案例]
+
 要求：
 1. 为每个段落生成详细写作提纲，包含以下5个字段：
    - core_point: 核心观点（该段落要表达什么，1-2句话）
@@ -1068,6 +1162,7 @@ async def generate_content_structure(request: Dict = Body(...)):
 }}
 
 注意：提纲不是正文，是写作思路和方向指引。每个字段都要具体，不要泛泛而谈。
+当案例不足时，请在 evidence 中使用占位符格式。
 
 请直接返回 JSON：
 """
@@ -1469,6 +1564,16 @@ async def ai_generate_section(request: Dict = Body(...)):
 {section_hint}
 {existing_context}{source_context}{persona_context}
 
+【内容比例要求】
+- 理论内容≤20%，实战内容≥80%
+- 理论：概念解释、背景介绍、原理说明（简短精炼）
+- 实战：操作步骤、具体案例、避坑指南、收益测算、工具推荐
+
+【素材来源标注要求】（P0 渐进实施阶段）
+- 如果内容基于参考资料/MCP 摘要，在段落末尾标注 [来源：xxx]
+- 如果内容基于逻辑推演/行业知识，在段落开头标注 ⚠️ [AI 推断]
+- 如果内容来自用户手动补充，在段落末尾标注 [来源：用户补充]
+
 要求：
 1. 严格按照【本段写作提纲】撰写（如果有）
 2. 根据【原文充足性指导】决定原文使用程度
@@ -1478,7 +1583,8 @@ async def ai_generate_section(request: Dict = Body(...)):
 6. 使用 Markdown 格式
 7. 语言风格要符合作者的身份定位
 8. 不要编造参考资料中没有的内容（原文充足时）
-9. 直接输出该段落的内容，不要输出"好的"、"以下是"等多余话语
+9. 如果案例/素材不足，使用【案例占位符】格式标注：[📌 待补充案例：xxx 类型的实际案例]
+10. 直接输出该段落的内容，不要输出"好的"、"以下是"等多余话语
 
 请撰写该段落内容：
 """
@@ -1500,7 +1606,18 @@ async def ai_generate_section(request: Dict = Body(...)):
             result = response.json()
         
         content = result["choices"][0]["message"]["content"].strip()
-        return _success({"content": content})
+        
+        # P2: source_tag 处理
+        processor = get_source_tag_processor()
+        processed = processor.process_content(content, strict_mode=False)  # P2 阶段先用宽松模式
+        
+        return _success({
+            "content": content,
+            "rendered_content": processed.rendered_content,
+            "source_tag": processed.source_tag,
+            "is_valid": processed.is_valid,
+            "warning": processed.warning,
+        })
         
     except Exception as e:
         logger.error(f"AI 段落生成失败: {e}")
@@ -1602,7 +1719,18 @@ async def ai_rewrite_section(request: Dict = Body(...)):
             result = response.json()
         
         content = result["choices"][0]["message"]["content"].strip()
-        return _success({"content": content})
+        
+        # P2: source_tag 处理
+        processor = get_source_tag_processor()
+        processed = processor.process_content(content, strict_mode=False)
+        
+        return _success({
+            "content": content,
+            "rendered_content": processed.rendered_content,
+            "source_tag": processed.source_tag,
+            "is_valid": processed.is_valid,
+            "warning": processed.warning,
+        })
         
     except Exception as e:
         logger.error(f"AI 重写失败: {e}")
@@ -1657,6 +1785,16 @@ async def ai_generate_full_content(request: Dict = Body(...)):
 {source_context}
 {persona_context}
 
+【内容比例要求】
+- 理论内容≤20%，实战内容≥80%
+- 理论：概念解释、背景介绍、原理说明（简短精炼）
+- 实战：操作步骤、具体案例、避坑指南、收益测算、工具推荐
+
+【素材来源标注要求】（P0 渐进实施阶段）
+- 如果内容基于参考资料/MCP 摘要，在段落末尾标注 [来源：xxx]
+- 如果内容基于逻辑推演/行业知识，在段落开头标注 ⚠️ [AI 推断]
+- 如果案例/素材不足，使用【案例占位符】格式：[📌 待补充案例：xxx 类型的实际案例]
+
 要求：
 1. 按照大纲顺序，逐个段落撰写
 2. 每个段落以"## 标题"开头
@@ -1687,7 +1825,27 @@ async def ai_generate_full_content(request: Dict = Body(...)):
             result = response.json()
         
         full_content = result["choices"][0]["message"]["content"].strip()
-        return _success({"content": full_content})
+        
+        # P2: source_tag 处理（全文按段落分割处理）
+        processor = get_source_tag_processor()
+        processed = processor.process_full_article(full_content, strict_mode=False)
+        
+        return _success({
+            "content": full_content,
+            "rendered_html": processed["rendered_html"],
+            "valid_count": processed["valid_count"],
+            "filtered_count": processed["filtered_count"],
+            "source_tags": processed["source_tags"],
+            "blocks": [
+                {
+                    "source_tag": b.source_tag,
+                    "is_valid": b.is_valid,
+                    "warning": b.warning,
+                    "rendered_content": b.rendered_content,
+                }
+                for b in processed["blocks"]
+            ],
+        })
         
     except Exception as e:
         logger.error(f"AI 全文生成失败: {e}")
@@ -3582,4 +3740,232 @@ async def generate_outline_v2(request: Dict = Body(...)):
         return _success(outline)
     except Exception as e:
         logger.error(f"提纲生成失败: {e}")
+        return _error(msg=str(e))
+
+
+# ===== P2: source_tag 硬约束 & 4 阶段 LLM Pipeline =====
+
+
+@router.post("/api/content/validate_source_tags")
+async def validate_content_source_tags(request: Dict = Body(...)):
+    """
+    P2: 验证内容的 source_tag 合规性
+    
+    请求体：
+    {
+        "content": "文章内容",
+        "strict_mode": true  // 是否启用硬约束（无标签不渲染）
+    }
+    """
+    content = request.get("content", "")
+    strict_mode = request.get("strict_mode", True)
+    
+    if not content:
+        return _error(code=400, msg="缺少 content 参数")
+    
+    try:
+        processor = get_source_tag_processor()
+        result = processor.process_full_article(content, strict_mode=strict_mode)
+        
+        return _success({
+            "valid_count": result["valid_count"],
+            "filtered_count": result["filtered_count"],
+            "total_count": len(result["blocks"]),
+            "rendered_html": result["rendered_html"],
+            "source_tags": result["source_tags"],
+            "blocks": [
+                {
+                    "source_tag": b.source_tag,
+                    "is_valid": b.is_valid,
+                    "warning": b.warning,
+                    "rendered_content": b.rendered_content,
+                    "raw_preview": b.raw_content[:100] + "..." if len(b.raw_content) > 100 else b.raw_content,
+                }
+                for b in result["blocks"]
+            ],
+        })
+    except Exception as e:
+        logger.error(f"source_tag 验证失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/content/pipeline/generate")
+async def pipeline_generate_content(request: Dict = Body(...)):
+    """
+    P2: 4 阶段 LLM Pipeline 内容生成
+    
+    请求体：
+    {
+        "stage": "router|logic_editor|extractor|generator",
+        "article_text": "待分析文本",
+        "direction_list": [...],
+        "edge_focus": "专注领域",
+        "edge_avoid": "回避领域",
+        "drive": "核心驱动",
+        "filter_rule": "认知过滤",
+        "value_standard": "价值标准",
+        "audience_identity": "受众身份",
+        "audience_pain_points": "受众痛点",
+        "audience_empathy": "共情话术",
+        "voice_style": "表达风格",
+        "voice_format": "表达格式",
+        "voice_ratio": "内容比例",
+        "outline": "提纲",
+        "structured_json": "结构化内容"
+    }
+    """
+    from src.llm_pipeline import get_llm_pipeline
+    
+    stage = request.get("stage", "")
+    if not stage:
+        return _error(code=400, msg="缺少 stage 参数")
+    
+    try:
+        llm_config = _get_config("llm")
+        pipeline = get_llm_pipeline(llm_config)
+        
+        if stage == "router":
+            result = await pipeline.call_router(
+                article_text=request.get("article_text", ""),
+                direction_list=request.get("direction_list", []),
+                edge_focus=request.get("edge_focus", ""),
+                edge_avoid=request.get("edge_avoid", ""),
+            )
+        elif stage == "logic_editor":
+            result = await pipeline.call_logic_editor(
+                outline=request.get("outline", ""),
+                drive=request.get("drive", ""),
+                filter_rule=request.get("filter_rule", ""),
+                value_standard=request.get("value_standard", ""),
+            )
+        elif stage == "extractor":
+            result = await pipeline.call_extractor(
+                revised_outline=request.get("outline", ""),
+                audience_identity=request.get("audience_identity", ""),
+                audience_pain_points=request.get("audience_pain_points", ""),
+                audience_empathy=request.get("audience_empathy", ""),
+                value_standard=request.get("value_standard", ""),
+            )
+        elif stage == "generator":
+            result = await pipeline.call_generator(
+                structured_json=request.get("structured_json", ""),
+                voice_style=request.get("voice_style", ""),
+                voice_format=request.get("voice_format", ""),
+                voice_ratio=request.get("voice_ratio", ""),
+                audience_identity=request.get("audience_identity", ""),
+                audience_pain_points=request.get("audience_pain_points", ""),
+            )
+        else:
+            return _error(code=400, msg=f"未知的 stage: {stage}")
+        
+        return _success(result)
+    except Exception as e:
+        logger.error(f"Pipeline 调用失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/content/pipeline/full_workflow")
+async def pipeline_full_workflow(request: Dict = Body(...)):
+    """
+    P2: 完整的 4 阶段 LLM Pipeline 工作流
+    
+    按顺序调用：Router → Logic Editor → Extractor → Generator
+    
+    请求体：
+    {
+        "article_text": "待分析文本",
+        "direction_list": [...],
+        "persona": {六维人设配置},
+        "enable_source_validation": true
+    }
+    """
+    from src.llm_pipeline import get_llm_pipeline
+    
+    try:
+        llm_config = _get_config("llm")
+        pipeline = get_llm_pipeline(llm_config)
+        persona = request.get("persona", {})
+        
+        # 提取六维配置
+        edge_focus = persona.get("edge", {}).get("focus", "AI 效率工具")
+        edge_avoid = persona.get("edge", {}).get("avoid", "算法原理、技术史")
+        drive = persona.get("why", "帮高净值人群节省时间")
+        filter_rule = persona.get("filter", "问题→方案→避坑→收益")
+        value_standard = persona.get("value", "读者看完能直接上手操作")
+        audience_identity = persona.get("who", {}).get("identity", "企业主/高管")
+        audience_pain_points = persona.get("who", {}).get("pain_points", "时间稀缺")
+        audience_empathy = persona.get("who", {}).get("empathy", "我知道你每天要处理X件事")
+        voice_style = persona.get("voice", {}).get("style", "理性务实")
+        voice_format = persona.get("voice", {}).get("format", "短句")
+        voice_ratio = persona.get("voice", {}).get("ratio", "理论≤20%，实战≥80%")
+        
+        workflow_result = {
+            "stages": {},
+            "total_llm_calls": 0,
+        }
+        
+        # Stage 1: Router
+        logger.info("[Pipeline] Stage 1: Router - 方向推荐")
+        router_result = await pipeline.call_router(
+            article_text=request.get("article_text", ""),
+            direction_list=request.get("direction_list", []),
+            edge_focus=edge_focus,
+            edge_avoid=edge_avoid,
+        )
+        workflow_result["stages"]["router"] = router_result
+        workflow_result["total_llm_calls"] += 1
+        
+        # Stage 2: Logic Editor
+        logger.info("[Pipeline] Stage 2: Logic Editor - 框架推荐")
+        logic_result = await pipeline.call_logic_editor(
+            outline=router_result.get("content", ""),
+            drive=drive,
+            filter_rule=filter_rule,
+            value_standard=value_standard,
+        )
+        workflow_result["stages"]["logic_editor"] = logic_result
+        workflow_result["total_llm_calls"] += 1
+        
+        # Stage 3: Extractor
+        logger.info("[Pipeline] Stage 3: Extractor - 内容萃取")
+        extract_result = await pipeline.call_extractor(
+            revised_outline=logic_result.get("content", ""),
+            audience_identity=audience_identity,
+            audience_pain_points=audience_pain_points,
+            audience_empathy=audience_empathy,
+            value_standard=value_standard,
+        )
+        workflow_result["stages"]["extractor"] = extract_result
+        workflow_result["total_llm_calls"] += 1
+        
+        # Stage 4: Generator
+        logger.info("[Pipeline] Stage 4: Generator - 内容生成")
+        generate_result = await pipeline.call_generator(
+            structured_json=extract_result.get("content", ""),
+            voice_style=voice_style,
+            voice_format=voice_format,
+            voice_ratio=voice_ratio,
+            audience_identity=audience_identity,
+            audience_pain_points=audience_pain_points,
+        )
+        workflow_result["stages"]["generator"] = generate_result
+        workflow_result["total_llm_calls"] += 1
+        
+        # P2: source_tag 验证
+        enable_validation = request.get("enable_source_validation", True)
+        if enable_validation:
+            logger.info("[Pipeline] source_tag 验证")
+            processor = get_source_tag_processor()
+            content = generate_result.get("content", "")
+            validation_result = processor.process_full_article(content, strict_mode=True)
+            workflow_result["source_validation"] = {
+                "valid_count": validation_result["valid_count"],
+                "filtered_count": validation_result["filtered_count"],
+                "rendered_html": validation_result["rendered_html"],
+                "source_tags": validation_result["source_tags"],
+            }
+        
+        return _success(workflow_result)
+    except Exception as e:
+        logger.error(f"Pipeline 工作流失败: {e}")
         return _error(msg=str(e))

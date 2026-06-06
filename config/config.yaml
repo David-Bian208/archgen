@@ -39,6 +39,19 @@ knowledge_base:
   mode: "local"  # local / mcp / upload
   allowed_extensions: [".md", ".txt", ".json", ".yaml"]
 
+ai_pulse:
+  enabled: true
+  base_url: "http://8.130.148.166:8887"
+  timeout: 10
+
+source_tag:
+  strict_mode: false  # P2 阶段设为 true 启用硬约束
+  valid_prefixes:
+    - "local:"
+    - "ai_pulse:"
+    - "user_input:"
+    - "ai_inferred:"
+
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

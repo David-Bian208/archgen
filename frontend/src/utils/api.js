@@ -334,4 +334,37 @@ export function generateWorkflowOutline(sessionId) {
   })
 }
 
+export function aiAutoSupplement(sessionId, missingItem, mcpSummary) {
+  return api.post('/workflow/supplement/ai-auto', {
+    session_id: sessionId,
+    missing_item: missingItem,
+    mcp_summary: mcpSummary,
+  })
+}
+
+// ===== P2: source_tag 硬约束 & 4 阶段 LLM Pipeline =====
+
+export function validateSourceTags(content, strictMode = true) {
+  return api.post('/content/validate_source_tags', {
+    content,
+    strict_mode: strictMode,
+  })
+}
+
+export function pipelineGenerate(stage, params) {
+  return api.post('/content/pipeline/generate', {
+    stage,
+    ...params,
+  })
+}
+
+export function pipelineFullWorkflow(articleText, directionList, persona, enableValidation = true) {
+  return api.post('/content/pipeline/full_workflow', {
+    article_text: articleText,
+    direction_list: directionList,
+    persona,
+    enable_source_validation: enableValidation,
+  })
+}
+
 export default api

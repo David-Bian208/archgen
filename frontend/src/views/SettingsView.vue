@@ -357,7 +357,7 @@ import {
   IconUser,
 } from '@arco-design/web-vue/es/icon'
 import { useAppStore } from '../stores/app'
-import { verifyFolder as apiVerifyFolder, listFolderFiles, readFolderFile, setPersonaPath, parsePersona } from '../utils/api'
+import { verifyFolder as apiVerifyFolder, listFolderFiles, readFolderFile, setPersonaPath, parsePersona, getPersonaInfo } from '../utils/api'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -385,25 +385,42 @@ const parsedPersona = ref(null)
 const complexityWarning = ref('')
 const personaSaved = ref(false) // 是否已保存身份定位路径
 
-onMounted(() => {
+onMounted(async () => {
   loadSettings()
   loadKbFiles()
   
-  // 恢复身份定位路径和已保存状态
+  // 恢复身份定位路径
   const cachedPersonaPath = localStorage.getItem('archgen_persona_path')
   if (cachedPersonaPath) {
     personaPath.value = cachedPersonaPath
     personaSaved.value = true
   }
-  
-  // 恢复解析结果缓存
-  const cachedParsedPersona = localStorage.getItem('archgen_parsed_persona')
-  if (cachedParsedPersona) {
-    try {
-      parsedPersona.value = JSON.parse(cachedParsedPersona)
-      appStore.personaInfo = parsedPersona.value
-    } catch (e) {
-      console.error('加载解析结果缓存失败:', e)
+
+  // 每次打开设置页面，从后端重新获取最新解析结果
+  // 优先使用后端缓存/解析，保证数据最新
+  try {
+    const res = await getPersonaInfo()
+    if (res.data.code === 0 && res.data.data.parsed) {
+      const parsed = res.data.data.parsed
+      parsedPersona.value = parsed
+      appStore.personaInfo = parsed
+      // 同步到 localStorage 缓存
+      localStorage.setItem('archgen_parsed_persona', JSON.stringify(parsed))
+    } else if (cachedPersonaPath && personaSaved.value) {
+      // 如果后端没有解析结果，但路径已保存，自动触发解析
+      await handleParsePersona()
+    }
+  } catch (e) {
+    console.error('获取身份定位信息失败:', e)
+    // 降级：尝试从 localStorage 恢复
+    const cachedParsedPersona = localStorage.getItem('archgen_parsed_persona')
+    if (cachedParsedPersona) {
+      try {
+        parsedPersona.value = JSON.parse(cachedParsedPersona)
+        appStore.personaInfo = parsedPersona.value
+      } catch (e2) {
+        console.error('加载本地缓存失败:', e2)
+      }
     }
   }
 })

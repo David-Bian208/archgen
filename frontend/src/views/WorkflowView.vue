@@ -87,18 +87,42 @@
                 </a-descriptions-item>
               </a-descriptions>
 
-              <a-alert type="info" style="margin-top: 16px">
+              <a-alert type="warning" style="margin-top: 16px">
+                <template #title> 完整度评估说明</template>
+                注意：MCP 搜索的「匹配度」评估的是<strong>主题相关性</strong>（文章是否匹配知识库），而这里的「完整度」评估的是<strong>素材充分性</strong>（是否足够支撑一篇高质量文章）。如果完整度偏低，建议先补充素材。
+              </a-alert>
+
+              <a-alert type="info" style="margin-top: 12px">
                 <template #title>📋 补充策略</template>
                 {{ completenessResult.supplement_strategy || '无需额外补充' }}
               </a-alert>
 
               <div v-if="completenessResult.missing_critical?.length" style="margin-top: 16px">
-                <a-typography-text strong style="color: #f53f3f">️ 关键缺失项（建议优先补充）：</a-typography-text>
+                <a-typography-text strong style="color: #f53f3f"> 关键缺失项（建议优先补充）：</a-typography-text>
                 <a-list :data="completenessResult.missing_critical" size="small" style="margin-top: 8px">
-                  <template #item="{ item }">
-                    <a-list-item>
-                      <icon-close-circle-fill style="color: #f53f3f; margin-right: 8px" />
-                      {{ item }}
+                  <template #item="{ item, index }">
+                    <a-list-item :style="{ padding: '12px 16px', borderRadius: '4px', background: isSupplemented(index) ? '#f7f8fa' : '#fff2f0' }">
+                      <!-- 已补充：显示绿色勾+补充内容 -->
+                      <template v-if="isSupplemented(index)">
+                        <icon-check-circle-fill style="color: #00b42a; margin-right: 8px; font-size: 16px" />
+                        <div style="flex: 1">
+                          <div style="font-size: 14px">{{ item }}</div>
+                          <div v-if="getSupplementContent(index)" style="margin-top: 6px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px; color: #4e5969; line-height: 1.6; max-height: 80px; overflow-y: auto">
+                            {{ getSupplementContent(index) }}
+                          </div>
+                        </div>
+                        <a-button type="primary" text size="mini" style="margin-left: 8px" @click="openSupplementModal(index, true)">
+                          编辑
+                        </a-button>
+                      </template>
+                      <!-- 未补充：显示红色叉+去补充按钮 -->
+                      <template v-else>
+                        <icon-close-circle-fill style="color: #f53f3f; margin-right: 8px; font-size: 16px" />
+                        <div style="flex: 1; font-size: 14px">{{ item }}</div>
+                        <a-button type="primary" size="mini" style="margin-left: 8px" @click="openSupplementModal(index)">
+                          去补充
+                        </a-button>
+                      </template>
                     </a-list-item>
                   </template>
                 </a-list>
@@ -110,17 +134,98 @@
                 </a-typography-text>
               </div>
 
-              <a-space style="margin-top: 20px">
-                <a-button type="primary" size="large" @click="goToDirections">
-                  下一步：查看推荐方向 <icon-arrow-right />
+              <a-space style="margin-top: 20px" wrap>
+                <!-- 5A: 信息充足 -->
+                <a-button v-if="completenessResult.completeness >= 80" type="primary" status="success" size="large" @click="skipToOutline">
+                  ✅ 信息充足，直接生成提纲
                 </a-button>
-                <a-button v-if="completenessResult.completeness >= 80" status="success" size="large" @click="skipToOutline">
-                  ✅ 信息充足，跳过补充直接生成提纲
-                </a-button>
+
+                <!-- 5B/5C: 需要补充 -->
+                <template v-else>
+                  <a-alert type="warning" style="width: 100%; margin-bottom: 16px">
+                    <template #title>建议模式：5B（需要您补充）</template>
+                    {{ completenessResult.completeness >= 60 ? '建议补充关键信息以提升文章质量' : '信息不足，必须补充后才能生成高质量内容' }}
+                  </a-alert>
+
+                  <a-button type="primary" size="large" @click="openModeModal('manual')">
+                    ✏️ 我手动补充
+                  </a-button>
+                  <a-button status="warning" size="large" @click="openModeModal('ai-pulse')">
+                    🤖 调用 AI-Pulse 获取
+                  </a-button>
+                  <a-button v-if="completenessResult.completeness >= 60" size="large" @click="skipToOutline">
+                    ⏭️ 跳过，直接生成（质量可能较低）
+                  </a-button>
+                </template>
               </a-space>
             </template>
           </a-card>
         </div>
+
+        <!-- 关键缺失项补充弹窗 -->
+        <a-modal v-model:visible="supplementModalVisible" title="补充缺失项" width="700px" @ok="confirmSupplementModal" @cancel="closeSupplementModal">
+          <div v-if="currentSupplementItem" class="supplement-modal-content">
+            <a-alert type="warning" style="margin-bottom: 16px">
+              <template #title>待补充内容</template>
+              {{ currentSupplementItem }}
+            </a-alert>
+
+            <!-- AI 补充按钮 - 放在最上方 -->
+            <a-form-item label="" style="margin-bottom: 16px">
+              <a-button type="primary" long :loading="aiSupplementing" @click="aiAutoSupplement" style="margin-bottom: 16px">
+                <icon-robot /> AI 根据上下文自动补充
+              </a-button>
+            </a-form-item>
+
+            <a-divider orientation="left" style="margin: 12px 0">或手动补充</a-divider>
+
+            <a-form layout="vertical">
+              <a-form-item label="补充方式">
+                <a-radio-group v-model="supplementModalMethod">
+                  <a-radio value="text">手动输入</a-radio>
+                  <a-radio value="file">从知识库选择文件</a-radio>
+                </a-radio-group>
+              </a-form-item>
+              <a-form-item v-if="supplementModalMethod === 'text'" label="补充内容">
+                <a-textarea
+                  v-model="supplementModalText"
+                  placeholder="请输入你想补充的内容，例如：具体的案例、数据、定义等..."
+                  :auto-size="{ minRows: 5, maxRows: 10 }"
+                />
+              </a-form-item>
+              <a-form-item v-if="supplementModalMethod === 'file'" label="选择文件">
+                <a-tree-select
+                  v-model="supplementModalFile"
+                  :data="kbTreeData"
+                  placeholder="选择包含相关内容的文件..."
+                  tree-checkable
+                  allow-search
+                  @change="onSupplementFileChange"
+                />
+              </a-form-item>
+
+              <!-- 文件选择后显示AI提取预览 -->
+              <a-form-item v-if="supplementModalMethod === 'file' && supplementModalFile.length > 0" label="AI 提取预览">
+                <a-spin :loading="extractingFileContent" dot>
+                  <div v-if="extractedFileContent" class="extracted-content-preview">
+                    <a-alert type="info" style="margin-bottom: 8px">
+                      <template #title>📄 已从 {{ extractedFileCount }} 个文件中提取内容</template>
+                      AI 正在分析文件内容，提取与「{{ currentSupplementItem }}」相关的信息...
+                    </a-alert>
+                    <a-textarea
+                      v-model="supplementModalText"
+                      :auto-size="{ minRows: 6, maxRows: 12 }"
+                      placeholder="AI 提取的内容将显示在这里，您可以编辑后点击确定..."
+                    />
+                    <a-typography-text type="secondary" style="font-size: 12px; margin-top: 4px; display: block">
+                      提示：提取内容基于文件全文分析，您可以直接编辑或补充
+                    </a-typography-text>
+                  </div>
+                </a-spin>
+              </a-form-item>
+            </a-form>
+          </div>
+        </a-modal>
 
         <!-- Step 2: 推荐写作方向 -->
         <div v-if="currentStep === 2" class="step-content">
@@ -554,6 +659,8 @@ import {
   IconCheckCircleFill,
   IconRobot,
   IconScan,
+  IconArrowRight,
+  IconFile,
 } from '@arco-design/web-vue/es/icon'
 import {
   createWorkflowSession,
@@ -569,6 +676,8 @@ import {
   supplementStep3,
   generateWorkflowOutline,
   listFolderFiles,
+  aiAutoSupplement as apiAiAutoSupplement,
+  readFolderFile,
 } from '../utils/api'
 
 const route = useRoute()
@@ -587,6 +696,30 @@ const completenessResult = ref(null)
 // 方向推荐
 const directions = ref([])
 const selectedDirection = ref(null)
+
+// 关键缺失项补充弹窗
+const supplementModalVisible = ref(false)
+const currentSupplementItem = ref('')
+const currentSupplementIndex = ref(-1)
+const isEditMode = ref(false) // 是否是编辑模式（已补充过）
+const supplementModalMethod = ref('text')
+const supplementModalFile = ref([])
+const supplementModalText = ref('')
+const aiSupplementing = ref(false)
+const extractingFileContent = ref(false)
+const extractedFileContent = ref(false)
+const extractedFileCount = ref(0)
+
+// 关键缺失项补充状态跟踪
+const supplementContents = ref({}) // { index: { content, method, time } }
+
+function isSupplemented(index) {
+  return supplementContents.value[index] !== undefined
+}
+
+function getSupplementContent(index) {
+  return supplementContents.value[index]?.content || ''
+}
 
 // 补充1
 const supplement1Method = ref('form')
@@ -666,9 +799,19 @@ onMounted(async () => {
     console.error('加载知识库文件失败:', e)
   }
 
-  // 如果 MCP 摘要已传入，直接进入完整度评估
+  // 如果 MCP 摘要已传入，自动触发完整度评估
   if (mcpSummary.value) {
     currentStep.value = 1
+    loading.value = true
+    try {
+      const res = await evaluateCompleteness(sessionId.value, mcpSummary.value)
+      completenessResult.value = res.data.data
+      Message.success('完整度评估完成')
+    } catch (e) {
+      Message.error('评估失败: ' + e.message)
+    } finally {
+      loading.value = false
+    }
   }
 })
 
@@ -730,6 +873,155 @@ async function goToDirections() {
     Message.error('方向推荐失败: ' + e.message)
   } finally {
     loading.value = false
+  }
+}
+
+function openSupplementModal(index, editMode = false) {
+  currentSupplementIndex.value = index
+  currentSupplementItem.value = completenessResult.value.missing_critical[index] || ''
+  isEditMode.value = editMode
+  supplementModalMethod.value = 'text'
+  supplementModalFile.value = []
+
+  // 如果是编辑模式，加载已有的补充内容
+  if (editMode && supplementContents.value[index]) {
+    const existing = supplementContents.value[index]
+    supplementModalMethod.value = existing.method || 'text'
+    supplementModalText.value = existing.content || ''
+    supplementModalFile.value = existing.files || []
+  } else {
+    supplementModalText.value = ''
+  }
+
+  supplementModalVisible.value = true
+}
+
+// 5A/5B/5C 模式选择
+function openModeModal(mode) {
+  if (mode === 'manual') {
+    // 手动补充：打开第一个缺失项的补充弹窗
+    const firstMissingIndex = completenessResult.value.missing_critical?.findIndex((_, idx) => !isSupplemented(idx)) ?? -1
+    if (firstMissingIndex >= 0) {
+      openSupplementModal(firstMissingIndex)
+    } else {
+      Message.info('所有关键缺失项已补充完毕')
+    }
+  } else if (mode === 'ai-pulse') {
+    // AI-Pulse 补充（P1 框架，暂时提示）
+    Message.info('AI-Pulse 服务开发中，敬请期待')
+  }
+}
+
+function closeSupplementModal() {
+  supplementModalVisible.value = false
+  supplementModalText.value = ''
+  supplementModalFile.value = []
+  isEditMode.value = false
+  extractingFileContent.value = false
+  extractedFileContent.value = false
+  extractedFileCount.value = 0
+}
+
+async function onSupplementFileChange(files) {
+  if (!files || files.length === 0) {
+    extractedFileContent.value = false
+    supplementModalText.value = ''
+    return
+  }
+
+  extractingFileContent.value = true
+  extractedFileCount.value = files.length
+
+  try {
+    let allContent = ''
+
+    // 读取所有选中文件的内容
+    for (const filePath of files) {
+      try {
+        const res = await readFolderFile('', filePath)
+        if (res.data.code === 0) {
+          const content = res.data.data.content || ''
+          allContent += `\n--- 文件: ${filePath} ---\n${content.substring(0, 5000)}`
+        }
+      } catch (e) {
+        console.warn(`读取文件失败: ${filePath}`, e)
+      }
+    }
+
+    if (!allContent.trim()) {
+      Message.warning('无法读取文件内容，请尝试手动输入')
+      supplementModalText.value = ''
+      extractingFileContent.value = false
+      return
+    }
+
+    // 使用 AI 从文件内容中提取与缺失项相关的部分
+    const extractRes = await apiAiAutoSupplement(
+      sessionId.value,
+      `请从以下文件内容中提取与「${currentSupplementItem.value}」相关的信息：\n\n${allContent}`,
+      `【文件原始内容】\n${allContent}`,
+    )
+    const extractData = extractRes.data.data
+    supplementModalText.value = extractData.content || allContent
+    extractedFileContent.value = true
+    Message.success(`已从 ${files.length} 个文件中提取内容`)
+  } catch (e) {
+    Message.error('文件内容提取失败: ' + e.message)
+    supplementModalText.value = ''
+  } finally {
+    extractingFileContent.value = false
+  }
+}
+
+function confirmSupplementModal() {
+  if (supplementModalMethod.value === 'text' && !supplementModalText.value.trim()) {
+    Message.warning('请输入补充内容')
+    return
+  }
+  if (supplementModalMethod.value === 'file' && supplementModalFile.value.length === 0) {
+    Message.warning('请选择文件')
+    return
+  }
+
+  // 保存补充内容到跟踪对象
+  supplementContents.value[currentSupplementIndex.value] = {
+    content: supplementModalText.value,
+    method: supplementModalMethod.value,
+    files: supplementModalFile.value,
+    time: new Date().toLocaleString(),
+  }
+
+  // 同步到 completenessResult 用于持久化
+  if (!completenessResult.value.supplementedItems) {
+    completenessResult.value.supplementedItems = []
+  }
+  if (!completenessResult.value.supplementedItems.includes(currentSupplementIndex.value)) {
+    completenessResult.value.supplementedItems.push(currentSupplementIndex.value)
+  }
+
+  supplementModalVisible.value = false
+  const msg = isEditMode.value ? '补充内容已更新' : '补充已保存'
+  Message.success(msg)
+}
+
+async function aiAutoSupplement() {
+  if (!currentSupplementItem.value) return
+  aiSupplementing.value = true
+
+  try {
+    const res = await apiAiAutoSupplement(
+      sessionId.value,
+      currentSupplementItem.value,
+      mcpSummary.value,
+    )
+    const data = res.data.data
+    // 将AI生成的内容填充到文本框
+    supplementModalText.value = data.content || ''
+    Message.success('AI 补充完成，请确认或编辑后点击确定')
+  } catch (e) {
+    Message.error('AI 补充失败: ' + e.message)
+  } finally {
+    aiSupplementing.value = false
   }
 }
 
