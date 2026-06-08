@@ -62,27 +62,27 @@ class AIPulseClient:
                 response.raise_for_status()
                 data = response.json()
                 
-                # 解析返回数据
-                if data.get("code") == 0:
-                    items = data.get("items", [])
-                    logger.info(f"成功获取 {len(items)} 条案例")
-                    return [
-                        {
-                            "id": str(item.get("id", "")),
-                            "title": item.get("title", ""),
-                            "summary": item.get("summary", ""),
-                            "source": item.get("source", ""),
-                            "published_at": item.get("publish_date", ""),
-                            "score": item.get("final_score", 0),
-                            "category": item.get("category", ""),
-                            "url": item.get("url", ""),
-                            "tags": item.get("tags", []) or [],
-                        }
-                        for item in items
-                    ]
-                else:
-                    logger.warning(f"API 返回错误：{data.get('msg', 'unknown error')}")
-                    return []
+                # 解析返回数据（生产环境格式：直接返回 items，无 code 字段）
+                # 兼容两种格式：{"code":0,"items":[...]} 或 {"count":0,"total":128,"items":[...]}
+                items = data.get("items", [])
+                if not items and data.get("code") == 0:
+                    items = data.get("data", {}).get("items", [])
+                
+                logger.info(f"成功获取 {len(items)} 条案例")
+                return [
+                    {
+                        "id": str(item.get("id", "")),
+                        "title": item.get("title", ""),
+                        "summary": item.get("summary", ""),
+                        "source": item.get("source", ""),
+                        "published_at": item.get("publish_date", ""),
+                        "score": item.get("final_score", 0),
+                        "category": item.get("category", ""),
+                        "url": item.get("url", ""),
+                        "tags": item.get("tags", []) or [],
+                    }
+                    for item in items
+                ]
         except httpx.HTTPError as e:
             logger.error(f"HTTP 请求失败：{e}")
             return []
@@ -119,26 +119,26 @@ class AIPulseClient:
                 response.raise_for_status()
                 data = response.json()
                 
-                if data.get("code") == 0:
-                    items = data.get("items", [])
-                    logger.info(f"成功获取 {len(items)} 条行业数据")
-                    return [
-                        {
-                            "id": str(item.get("id", "")),
-                            "title": item.get("title", ""),
-                            "summary": item.get("summary", ""),
-                            "source": item.get("source", ""),
-                            "published_at": item.get("publish_date", ""),
-                            "score": item.get("final_score", 0),
-                            "category": item.get("category", ""),
-                            "url": item.get("url", ""),
-                            "tags": item.get("tags", []) or [],
-                        }
-                        for item in items
-                    ]
-                else:
-                    logger.warning(f"API 返回错误：{data.get('msg', 'unknown error')}")
-                    return []
+                # 兼容两种格式
+                items = data.get("items", [])
+                if not items and data.get("code") == 0:
+                    items = data.get("data", {}).get("items", [])
+                
+                logger.info(f"成功获取 {len(items)} 条行业数据")
+                return [
+                    {
+                        "id": str(item.get("id", "")),
+                        "title": item.get("title", ""),
+                        "summary": item.get("summary", ""),
+                        "source": item.get("source", ""),
+                        "published_at": item.get("publish_date", ""),
+                        "score": item.get("final_score", 0),
+                        "category": item.get("category", ""),
+                        "url": item.get("url", ""),
+                        "tags": item.get("tags", []) or [],
+                    }
+                    for item in items
+                ]
         except httpx.HTTPError as e:
             logger.error(f"HTTP 请求失败：{e}")
             return []
@@ -171,9 +171,13 @@ class AIPulseClient:
                 response.raise_for_status()
                 data = response.json()
                 
-                if data.get("code") == 0:
+                # 兼容两种格式，生产环境直接返回日报数据
+                if data.get("date"):
                     logger.info(f"成功获取日报：{data.get('date', 'unknown')}")
                     return data
+                elif data.get("code") == 0:
+                    logger.info(f"成功获取日报：{data.get('data', {}).get('date', 'unknown')}")
+                    return data.get("data", {})
                 else:
                     logger.warning(f"API 返回错误：{data.get('msg', 'unknown error')}")
                     return {}
