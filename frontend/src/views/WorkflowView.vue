@@ -955,41 +955,93 @@
                 
                 <!-- 预检测结果 -->
                 <div v-if="preCheckResult">
-                  <!-- 有问题需要细化 -->
-                  <div v-if="preCheckResult.issues && preCheckResult.issues.length > 0">
-                    <div style="font-weight: 600; color: #1d2129; margin-bottom: 8px"> 还需细化</div>
-                    <div style="padding-left: 16px">
-                      <div v-for="(issue, ii) in preCheckResult.issues" :key="ii" style="margin-bottom: 8px; padding: 8px; background: #fff; border-radius: 4px; border-left: 3px solid #e5e6eb">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px">
-                          <div style="display: flex; align-items: center; gap: 6px">
-                            <span :style="{ fontSize: '14px' }">{{ issue.type === 'error' ? '🔴' : issue.type === 'warning' ? '🟡' : '🟢' }}</span>
-                            <strong style="font-size: 13px">{{ issue.title }}</strong>
-                          </div>
-                          <a-tag v-if="issue.type === 'error'" size="mini" color="red">高优</a-tag>
-                          <a-tag v-else-if="issue.type === 'warning'" size="mini" color="orange">中优</a-tag>
-                          <a-tag v-else size="mini" color="green">优化</a-tag>
+                  <!-- pending状态：内容未补充，显示蓝色引导+5个灰色占位框 -->
+                  <div v-if="preCheckResult.status === 'pending'" style="margin-bottom: 8px">
+                    <a-alert type="info" style="margin-bottom: 16px">
+                      <template #title>🔵 待补充分析素材</template>
+                      <div v-for="(issue, ii) in preCheckResult.issues.filter(i => i.type === 'info')" :key="ii" style="font-size: 13px; line-height: 1.8; color: #165dff">
+                        <div style="margin-bottom: 4px">
+                          {{ issue.description }}
                         </div>
-                        <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">{{ issue.description }}</div>
-                        <div style="display: flex; gap: 4px; flex-wrap: wrap">
-                          <a-button v-if="issue.can_auto_fix" size="mini" type="outline" @click="fixIssue(ii)">
-                             AI修复
-                          </a-button>
-                          <a-button v-else size="mini" type="outline" @click="showIssueDetail(issue)">
-                            查看详情
-                          </a-button>
+                        <div v-if="issue.suggestion" style="font-size: 12px; color: #0d7ffc; padding-left: 16px">
+                          💡 {{ issue.suggestion }}
+                        </div>
+                      </div>
+                    </a-alert>
+                    
+                    <div style="margin-top: 16px">
+                      <div style="font-weight: 600; color: #86909c; margin-bottom: 12px; font-size: 13px">
+                        系统将在您补充内容后自动评估以下维度
+                      </div>
+                      <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                        <div v-for="(dim, di) in preCheckResult.pending_dimensions || []" :key="di"
+                          style="padding: 8px 14px; background: #f7f8fa; border: 1px solid #e5e6eb; border-radius: 6px; font-size: 12px; color: #86909c; display: flex; align-items: center; gap: 6px">
+                          <span style="color: #c9cdd4">⚫</span> {{ dim.dimension }}
                         </div>
                       </div>
                     </div>
                     
-                    <!-- 完整度提示（不再用红色分数） -->
-                    <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #e5e6eb; font-size: 12px; color: #86909c">
-                      内容完整度：{{ (preCheckResult.score / 100 * 100).toFixed(0) }}%（{{ preCheckResult.issues.filter(i => i.type === 'error').length }}项需优先处理）
+                    <div style="margin-top: 16px; padding-top: 12px; border-top: 1px dashed #e5e6eb; font-size: 12px; color: #86909c; display: flex; justify-content: space-between; align-items: center">
+                      <span>内容完整度：待补充</span>
+                      <a-button size="mini" type="outline" @click="runPreCheck">🔄 重新检测</a-button>
                     </div>
                   </div>
                   
-                  <!-- 没问题 -->
+                  <!-- checked状态：正常显示问题列表 -->
                   <div v-else>
-                    <a-typography-text type="success">✅ 信息充足，可直接生成提纲</a-typography-text>
+                    <!-- 有问题需要细化 -->
+                    <div v-if="preCheckResult.issues && preCheckResult.issues.length > 0">
+                      <div style="font-weight: 600; color: #1d2129; margin-bottom: 8px"> 还需细化</div>
+                      <div style="padding-left: 16px">
+                        <div v-for="(issue, ii) in preCheckResult.issues" :key="ii" style="margin-bottom: 8px; padding: 8px; background: #fff; border-radius: 4px; border-left: 3px solid #e5e6eb">
+                          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px">
+                            <div style="display: flex; align-items: center; gap: 6px">
+                              <span :style="{ fontSize: '14px' }">{{ issue.type === 'error' ? '🔴' : issue.type === 'warning' ? '🟡' : '🟢' }}</span>
+                              <strong style="font-size: 13px">{{ issue.title }}</strong>
+                            </div>
+                            <a-tag v-if="issue.type === 'error'" size="mini" color="red">高优</a-tag>
+                            <a-tag v-else-if="issue.type === 'warning'" size="mini" color="orange">中优</a-tag>
+                            <a-tag v-else size="mini" color="green">优化</a-tag>
+                          </div>
+                          <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">{{ issue.description }}</div>
+                          <div style="display: flex; gap: 4px; flex-wrap: wrap">
+                            <a-button v-if="issue.can_auto_fix" size="mini" type="outline" @click="fixIssue(ii)">
+                               AI修复
+                            </a-button>
+                            <a-button v-else size="mini" type="outline" @click="showIssueDetail(issue)">
+                              查看详情
+                            </a-button>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <!-- 完整度进度条 -->
+                      <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #e5e6eb">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
+                          <span style="font-size: 12px; color: #86909c">内容完整度</span>
+                          <span :style="{ fontSize: '13px', fontWeight: 600, color: getCompletenessColor(preCheckResult.contentCompletenessScore || preCheckResult.score) }">
+                            {{ ((preCheckResult.contentCompletenessScore || preCheckResult.score) || 0).toFixed(0) }}%
+                          </span>
+                        </div>
+                        <div style="height: 6px; background: #f2f3f5; border-radius: 3px; overflow: hidden">
+                          <div :style="{
+                            width: `${preCheckResult.contentCompletenessScore || preCheckResult.score || 0}%`,
+                            height: '100%',
+                            background: `linear-gradient(90deg, ${getCompletenessGradientColor(preCheckResult.contentCompletenessScore || preCheckResult.score)})`,
+                            borderRadius: '3px',
+                            transition: 'width 0.5s ease'
+                          }"></div>
+                        </div>
+                        <div style="font-size: 11px; color: #a0a0a0; margin-top: 4px">
+                          {{ preCheckResult.issues.filter(i => i.type === 'error').length }}项需优先处理
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <!-- 没问题 -->
+                    <div v-else>
+                      <a-typography-text type="success">✅ 信息充足，可直接生成提纲</a-typography-text>
+                    </div>
                   </div>
                 </div>
                 
@@ -2256,6 +2308,20 @@ function getIssueTagColor(type) {
   return 'red'
 }
 
+function getCompletenessColor(score) {
+  const s = Number(score) || 0
+  if (s >= 80) return '#00b42a'
+  if (s >= 50) return '#f7ba1e'
+  return '#f53f3f'
+}
+
+function getCompletenessGradientColor(score) {
+  const s = Number(score) || 0
+  if (s >= 80) return '#00b42a, #23c343'
+  if (s >= 50) return '#f7ba1e, #ffcc00'
+  return '#f53f3f, #ff6b6b'
+}
+
 function getSourceTagColor(tag) {
   switch(tag) {
     case 'anchored': return '#00b42a'
@@ -2843,12 +2909,20 @@ async function runPreCheck() {
       mcpSummary.value,
     )
     if (res.data.code === 0 && res.data.data) {
+      const d = res.data.data
       preCheckResult.value = {
-        score: res.data.data.overall_score || 0,
-        issues: (res.data.data.issues || []).filter(issue => issue.type !== 'pass'),
-        ready_for_next: res.data.data.ready_for_next || false,
+        status: d.status || 'checked',
+        score: d.overall_score || 0,
+        contentCompletenessScore: d.content_completeness_score || d.overall_score || 0,
+        issues: (d.issues || []).filter(issue => issue.type !== 'pass'),
+        pending_dimensions: d.pending_dimensions || [],
+        ready_for_next: d.ready_for_next || false,
       }
-      Message.success('预检测完成')
+      if (preCheckResult.value.status === 'pending') {
+        Message.info('请先补充分析内容')
+      } else {
+        Message.success('预检测完成')
+      }
     }
   } catch (e) {
     Message.error('预检测失败: ' + e.message)

@@ -17,7 +17,6 @@ from src.html_generator import HTMLGenerator
 from src.screenshot import ScreenshotService
 from src.local_folder_reader import LocalFolderReader
 from src.source_tag_processor import SourceTagProcessor, get_source_tag_processor
-from src.completeness_checker import CompletenessChecker, get_completeness_checker
 from src.supplement_storage import SupplementStorage, get_supplement_storage, record_session_metadata, cleanup_expired_supplements
 
 logger = logging.getLogger(__name__)
@@ -2086,11 +2085,19 @@ async def ai_generate_section(request: Dict = Body(...)):
         # P0 融合方案：缺失感知 + 降级模式 + 置信度标注
         mcp_summary = source_text[:5000] if source_text else ""
         missing_items = request.get("missing_items", [])
-        checker = get_completeness_checker()
-        completeness = checker.check(mcp_summary, missing_items)
         
-        mode_instructions = checker.get_mode_instructions(completeness.mode, completeness.missing_dimensions)
-        confidence_instructions = checker.get_confidence_instructions()
+        # 完整性评估（completeness_checker已移除，使用安全兜底）
+        completeness_score = 100 if not missing_items else max(0, 100 - len(missing_items) * 10)
+        completeness_mode = "full" if completeness_score >= 80 else ("partial" if completeness_score >= 50 else "fallback")
+        completeness_mode_label = "🟢 知识库充足" if completeness_score >= 80 else ("🟡 部分缺失" if completeness_score >= 50 else " 严重缺失")
+        mode_instructions = (
+            "模式：正常生成，充分利用知识库" if completeness_score >= 80 else
+            "模式：部分维度有缺失，请尽量基于已有信息推断，缺失维度可合理补充" if completeness_score >= 50 else
+            "模式：知识库严重不足，请输出结构化框架，不要编造案例数据"
+        )
+        confidence_instructions = (
+            "对基于已有信息的段落不额外标注，对推断部分标注 [AI推断]"
+        )
         
         prompt = f"""你是一个专业的{direction_name.replace("分析", "分析师")}。请撰写"{section_title}"这一段落的内容。
 {outline_guidance}{analysis_guidance}{mcp_guidance}
@@ -2099,8 +2106,8 @@ async def ai_generate_section(request: Dict = Body(...)):
 {existing_context}{source_context}{persona_context}
 
 【知识库完整性判定】
-完整性评分：{completeness.score}%
-当前模式：{completeness.mode_label}
+完整性评分：{completeness_score}%
+当前模式：{completeness_mode_label}
 
 【生成模式指令】
 {mode_instructions}
@@ -3989,13 +3996,58 @@ async def supplement_2(request: Dict = Body(...)):
 
 @router.post("/api/workflow/direction/check")
 async def check_direction(request: Dict = Body(...)):
-    """方向检测：检测分析内容的问题"""
+    """方向检测：检测分析内容的问题（含前置拦截）"""
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
     framework = request.get("framework", "")
     supplement_1 = request.get("supplement_1", {})
     supplement_2 = request.get("supplement_2", {})
     mcp_summary = request.get("mcp_summary", "")
+    
+    # ═══════════════════════════════════════════════════════
+    # 前置拦截：内容为空/无意义时直接返回pending，不调用LLM
+    # 避免"推荐时匹配度高，检测时全红报错"的认知矛盾
+    # ═══════════════════════════════════════════════════════
+    supplement_text = (supplement_2.get("text") or "").strip()
+    supplement_cases = supplement_2.get("cases") or supplement_2.get("data_points") or []
+    supplement_structure = supplement_2.get("structure") or supplement_2.get("framework_content") or ""
+    
+    has_meaningful_content = (
+        supplement_text or supplement_cases or supplement_structure
+    ) and len(supplement_text) > 20
+    
+    if not has_meaningful_content:
+        pending_issues = [
+            {"dimension": "方向偏离", "status": "pending"},
+            {"dimension": "案例不足", "status": "pending"},
+            {"dimension": "数据缺失", "status": "pending"},
+            {"dimension": "结构混乱", "status": "pending"},
+            {"dimension": "价值标准", "status": "pending"},
+        ]
+        return _success({
+            "status": "pending",
+            "content_completeness_score": 0,
+            "overall_score": 0,
+            "ready_for_next": False,
+            "issues": [
+                {
+                    "type": "info",
+                    "category": "pending",
+                    "title": "待补充分析素材",
+                    "description": (
+                        f"请补充与「{direction}」相关的落地素材（如目标受众画像、赛道数据、实操案例等），"
+                        f"至少包含一句完整分析（20字以上）。完成后系统将自动评估以下5个维度。"
+                    ),
+                    "suggestion": "建议至少补充1-2个实操案例或关键数据",
+                    "can_auto_fix": False
+                }
+            ],
+            "pending_dimensions": pending_issues,
+        })
+    
+    # ═══════════════════════════════════════════════════════
+    # 内容已有意义，正常调用LLM检测
+    # ═══════════════════════════════════════════════════════
     
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
@@ -4099,12 +4151,16 @@ async def check_direction(request: Dict = Body(...)):
         check_result.setdefault("issues", [])
         check_result.setdefault("overall_score", 50)
         check_result.setdefault("ready_for_next", True)
+        check_result.setdefault("content_completeness_score", check_result.get("overall_score", 0))
+        check_result.setdefault("status", "checked")
         
         return _success(check_result)
     except json.JSONDecodeError as e:
         logger.error(f"方向检测 JSON 解析失败: {e}")
         # 返回默认检测结果
         default_result = {
+            "status": "checked",
+            "content_completeness_score": 50,
             "issues": [
                 {
                     "type": "warning",
