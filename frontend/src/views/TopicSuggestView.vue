@@ -46,6 +46,11 @@
           <span>推荐写作方向（{{ topics.length }} 个）</span>
         </div>
       </template>
+      <template #extra>
+        <a-button type="text" size="small" @click="refreshTopics" :disabled="loading || topics.length === 0">
+          🔄 换一批
+        </a-button>
+      </template>
 
       <a-spin :loading="loading">
         <div v-if="topics.length" class="topic-list">
@@ -183,6 +188,45 @@ const handleNext = async () => {
     topic: topic.name,
   })
   router.push(`/workflow?${params.toString()}`)
+}
+
+// 换一批：重新推荐题材
+const refreshTopics = async () => {
+  if (loading.value || topics.value.length === 0) return
+  loading.value = true
+  try {
+    const folders = scannedFolders.value
+    const topic = route.query.topic || ''
+    const categories = route.query.categories ? JSON.parse(route.query.categories) : []
+    const timeRange = route.query.timeRange || 'all'
+    const startDate = route.query.startDate || ''
+    const endDate = route.query.endDate || ''
+
+    const res = await mcpSuggest({
+      topic,
+      folders,
+      categories,
+      time_range: timeRange,
+      start_date: startDate,
+      end_date: endDate,
+    })
+
+    if (res.data.code === 0) {
+      topics.value = res.data.data.topics || []
+      selectedTopic.value = null
+      if (topics.value.length === 0) {
+        Message.warning('暂无推荐方向，请再试一次')
+      } else {
+        Message.success(`已换一批，共 ${topics.value.length} 个方向`)
+      }
+    } else {
+      Message.error(res.data.msg || '分析失败')
+    }
+  } catch (error) {
+    Message.error('分析失败: ' + error.message)
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 

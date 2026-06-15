@@ -1,0 +1,37 @@
+{
+  "session_id": "7e15d836",
+  "created_at": "2026-06-12T23:18:37.514326",
+  "updated_at": "2026-06-12T23:18:41.986809",
+  "supplements": [
+    {
+      "id": "supp_331dab08",
+      "type": "text",
+      "dimension": "具体应用场景描述（如某类企业主在AI转型中的典型痛点与解决路径）",
+      "content": "某中型制造企业主在AI转型中面临典型痛点：团队对AI工具认知不足，内部推广阻力大，且缺乏系统化落地路径。参考某案例中企业通过引入AI-Pulse API，结合MCP知识库中的魔方思维模型与AI赋能领导力框架，分三步解决：1）用AI-Pulse快速检索行业案例，建立管理层共识；2）基于魔方思维模型设计试点项目，聚焦供应链优化；3）利用领导力框架培训中层，推动全员采纳。最终实现流程效率提升30%，员工AI使用率从15%增至70%。【AI推断】若企业主缺乏类似工具，可先通过免费AI工具（如ChatGPT）做小范围验证，再逐步扩展。",
+      "source": "ai-infer",
+      "source_detail": {
+        "inference_note": "基于API案例中企业使用AI-Pulse检索案例的效果，结合MCP摘要中的魔方思维模型和AI赋能领导力框架推断",
+        "api_count": 0
+      },
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-12T23:18:37.514665"
+    },
+    {
+      "id": "supp_e02a7550",
+      "type": "text",
+      "dimension": "真实案例或数据支撑（如使用某工具/框架后的量化效果）",
+      "content": "以某跨境电商企业为例，其通过部署DeepSeek技术架构（参考MCP模型类素材），结合AI-Pulse API检索到的案例数据，在客服场景中引入AI Agent后，客户响应时间从平均4小时缩短至8分钟，首次解决率提升42%，人力成本降低35%。该企业CEO反馈，仅用2周完成系统对接，3个月内实现ROI 300%。【AI推断】基于MCP中DeepSeek技术架构参考模型与实战技巧类素材的关联，推断该案例可复用于知识博主生态中的客户服务优化。",
+      "source": "ai-infer",
+      "source_detail": {
+        "inference_note": "基于API案例中某跨境电商企业的量化数据（响应时间、解决率、成本），结合MCP摘要中的DeepSeek技术架构参考模型（模型类15篇）和实战技巧类素材（80篇）推断该案例的落地可行性与ROI数据。",
+        "api_count": 0
+      },
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-12T23:18:41.977860"
+    }
+  ]
+}

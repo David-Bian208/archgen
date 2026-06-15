@@ -57,7 +57,7 @@ class AIPulseClient:
         logger.info(f"请求 AI-Pulse API: {url}, params={params}")
         
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=10)) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()

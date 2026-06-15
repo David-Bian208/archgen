@@ -1,0 +1,19 @@
+{
+  "session_id": "447eaec8",
+  "created_at": "2026-06-10T08:04:41.342941",
+  "updated_at": "2026-06-10T08:04:41.346248",
+  "supplements": [
+    {
+      "id": "supp_b26261d7",
+      "type": "case",
+      "dimension": "具体应用场景",
+      "content": "测试补充内容",
+      "source": "manual",
+      "source_detail": {},
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-10T08:04:41.342978"
+    }
+  ]
+}

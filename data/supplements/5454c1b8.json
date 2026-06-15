@@ -1,0 +1,21 @@
+{
+  "session_id": "5454c1b8",
+  "created_at": "2026-06-10T08:44:12.952769",
+  "updated_at": "2026-06-10T08:44:12.952812",
+  "supplements": [
+    {
+      "id": "supp_4a9308a8",
+      "type": "case",
+      "dimension": "案例",
+      "content": "某公司使用Notion AI管理项目，效率提升40%",
+      "source": "manual",
+      "source_detail": {},
+      "confirmed": false,
+      "domain_tags": [
+        "ai-efficiency"
+      ],
+      "usage_count": 0,
+      "created_at": "2026-06-10T08:44:12.952808"
+    }
+  ]
+}

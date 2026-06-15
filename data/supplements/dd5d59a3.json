@@ -1,0 +1,104 @@
+{
+  "session_id": "dd5d59a3",
+  "created_at": "2026-06-09T11:11:40.760759",
+  "updated_at": "2026-06-09T11:11:40.855595",
+  "supplements": [
+    {
+      "id": "supp_a1c5d0c8",
+      "type": "case",
+      "dimension": "paper",
+      "content": "【为生物学AI智能体铺路】\n来源：Anthropic：Research（发表成果 · 网页）\n评分：77\n摘要：一项实验让Claude、Biomni、Edison Analysis、GPT等科研智能体从病毒学数据库NCBI Virus中检索序列数据，即使最强模型也无法稳定达到可靠数据集构建所需的准确率。加入确定性检索层gget virus后，准确率接近100%。研究指出，当前生物学数据基础设施存在碎片化、格式特殊、接口不统一等问题，导致AI智能体难以像在软件领域那样高效工作。确定性检索工具是实现可靠智能体工作流的关键，生物学数据库需为智能体作为规模化用户而设计。\n链接：https://www.anthropic.com/research/agents-in-biology",
+      "source": "ai-pulse",
+      "source_detail": {
+        "title": "为生物学AI智能体铺路",
+        "source": "Anthropic：Research（发表成果 · 网页）",
+        "score": 77,
+        "url": "https://www.anthropic.com/research/agents-in-biology"
+      },
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-09T11:11:40.760803"
+    },
+    {
+      "id": "supp_a1b35df9",
+      "type": "case",
+      "dimension": "paper",
+      "content": "【Perplexity与哈佛：AI智能体提效87%降本94%】\n来源：X：Perplexity (@perplexity_ai)\n评分：60\n摘要：我们与哈佛大学发表新研究，关于从聊天界面转向像Computer这样的自主智能体的转变。\n\n超过3个月的研究结果表明，使用Computer的工人在完成任务上比仅使用搜索快87%，成本低94%，且满意度更高。\n\nhttps：//research.perplexity.ai/articles/how-ai-agents-reshape-knowledge-work\n链接：https://x.com/perplexity_ai/status/2064023455453110286",
+      "source": "ai-pulse",
+      "source_detail": {
+        "title": "Perplexity与哈佛：AI智能体提效87%降本94%",
+        "source": "X：Perplexity (@perplexity_ai)",
+        "score": 60,
+        "url": "https://x.com/perplexity_ai/status/2064023455453110286"
+      },
+      "confirmed": true,
+      "domain_tags": [
+        "社交媒体",
+        "Twitter/X"
+      ],
+      "usage_count": 0,
+      "created_at": "2026-06-09T11:11:40.787137"
+    },
+    {
+      "id": "supp_4f302c83",
+      "type": "case",
+      "dimension": "ai-products",
+      "content": "【Runway Aleph 2.0 编辑模型：一键适配任意视频格式】\n来源：X：Runway (@runwayml)\n评分：63\n摘要：一个视频，现在可以为每个信息流和格式制作。上传你现有的视频，选择你想要的宽高比，然后观看我们的编辑模型 Aleph 2.0，填充场景的其余部分，就像你从一开始就这样制作一样。\n\n在我们的桌面 Web 应用上尝试，链接如下。\n链接：https://x.com/runwayml/status/2064012425884569627",
+      "source": "ai-pulse",
+      "source_detail": {
+        "title": "Runway Aleph 2.0 编辑模型：一键适配任意视频格式",
+        "source": "X：Runway (@runwayml)",
+        "score": 63,
+        "url": "https://x.com/runwayml/status/2064012425884569627"
+      },
+      "confirmed": true,
+      "domain_tags": [
+        "社交媒体",
+        "Twitter/X"
+      ],
+      "usage_count": 0,
+      "created_at": "2026-06-09T11:11:40.803344"
+    },
+    {
+      "id": "supp_cef35409",
+      "type": "case",
+      "dimension": "tip",
+      "content": "【Hivemind推出面向AI编程智能体的持续学习功能，即日起开放】\n来源：X：Kim (@kimmonismus)\n评分：62\n摘要：Hivemind发布面向AI编程智能体的持续学习功能，即日起开放。该工具收集团队运行的每个智能体（Claude Code、Codex、Cursor、Hermes、Pi）的轨迹，转化为可复用技能并推送到所有智能体，数据存储在用户自己的云存储中。内置SkillOpt使技能持续训练：Claude Code准确率提升+19.1分，Codex提升+24.8分，在全部52个测试设置中最佳或持平。开源，一行命令安装。\n链接：https://x.com/kimmonismus/status/2064001045391462907",
+      "source": "ai-pulse",
+      "source_detail": {
+        "title": "Hivemind推出面向AI编程智能体的持续学习功能，即日起开放",
+        "source": "X：Kim (@kimmonismus)",
+        "score": 62,
+        "url": "https://x.com/kimmonismus/status/2064001045391462907"
+      },
+      "confirmed": true,
+      "domain_tags": [
+        "社交媒体",
+        "Twitter/X"
+      ],
+      "usage_count": 0,
+      "created_at": "2026-06-09T11:11:40.823797"
+    },
+    {
+      "id": "supp_823cdd99",
+      "type": "case",
+      "dimension": "ai-models",
+      "content": "【小米 MiMo-V2.5-Pro-UltraSpeed 突破 1，000 tokens/s，单台 8-GPGPU 节点运行 1T MoE 模型】\n来源：X：小米 MiMo (@XiaomiMiMo)\n评分：65\n摘要：小米 MiMo 联合 TileRT_AI 发布 MiMo-V2.5-Pro-UltraSpeed，首次在 1 万亿参数 MoE 模型上实现超过 1，000 tokens/s 输出速度，仅用单台标准 8-GPGPU 节点（非 Cerebras 或 Groq 方案）。提供限时免费聊天体验，UltraSpeed API 价格为 3 倍，输出体验提升约 10 倍。申请时间为 6 月 8 日至 23 日（PDT），企业可邮件联系 business-mimo@xiaomi.com。\n链接：https://x.com/XiaomiMiMo/status/2063993790587904362",
+      "source": "ai-pulse",
+      "source_detail": {
+        "title": "小米 MiMo-V2.5-Pro-UltraSpeed 突破 1，000 tokens/s，单台 8-GPGPU 节点运行 1T MoE 模型",
+        "source": "X：小米 MiMo (@XiaomiMiMo)",
+        "score": 65,
+        "url": "https://x.com/XiaomiMiMo/status/2063993790587904362"
+      },
+      "confirmed": true,
+      "domain_tags": [
+        "社交媒体",
+        "Twitter/X"
+      ],
+      "usage_count": 0,
+      "created_at": "2026-06-09T11:11:40.846567"
+    }
+  ]
+}

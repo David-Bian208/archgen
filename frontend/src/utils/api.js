@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000,
+  timeout: 30000,  // 30秒超时
 })
 
 export function getCategories() {
@@ -153,7 +153,7 @@ export function generateContentStructure(directionName, summary, topicNeeded = '
 }
 
 // AI 生成单个段落
-export function aiGenerateSection(directionName, sectionTitle, sectionHint, sourceText, existingSections, outline = '', analysisType = '', analysisSuggestion = '', topicNeeded = '') {
+export function aiGenerateSection(directionName, sectionTitle, sectionHint, sourceText, existingSections, outline = '', analysisType = '', analysisSuggestion = '', topicNeeded = '', sessionId = '') {
   return api.post('/content/ai_generate', {
     direction_name: directionName,
     section_title: sectionTitle,
@@ -164,6 +164,7 @@ export function aiGenerateSection(directionName, sectionTitle, sectionHint, sour
     analysis_type: analysisType,
     analysis_suggestion: analysisSuggestion,
     topic_needed: topicNeeded,
+    session_id: sessionId,
   })
 }
 
@@ -189,7 +190,7 @@ export function checkDirection(sectionTitle, sectionOutline, generatedContent) {
 }
 
 // AI 重写段落（支持用户补充指令）
-export function aiRewriteSection(directionName, sectionTitle, sectionOutline, userFeedback, sourceText, existingSections) {
+export function aiRewriteSection(directionName, sectionTitle, sectionOutline, userFeedback, sourceText, existingSections, sessionId = '') {
   return api.post('/content/ai_rewrite', {
     direction_name: directionName,
     section_title: sectionTitle,
@@ -197,15 +198,17 @@ export function aiRewriteSection(directionName, sectionTitle, sectionOutline, us
     user_feedback: userFeedback,
     source_text: sourceText,
     existing_sections: existingSections,
+    session_id: sessionId,
   })
 }
 
 // AI 一键生成全文
-export function aiGenerateFullContent(directionName, structure, sourceText) {
+export function aiGenerateFullContent(directionName, structure, sourceText, sessionId = '') {
   return api.post('/content/ai_generate_full', {
     direction_name: directionName,
     structure,
     source_text: sourceText,
+    session_id: sessionId,
   })
 }
 
@@ -286,36 +289,36 @@ export function supplementStep2(sessionId, framework, supplementInfo) {
   })
 }
 
-export function checkWorkflowDirection(sessionId, direction, framework, supplement1, supplement2, mcpSummary) {
+export function checkWorkflowDirection(sessionId, direction, framework, supplement, mcpSummary) {
   return api.post('/workflow/direction/check', {
     session_id: sessionId,
     direction,
     framework,
-    supplement_1: supplement1,
-    supplement_2: supplement2,
+    supplement_1: {},
+    supplement_2: supplement,
     mcp_summary: mcpSummary,
   })
 }
 
-export function fixWorkflowDirection(sessionId, issue, supplement1, supplement2, mcpSummary, direction, framework) {
+export function fixWorkflowDirection(sessionId, issue, supplement, mcpSummary, direction, framework) {
   return api.post('/workflow/direction/fix', {
     session_id: sessionId,
     issue,
-    supplement_1: supplement1,
-    supplement_2: supplement2,
+    supplement_1: {},
+    supplement_2: supplement,
     mcp_summary: mcpSummary,
     direction,
     framework,
   })
 }
 
-export function recommendStructures(sessionId, direction, framework, supplement1, supplement2, mcpSummary) {
+export function recommendStructures(sessionId, direction, framework, supplement, mcpSummary) {
   return api.post('/workflow/structures/recommend', {
     session_id: sessionId,
     direction,
     framework,
-    supplement_1: supplement1,
-    supplement_2: supplement2,
+    supplement_1: {},
+    supplement_2: supplement,
     mcp_summary: mcpSummary,
   })
 }
@@ -334,12 +337,93 @@ export function generateWorkflowOutline(sessionId) {
   })
 }
 
-export function aiAutoSupplement(sessionId, missingItem, mcpSummary) {
+export function generateFullArticle(sessionId, outlineSections) {
+  return api.post('/workflow/article/generate', {
+    session_id: sessionId,
+    outline_sections: outlineSections,
+  }).catch(err => {
+    console.error('文章生成API调用失败:', err)
+    throw err
+  })
+}
+
+export function aiAutoSupplement(sessionId, missingItem, mcpSummary, selectedCases = [], kbContext = '') {
   return api.post('/workflow/supplement/ai-auto', {
     session_id: sessionId,
     missing_item: missingItem,
     mcp_summary: mcpSummary,
+    selected_cases: selectedCases,
+    kb_context: kbContext,
   })
+}
+
+export function aiPulseSupplement(sessionId, missingItem, keywords) {
+  return api.post('/workflow/supplement/ai-pulse', {
+    session_id: sessionId,
+    missing_item: missingItem,
+    keywords: keywords || [],
+  })
+}
+
+export function aiInferSupplement(sessionId, missingItem, params = {}) {
+  const { cases = [], mcp_summary = '', existing_content = '' } = params
+  return api.post('/workflow/supplement/ai-infer', {
+    session_id: sessionId,
+    missing_item: missingItem,
+    mcp_summary: mcp_summary || '',
+    selected_cases: cases,
+    existing_content: existing_content || '',
+  })
+}
+
+// ===== 知识库自学习：补充内容管理 =====
+
+export function addSupplement(sessionId, supplementType, dimension, content, source = 'manual', sourceDetail = {}, domainTags = []) {
+  return api.post('/workflow/supplement/add', {
+    session_id: sessionId,
+    type: supplementType,
+    dimension,
+    content,
+    source,
+    source_detail: sourceDetail,
+    domain_tags: domainTags,
+  })
+}
+
+export function confirmSupplement(sessionId, supplementId) {
+  return api.post('/workflow/supplement/confirm', {
+    session_id: sessionId,
+    supplement_id: supplementId,
+  })
+}
+
+export function listSupplements(sessionId, confirmedOnly = false) {
+  return api.post('/workflow/supplement/list', {
+    session_id: sessionId,
+    confirmed_only: confirmedOnly,
+  })
+}
+
+export function exportSupplementsToDomain(sessionId, domainTag, supplementIds = null) {
+  return api.post('/workflow/supplement/export', {
+    session_id: sessionId,
+    domain_tag: domainTag,
+    supplement_ids: supplementIds,
+  })
+}
+
+export function recordSessionMetadata(sessionId, domainTag = '', generationMode = '', userSatisfaction = null, exportedToDomain = false) {
+  return api.post('/workflow/session/metadata', {
+    session_id: sessionId,
+    domain_tag: domainTag,
+    generation_mode: generationMode,
+    user_satisfaction: userSatisfaction,
+    exported_to_domain: exportedToDomain,
+  })
+}
+
+export function cleanupExpiredSupplements(days = 30) {
+  return api.post('/workflow/supplement/cleanup', { days })
 }
 
 // ===== P2: source_tag 硬约束 & 4 阶段 LLM Pipeline =====

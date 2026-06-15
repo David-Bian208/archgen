@@ -17,6 +17,8 @@ from src.html_generator import HTMLGenerator
 from src.screenshot import ScreenshotService
 from src.local_folder_reader import LocalFolderReader
 from src.source_tag_processor import SourceTagProcessor, get_source_tag_processor
+from src.completeness_checker import CompletenessChecker, get_completeness_checker
+from src.supplement_storage import SupplementStorage, get_supplement_storage, record_session_metadata, cleanup_expired_supplements
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +68,32 @@ async def get_kb_categories():
 
 @router.post("/api/workflow/supplement/ai-auto")
 async def ai_auto_supplement(request: Dict = Body(...)):
-    """AI 自动补充：根据缺失项描述和MCP摘要，AI自动生成补充内容"""
+    """AI 自动补充：整合 AI-Pulse API + 知识库 + 上下文
+
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "missing_item": "缺失项描述",
+        "mcp_summary": "MCP 摘要",
+        "selected_cases": [],  // 用户从 AI-Pulse 检索中勾选的案例
+        "kb_context": ""  // 知识库补充内容
+    }
+
+    返回：
+    {
+        "code": 0,
+        "data": {
+            "content": "AI 推断的补充内容",
+            "inference_note": "推断依据说明",
+            "source": "ai-pulse+kb|ai-pulse|kb|ai_inference"  // 内容来源
+        }
+    }
+    """
     session_id = request.get("session_id", "")
     missing_item = request.get("missing_item", "")
     mcp_summary = request.get("mcp_summary", "")
+    selected_cases = request.get("selected_cases", [])
+    kb_context = request.get("kb_context", "")
 
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
@@ -85,39 +109,107 @@ async def ai_auto_supplement(request: Dict = Body(...)):
     except:
         pass
 
+    # Step 1: 自动调用 AI-Pulse API 检索外部案例
+    ai_pulse_cases = []
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            # 从缺失项提取搜索关键词
+            keywords = " ".join(missing_item.replace("，", " ").replace("、", " ").split()[:5])
+            ai_pulse_url = "http://localhost:8887/api/v1/list"
+            ai_pulse_resp = await client.get(
+                ai_pulse_url,
+                params={"q": keywords, "mode": "selected", "size": 3}
+            )
+            if ai_pulse_resp.status_code == 200:
+                ai_pulse_data = ai_pulse_resp.json()
+                items = ai_pulse_data.get("items", [])
+                for item in items:
+                    ai_pulse_cases.append({
+                        "title": item.get("title", ""),
+                        "source": item.get("source", "AI-Pulse"),
+                        "summary": item.get("summary", ""),
+                        "url": item.get("url", ""),
+                        "score": item.get("final_score", 0),
+                    })
+            else:
+                logger.warning(f"AI-Pulse 检索返回非200: {ai_pulse_resp.status_code}")
+    except Exception as e:
+        logger.warning(f"AI-Pulse 检索失败: {e}")
+        ai_pulse_cases = []
+
+    # 合并用户勾选案例和 AI-Pulse 自动检索的案例
+    all_cases = selected_cases + ai_pulse_cases
+
+    # 判断内容来源
+    has_ai_pulse = len(all_cases) > 0
+    has_kb = kb_context and len(kb_context.strip()) > 0
+
+    if has_ai_pulse and has_kb:
+        content_source = "ai-pulse+kb"
+    elif has_ai_pulse:
+        content_source = "ai-pulse"
+    elif has_kb:
+        content_source = "kb"
+    else:
+        content_source = "ai_inference"
+
+    # 格式化 AI-Pulse 案例
+    cases_context = ""
+    if all_cases:
+        cases_list = "\n".join([
+            f"• 【{c.get('title', '')}】\n  来源：{c.get('source', 'AI-Pulse')}\n  摘要：{c.get('summary', '')}"
+            for c in all_cases
+        ])
+        cases_context = f"\n【AI-Pulse 检索到的相关案例】（请优先引用这些案例）\n{cases_list}"
+
+    # 格式化知识库上下文
+    kb_context_str = ""
+    if kb_context:
+        kb_context_str = f"\n【知识库补充内容】（AI生成时请优先引用以下内容）\n{kb_context}"
+
+    # 推断依据说明模板
+    source_note_map = {
+        "ai-pulse+kb": "基于 AI-Pulse 检索案例 + 知识库内容 + 上下文推理",
+        "ai-pulse": "基于 AI-Pulse 检索案例 + 上下文推理",
+        "kb": "基于知识库内容 + 上下文推理",
+        "ai_inference": "AI-Pulse 和知识库均无匹配内容，采用纯 AI 上下文推理补充",
+    }
+
     prompt = f"""你是一个内容策划专家。请根据以下信息，为指定的缺失项生成补充内容。
 
-【重要约束】
-- 你必须严格基于以下【MCP素材摘要】中的信息来生成补充内容
-- 绝对不能编造与MCP素材无关的内容
-- 如果MCP素材中确实没有足够信息，请在内容开头标注【AI推断】，并只基于常识做合理延伸
-- 生成内容必须与【缺失项】高度相关，不能跑题
+【工作流说明】
+1. 系统已通过 AI-Pulse API 自动检索到外部案例（见下方"AI-Pulse 检索案例"）
+2. 系统已加载绑定的知识库内容（见下方"知识库补充内容"）
+3. 你需要基于 MCP 摘要 + AI-Pulse 案例 + 知识库内容，做上下文推断补充
 
 【缺失项】
 {missing_item}
 
-【MCP 素材摘要】（你必须基于这些信息生成）
+【MCP 素材摘要】
 {mcp_summary}
+{cases_context}{kb_context_str}
 
 【作者身份定位】（只影响语言风格，不影响内容事实）
 {persona_summary}
 
 请为这个缺失项生成补充内容，要求：
-1. 内容必须紧扣缺失项的描述
-2. 如果MCP摘要中有相关案例/数据，优先提取和整理
-3. 如果MCP摘要中没有相关信息，基于常识做最小化的合理推断，并明确标注【AI推断】
-4. 语言风格要符合作者身份定位（简洁、实战导向）
-5. 内容要具体、可操作
+1. 优先引用 AI-Pulse 检索到的案例中的信息（如有）
+2. 其次引用知识库内容（如有）
+3. 结合 MCP 摘要中的已有信息做推断
+4. 如果 AI-Pulse 和知识库都没有足够信息，基于常识做合理推断，并在 inference_note 中标注【纯 AI 推理】
+5. 语言风格要符合作者身份定位（简洁、实战导向）
+6. 内容要具体、可操作
 
 返回 JSON 格式（不要 markdown 代码块）：
 {{
   "content": "生成的补充内容",
-  "source_note": "说明内容来源（如：'基于MCP摘要中的X内容提取'或'AI推断'）"
+  "inference_note": "说明推断依据，例如：'{source_note_map[content_source]}'"
 }}
 
 注意：
+- 必须体现 AI-Pulse 案例中的关键信息（公司名、数据、效果等）
 - 宁可内容少而精，不要编造
-- 如果完全无法基于MCP摘要生成，返回："抱歉，MCP素材中没有足够信息来补充此项。建议您手动补充或上传相关文件。"
 
 请直接返回 JSON：
 """
@@ -143,10 +235,433 @@ async def ai_auto_supplement(request: Dict = Body(...)):
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
         supplement = json_mod.loads(parsed_content)
+        
+        # 添加来源信息
+        supplement["source"] = content_source
 
         return _success(supplement)
     except Exception as e:
         logger.error(f"AI 自动补充失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/add")
+async def add_supplement(request: Dict = Body(...)):
+    """
+    添加补充内容（用户手动补充或 AI-Pulse 返回后调用）
+
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "type": "case/persona/data/framework",
+        "dimension": "案例/数据/画像/框架",
+        "content": "补充内容正文",
+        "source": "ai-pulse/manual/file",
+        "source_detail": {},  // 可选，来源详情
+        "domain_tags": [],    // 可选，领域标签
+    }
+    """
+    session_id = request.get("session_id", "")
+    if not session_id:
+        return _error(code=400, msg="缺少 session_id 参数")
+
+    try:
+        storage = get_supplement_storage(session_id)
+        supplement_id = storage.add_supplement(
+            supplement_type=request.get("type", "case"),
+            dimension=request.get("dimension", ""),
+            content=request.get("content", ""),
+            source=request.get("source", "manual"),
+            source_detail=request.get("source_detail", {}),
+            domain_tags=request.get("domain_tags", []),
+        )
+        return _success({"supplement_id": supplement_id})
+    except Exception as e:
+        logger.error(f"添加补充内容失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/confirm")
+async def confirm_supplement(request: Dict = Body(...)):
+    """
+    确认补充内容（标记为 confirmed，LLM 将能感知到）
+
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "supplement_id": "supp_xxx",
+    }
+    """
+    session_id = request.get("session_id", "")
+    supplement_id = request.get("supplement_id", "")
+    if not session_id or not supplement_id:
+        return _error(code=400, msg="缺少 session_id 或 supplement_id 参数")
+
+    try:
+        storage = get_supplement_storage(session_id)
+        success = storage.confirm_supplement(supplement_id)
+        if success:
+            return _success({"message": "已确认"})
+        return _error(code=404, msg="补充内容不存在")
+    except Exception as e:
+        logger.error(f"确认补充内容失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/list")
+async def list_supplements(request: Dict = Body(...)):
+    """
+    获取当前 Session 所有补充内容
+
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "confirmed_only": false,  // 可选，默认返回全部
+    }
+    """
+    session_id = request.get("session_id", "")
+    if not session_id:
+        return _error(code=400, msg="缺少 session_id 参数")
+
+    try:
+        storage = get_supplement_storage(session_id)
+        confirmed_only = request.get("confirmed_only", False)
+        supplements = storage.get_all(confirmed_only=confirmed_only)
+        stats = storage.get_stats()
+        return _success({"supplements": supplements, "stats": stats})
+    except Exception as e:
+        logger.error(f"获取补充内容列表失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/export")
+async def export_supplements_to_domain(request: Dict = Body(...)):
+    """
+    导出 Session 补充内容到领域知识库（P1 预留接口）
+
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "domain_tag": "ai-efficiency",
+        "supplement_ids": [],  // 可选，导出指定的（None = 导出全部已确认的）
+    }
+    """
+    session_id = request.get("session_id", "")
+    domain_tag = request.get("domain_tag", "")
+    if not session_id or not domain_tag:
+        return _error(code=400, msg="缺少 session_id 或 domain_tag 参数")
+
+    try:
+        storage = get_supplement_storage(session_id)
+        supplement_ids = request.get("supplement_ids", None)
+        result = storage.export_to_domain(domain_tag, supplement_ids)
+        return _success(result)
+    except Exception as e:
+        logger.error(f"导出到领域库失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/session/metadata")
+async def record_metadata(request: Dict = Body(...)):
+    """
+    记录项目元数据（埋点）
+
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "domain_tag": "ai-efficiency",
+        "generation_mode": "standard",
+        "user_satisfaction": 5,  // 可选，1-5 星
+        "exported_to_domain": false,
+    }
+    """
+    session_id = request.get("session_id", "")
+    if not session_id:
+        return _error(code=400, msg="缺少 session_id 参数")
+
+    try:
+        metadata = record_session_metadata(
+            session_id=session_id,
+            domain_tag=request.get("domain_tag", ""),
+            generation_mode=request.get("generation_mode", ""),
+            user_satisfaction=request.get("user_satisfaction"),
+            exported_to_domain=request.get("exported_to_domain", False),
+        )
+        return _success(metadata)
+    except Exception as e:
+        logger.error(f"记录元数据失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/cleanup")
+async def run_cleanup(request: Dict = Body(default={})):
+    """
+    清理过期的 Session 补充数据
+
+    请求体：
+    {
+        "days": 30,  // 保留天数，默认 30
+    }
+    """
+    try:
+        days = request.get("days", 30)
+        result = cleanup_expired_supplements(days)
+        return _success(result)
+    except Exception as e:
+        logger.error(f"清理过期数据失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/supplement/ai-pulse")
+async def ai_pulse_supplement(request: Dict = Body(...)):
+    """
+    AI-Pulse 补充：调用 AI-Pulse API 获取行业案例补充内容
+    
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "missing_item": "缺失项描述",
+        "keywords": ["关键词1", "关键词2"]  // 可选，默认从 missing_item 提取
+    }
+    """
+    from src.ai_pulse_client import AIPulseClient
+    
+    session_id = request.get("session_id", "")
+    missing_item = request.get("missing_item", "")
+    keywords = request.get("keywords", [])
+    
+    if not missing_item:
+        return _error(code=400, msg="缺少 missing_item 参数")
+    
+    # 如果没有关键词，从缺失项描述中提取
+    if not keywords:
+        # 简单分词（实际可用 LLM 提取关键词）
+        keywords = [missing_item[:20]]
+    
+    ai_pulse_config = _get_config("ai_pulse")
+    if not ai_pulse_config.get("enabled", False):
+        return _success({
+            "cases": [],
+            "message": "AI-Pulse 服务未启用，请手动补充",
+        })
+    
+    try:
+        import httpx
+        client = AIPulseClient(
+            base_url=ai_pulse_config.get("base_url", "http://8.130.148.166:8887"),
+            timeout=ai_pulse_config.get("timeout", 5),  # 降低超时到5秒
+        )
+        
+        # 第1次：用用户提供的关键词搜索
+        cases = await client.fetch_latest_cases(
+            keywords=keywords,
+            days=7,
+            take=5,
+        )
+        
+        if not cases:
+            # 第2次：用缺失项描述的前半部分搜索
+            shorter_kw = [missing_item[:10]]
+            cases = await client.fetch_latest_cases(
+                keywords=shorter_kw,
+                days=7,
+                take=5,
+            )
+        
+        if not cases:
+            # 第3次：空关键词，获取热门案例
+            cases = await client.fetch_latest_cases(
+                keywords=[],
+                days=7,
+                take=5,
+            )
+        
+        if not cases:
+            return _success({
+                "cases": [],
+                "message": "未找到相关案例，请尝试手动补充",
+            })
+        
+        # 格式化案例数据
+        formatted_cases = []
+        for case in cases:
+            formatted_cases.append({
+                "id": case.get("id", ""),
+                "title": case.get("title", ""),
+                "summary": case.get("summary", ""),
+                "source": case.get("source", ""),
+                "published_at": case.get("published_at", ""),
+                "score": case.get("score", 0),
+                "category": case.get("category", ""),
+                "url": case.get("url", ""),
+                "tags": case.get("tags", []),
+            })
+        
+        return _success({
+            "cases": formatted_cases,
+            "total": len(formatted_cases),
+            "keywords": keywords,
+        })
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadTimeout) as e:
+        logger.warning(f"AI-Pulse 服务超时: {e}")
+        return _success({
+            "cases": [],
+            "message": "AI-Pulse 服务暂不可用，请尝试手动补充",
+        })
+    except Exception as e:
+        logger.error(f"AI-Pulse 补充失败: {e}")
+        return _success({
+            "cases": [],
+            "message": f"AI-Pulse 检索异常: {str(e)[:100]}",
+        })
+
+
+@router.post("/api/workflow/supplement/ai-infer")
+async def ai_infer_supplement(request: Dict = Body(...)):
+    """
+    AI 推断补充：基于已有案例/内容进行推断生成
+    支持多种场景：
+    1. API案例+MCP推断
+    2. 已有内容优化建议
+    3. 纯MCP推断
+    
+    请求体：
+    {
+        "session_id": "会话 ID",
+        "missing_item": "缺失项描述",
+        "mcp_summary": "MCP 摘要",
+        "selected_cases": [...],  // API 检索案例
+        "existing_content": "已有补充内容"  // 可选，用于优化建议场景
+    }
+    """
+    session_id = request.get("session_id", "")
+    missing_item = request.get("missing_item", "")
+    mcp_summary = request.get("mcp_summary", "")
+    selected_cases = request.get("selected_cases", [])
+    existing_content = request.get("existing_content", "")
+    
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "deepseek-chat")
+    timeout = llm_config.get("timeout", 60)
+    
+    persona_summary = ""
+    try:
+        persona_parsed = _get_persona_parsed()
+        if persona_parsed:
+            persona_summary = persona_parsed.get("summary", "")
+    except:
+        pass
+    
+    cases_context = ""
+    if selected_cases:
+        cases_list = "\n".join([
+            f"• 【{c.get('title', '')}】\n  来源：{c.get('source', '')}\n  摘要：{c.get('summary', '')}"
+            for c in selected_cases
+        ])
+        cases_context = f"\n【API 检索到的相关案例】\n{cases_list}"
+    
+    existing_context = ""
+    if existing_content:
+        existing_context = f"\n【已有补充内容】（请在此基础上优化）\n{existing_content}"
+    
+    if existing_content:
+        prompt = f"""你是一个内容策划专家。请基于以下信息，为指定缺失项提供优化建议。
+
+【缺失项】
+{missing_item}
+
+【MCP 素材摘要】
+{mcp_summary}
+{cases_context}
+{existing_context}
+
+【作者身份定位】
+{persona_summary}
+
+请提供优化建议：
+1. 指出已有内容的不足之处
+2. 补充具体数据、案例或信息
+3. 优化语言结构和表达
+4. 确保内容可操作、有说服力
+
+返回 JSON 格式：
+{{
+  "content": "优化后的完整内容",
+  "inference_note": "说明优化要点"
+}}
+
+注意：
+- 保留原有内容中有价值的部分
+- 补充具体、可操作的信息
+- 宁可内容少而精，不要编造
+
+请直接返回 JSON：
+"""
+    else:
+        prompt = f"""你是一个内容策划专家。请根据以下信息，为指定的缺失项生成补充内容。
+
+【工作流说明】
+1. 用户已通过 AI-Pulse API 检索到外部案例（见下方"API 检索案例"）
+2. 用户已勾选了需要的案例
+3. 你需要基于 MCP 摘要 + 用户勾选的 API 案例，做上下文推断补充
+
+【缺失项】
+{missing_item}
+
+【MCP 素材摘要】
+{mcp_summary}
+{cases_context}
+
+【作者身份定位】（只影响语言风格，不影响内容事实）
+{persona_summary}
+
+请为这个缺失项生成补充内容，要求：
+1. 优先引用 API 案例中的信息
+2. 结合 MCP 摘要中的已有信息做推断
+3. 如果 API 案例和 MCP 中都没有足够信息，基于常识做合理推断，并标注【AI 推断】
+4. 语言风格要符合作者身份定位（简洁、实战导向）
+5. 内容要具体、可操作
+
+返回 JSON 格式（不要 markdown 代码块）：
+{{
+  "content": "生成的补充内容",
+  "inference_note": "说明推断依据，例如：'基于 API 案例 X + MCP 中的 Y 推断'"
+}}
+
+注意：
+- 必须体现 API 案例中的关键信息（公司名、数据、效果等）
+- 宁可内容少而精，不要编造
+
+请直接返回 JSON：
+"""
+    
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 2048,
+                    "temperature": 0.3,
+                    "seed": 42,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        
+        parsed_content = result["choices"][0]["message"]["content"].strip()
+        parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
+        import json as json_mod
+        supplement = json_mod.loads(parsed_content)
+        
+        return _success(supplement)
+    except Exception as e:
+        logger.error(f"AI 推断失败: {e}")
         return _error(msg=str(e))
 
 
@@ -1516,6 +2031,16 @@ async def ai_generate_section(request: Dict = Body(...)):
         
         source_context = f"\n\n参考资料（MCP 检索总结）：\n{source_text[:5000]}" if source_text else ""
         
+        # 知识库自学习：合并已确认的补充内容到上下文
+        session_id = request.get("session_id", "")
+        if session_id:
+            try:
+                supp_storage = get_supplement_storage(session_id)
+                source_text_for_llm = supp_storage.merge_to_mcp(source_text[:5000])
+                source_context = f"\n\n参考资料（MCP 检索总结 + 用户补充）：\n{source_text_for_llm}" if source_text_for_llm else ""
+            except Exception as e:
+                logger.warning(f"合并补充内容失败: {e}")
+        
         # 获取身份定位文件内容（如果存在）
         persona_content = _get_persona_summary()
         persona_context = f"\n\n作者身份定位：\n{persona_content}" if persona_content else ""
@@ -1558,11 +2083,38 @@ async def ai_generate_section(request: Dict = Body(...)):
 请严格按照上述提纲撰写，确保内容方向与提纲一致。
 """
         
+        # P0 融合方案：缺失感知 + 降级模式 + 置信度标注
+        mcp_summary = source_text[:5000] if source_text else ""
+        missing_items = request.get("missing_items", [])
+        checker = get_completeness_checker()
+        completeness = checker.check(mcp_summary, missing_items)
+        
+        mode_instructions = checker.get_mode_instructions(completeness.mode, completeness.missing_dimensions)
+        confidence_instructions = checker.get_confidence_instructions()
+        
         prompt = f"""你是一个专业的{direction_name.replace("分析", "分析师")}。请撰写"{section_title}"这一段落的内容。
 {outline_guidance}{analysis_guidance}{mcp_guidance}
 【基础写作要求】
 {section_hint}
 {existing_context}{source_context}{persona_context}
+
+【知识库完整性判定】
+完整性评分：{completeness.score}%
+当前模式：{completeness.mode_label}
+
+【生成模式指令】
+{mode_instructions}
+
+【置信度标注要求】
+{confidence_instructions}
+
+【补充知识库使用要求】
+⚠️ 重要：如果"参考资料"中包含【用户补充的知识库】部分，你必须：
+1. 仔细阅读补充的知识内容（案例、数据、画像等）
+2. 在撰写正文时，优先引用和融入这些补充内容
+3. 补充内容应作为论据支撑你的观点，而非简单罗列
+4. 引用补充案例时，保持案例的核心信息（公司名、数据、效果）不变
+5. 如果补充知识库为空，则基于 MCP 原始摘要撰写
 
 【内容比例要求】
 - 理论内容≤20%，实战内容≥80%
@@ -1574,17 +2126,21 @@ async def ai_generate_section(request: Dict = Body(...)):
 - 如果内容基于逻辑推演/行业知识，在段落开头标注 ⚠️ [AI 推断]
 - 如果内容来自用户手动补充，在段落末尾标注 [来源：用户补充]
 
+【底线原则】
+严禁编造案例细节或用户数据。如果信息极度匮乏，输出一个待填充的结构化框架优于输出一篇空洞的文章。
+
 要求：
 1. 严格按照【本段写作提纲】撰写（如果有）
 2. 根据【原文充足性指导】决定原文使用程度
 3. 如果【MCP 分析建议补充】提到需要补充某内容，请在本段体现
 4. 内容专业、准确，有逻辑性
-5. 适当引用参考资料中的信息
+5. 适当引用参考资料中的信息（特别是补充知识库中的案例和数据）
 6. 使用 Markdown 格式
 7. 语言风格要符合作者的身份定位
 8. 不要编造参考资料中没有的内容（原文充足时）
 9. 如果案例/素材不足，使用【案例占位符】格式标注：[📌 待补充案例：xxx 类型的实际案例]
-10. 直接输出该段落的内容，不要输出"好的"、"以下是"等多余话语
+10. 每个结论标注置信等级（✅/⚠️/❓）
+11. 直接输出该段落的内容，不要输出"好的"、"以下是"等多余话语
 
 请撰写该段落内容：
 """
@@ -1617,6 +2173,14 @@ async def ai_generate_section(request: Dict = Body(...)):
             "source_tag": processed.source_tag,
             "is_valid": processed.is_valid,
             "warning": processed.warning,
+            # P0 融合方案：返回完整性信息
+            "completeness": {
+                "score": completeness.score,
+                "mode": completeness.mode,
+                "mode_label": completeness.mode_label,
+                "missing_dimensions": completeness.missing_dimensions,
+                "suggestions": completeness.suggestions,
+            },
         })
         
     except Exception as e:
@@ -1764,6 +2328,16 @@ async def ai_generate_full_content(request: Dict = Body(...)):
         }
         
         source_context = f"\n\n参考资料（MCP 检索总结）：\n{source_text[:5000]}" if source_text else ""
+        
+        # 知识库自学习：合并已确认的补充内容到上下文
+        session_id = request.get("session_id", "")
+        if session_id:
+            try:
+                supp_storage = get_supplement_storage(session_id)
+                source_text_for_llm = supp_storage.merge_to_mcp(source_text[:5000])
+                source_context = f"\n\n参考资料（MCP 检索总结 + 用户补充）：\n{source_text_for_llm}" if source_text_for_llm else ""
+            except Exception as e:
+                logger.warning(f"合并补充内容失败: {e}")
         
         # 获取身份定位文件内容（如果存在）
         persona_content = _get_persona_summary()
@@ -3074,7 +3648,8 @@ async def evaluate_completeness(request: Dict = Body(...)):
     
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        logger.info(f"开始评估完整度, session: {session_id}")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client:
             response = await client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -3097,6 +3672,7 @@ async def evaluate_completeness(request: Dict = Body(...)):
         session["completeness"] = evaluation.get("completeness", 0)
         session["supplement_count"] = evaluation.get("supplement_count", 3)
         
+        logger.info(f"评估完成: completeness={session['completeness']}")
         return _success(evaluation)
     except Exception as e:
         logger.error(f"完整度评估失败: {e}")
@@ -3211,11 +3787,17 @@ async def supplement_1(request: Dict = Body(...)):
 
 @router.post("/api/workflow/frameworks/match")
 async def match_frameworks_v2(request: Dict = Body(...)):
-    """推荐分析框架"""
+    """推荐分析框架(v2: 双评分+降级兜底+业务化warning)"""
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
     supplement_1 = request.get("supplement_1", {})
     mcp_summary = request.get("mcp_summary", "")
+    
+    if not direction or len(direction.strip()) < 8:
+        return _error(
+            code=400,
+            msg="方向描述过于模糊,请补充至少一个具体场景或受众(如'AI在中小企业财务自动化中的应用')",
+        )
     
     session = _get_session(session_id)
     
@@ -3225,21 +3807,26 @@ async def match_frameworks_v2(request: Dict = Body(...)):
     model = llm_config.get("model", "deepseek-chat")
     timeout = llm_config.get("timeout", 60)
     
+    fw_config = _get_config("framework_recommendation") or {}
+    PREMIUM_THRESHOLD = float(fw_config.get("alignment_threshold_premium", 0.7))
+    FALLBACK_THRESHOLD = float(fw_config.get("alignment_threshold_fallback", 0.6))
+    
     persona_summary = ""
+    persona_filter = ""
     try:
         persona_parsed = _get_persona_parsed()
         if persona_parsed:
             persona_summary = persona_parsed.get("summary", "")
             persona_filter = persona_parsed.get("filter", "")
     except:
-        persona_filter = ""
+        pass
     
-    prompt = f"""你是一个内容策划专家。请基于以下信息，推荐3个分析框架。
+    prompt = f"""你是一个内容策划专家。请基于以下信息，**严格围绕"选定方向"**推荐3个分析框架。
 
 【MCP 素材摘要】
 {mcp_summary}
 
-【选定方向】
+【选定方向】（这是用户已经确定的写作方向，框架必须服务于这个方向）
 {direction}
 
 【第1次补充信息】
@@ -3248,20 +3835,33 @@ async def match_frameworks_v2(request: Dict = Body(...)):
 【作者认知过滤】
 {persona_filter}
 
-请推荐3个分析框架，每个框架包含：
-1. 框架名称
-2. 框架描述
-3. 匹配度（0-1）
-4. 适合的原因
-5. 使用该框架还需要补充的信息
+═══════════ 强制规则（必须严格执行）═══════════
+1. 每个推荐框架必须能直接服务于「{direction}」这个具体方向
+2. 严禁推荐与方向核心场景脱节的通用框架
+   - 反面示例：方向是"个人IP构建"，却推荐"领导力框架"（适用于组织管理，不适合个人IP）
+   - 反面示例：方向是"AI降本增效"，却推荐"组织变革框架"（脱离技术落地场景）
+3. 必须在 reason 中明确写出"框架的每个维度如何对应方向的关键问题"
+4. 必须输出 direction_alignment_score（方向对齐度，0-1），评分标准:
+   - ≥0.8: 优秀(框架核心维度与方向高度契合)
+   - 0.7-0.8: 良好(大部分维度贴合,可推荐)
+   - 0.6-0.7: 勉强(需要转化使用,要在 warning 中说明)
+   - <0.6: 不适用(请勿推荐,换更契合的框架)
+5. 如果实在找不到3个对齐度≥0.6的框架，宁可只返回1-2个，也不要凑数
+6. warning 字段必须用"业务视角"(站在决策者角度),不要用技术视角
+   - ✅ 正确: "⚠️ 风险提示:该框架偏向组织管理,若用于个人IP构建需自行转化语境,建议优先参考前两项"
+   - ❌ 错误: "该框架原用于管理者对下属的辅导..."(技术视角)
 
-返回 JSON 格式（不要 markdown 代码块），按匹配度降序排列：
+返回 JSON 格式（不要 markdown 代码块），按 direction_alignment_score 降序排列：
 [
   {{
     "name": "框架名称",
-    "description": "框架描述",
+    "description": "框架描述（1-2句话）",
     "match_score": 0.9,
-    "reason": "为什么适合",
+    "direction_alignment_score": 0.95,
+    "direction_alignment_reason": "该框架的XX维度对应方向的YY关键问题，ZZ维度对应...",
+    "reason": "为什么适合（具体到方向场景，不要泛泛而谈）",
+    "warning": "如果对齐度<0.8，写明业务视角的潜在风险；否则留空字符串",
+    "framework_origin": "管理学/营销学/心理学/经济学/技术架构/内容创作 等学科归属",
     "needs_supplement": ["需要补充的信息1", "需要补充的信息2"]
   }}
 ]
@@ -3288,10 +3888,84 @@ async def match_frameworks_v2(request: Dict = Body(...)):
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
-        import json as json_mod
-        frameworks = json_mod.loads(parsed_content)
+        frameworks = json.loads(parsed_content)
         
-        return _success(frameworks)
+        if not isinstance(frameworks, list):
+            frameworks = [frameworks]
+        
+        for fw in frameworks:
+            fw.setdefault("name", "未知框架")
+            fw.setdefault("description", "")
+            fw.setdefault("match_score", 0.5)
+            fw.setdefault("direction_alignment_score", fw.get("match_score", 0.5))
+            fw.setdefault("direction_alignment_reason", "")
+            fw.setdefault("reason", "")
+            fw.setdefault("warning", "")
+            fw.setdefault("framework_origin", "")
+            fw.setdefault("needs_supplement", [])
+            try:
+                align = float(fw.get("direction_alignment_score") or 0)
+            except (TypeError, ValueError):
+                align = 0.0
+                fw["direction_alignment_score"] = 0.0
+            if align < PREMIUM_THRESHOLD and not fw.get("warning"):
+                fw["warning"] = (
+                    f"⚠️ 风险提示：该框架方向对齐度仅 {align*100:.0f}%，"
+                    f"用于「{direction}」需要自行转化语境，建议优先参考排名靠前的框架"
+                )
+        
+        frameworks = [f for f in frameworks if float(f.get("direction_alignment_score") or 0) >= FALLBACK_THRESHOLD]
+        frameworks.sort(key=lambda f: float(f.get("direction_alignment_score") or 0), reverse=True)
+        
+        if not frameworks:
+            logger.warning(f"框架推荐: 所有候选对齐度均<{FALLBACK_THRESHOLD},方向='{direction}'")
+            return _success({
+                "frameworks": [],
+                "mode": "rejected",
+                "banner": (
+                    f"❌ 无法为「{direction}」推荐合适的框架。"
+                    f"可能原因:方向描述过于宽泛或专业领域稀少。"
+                    f"建议:补充1-2个具体场景或受众,如'AI在XX行业的YY应用',再重新推荐。"
+                ),
+            })
+        
+        max_align = max(float(f.get("direction_alignment_score") or 0) for f in frameworks)
+        if max_align < PREMIUM_THRESHOLD:
+            logger.warning(f"框架推荐降级模式: 最高对齐度{max_align:.2f}<{PREMIUM_THRESHOLD}, 方向='{direction}'")
+            return _success({
+                "frameworks": frameworks,
+                "mode": "fallback",
+                "banner": (
+                    f"⚠️ 当前方向「{direction}」较为冷门,以下框架对齐度有限"
+                    f"(最高{max_align*100:.0f}%),建议人工评估或补充更具体的场景描述。"
+                ),
+            })
+        
+        return _success({
+            "frameworks": frameworks,
+            "mode": "premium",
+            "banner": "",
+        })
+    except json.JSONDecodeError as e:
+        logger.error(f"框架推荐 JSON 解析失败: {e}")
+        default_frameworks = [
+            {
+                "name": "SWOT 分析",
+                "description": "从优势、劣势、机会、威胁四个维度进行分析",
+                "match_score": 0.7,
+                "direction_alignment_score": 0.65,
+                "direction_alignment_reason": "通用分析框架,可灵活应用于多种方向,但需要根据方向自行映射四个维度",
+                "reason": "通用分析框架，适合大多数场景",
+                "warning": "⚠️ 风险提示:这是兜底返回的通用框架,可能未充分契合您的具体方向,建议重新生成或人工评估",
+                "framework_origin": "战略管理学",
+                "needs_supplement": ["具体案例数据"]
+            },
+        ]
+        return _success({
+            "frameworks": default_frameworks,
+            "mode": "fallback",
+            "banner": "⚠️ AI推荐解析异常,以下为通用兜底框架,建议点击'重新推荐'获取定制方案",
+        })
     except Exception as e:
         logger.error(f"框架推荐失败: {e}")
         return _error(msg=str(e))
@@ -3330,6 +4004,8 @@ async def check_direction(request: Dict = Body(...)):
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
+    persona_voice = {}
+    persona_value = {}
     try:
         persona_parsed = _get_persona_parsed()
         if persona_parsed:
@@ -3337,8 +4013,12 @@ async def check_direction(request: Dict = Body(...)):
             persona_voice = persona_parsed.get("voice", {})
             persona_value = persona_parsed.get("value", {})
     except:
-        persona_voice = {}
-        persona_value = {}
+        pass
+    
+    # 合并结构化字段和自由文本，让 LLM 能正确评估
+    supplement_2_display = json.dumps(supplement_2, ensure_ascii=False, indent=2)
+    if supplement_2.get("text"):
+        supplement_2_display += f"\n\n【补充文本（自由输入内容）】\n{supplement_2['text']}"
     
     prompt = f"""你是一个内容质量检查专家。请检测以下分析内容是否存在问题。
 
@@ -3352,7 +4032,7 @@ async def check_direction(request: Dict = Body(...)):
 {json.dumps(supplement_1, ensure_ascii=False, indent=2)}
 
 【第2次补充信息】
-{json.dumps(supplement_2, ensure_ascii=False, indent=2)}
+{supplement_2_display}
 
 【作者表达范式】
 {json.dumps(persona_voice, ensure_ascii=False)}
@@ -3366,6 +4046,8 @@ async def check_direction(request: Dict = Body(...)):
 3. 数据缺失：是否缺少关键数据支撑？
 4. 结构混乱：分析结构是否清晰？
 5. 价值标准：是否符合"可落地实操"的要求？
+
+注意：第2次补充信息中的"补充文本（自由输入内容）"也是有效的分析内容，请将其视为已补充的内容进行评估。如果用户已提供了补充文本，不应再将其列为缺失项。
 
 返回 JSON 格式（不要 markdown 代码块）：
 {{
@@ -3411,10 +4093,32 @@ async def check_direction(request: Dict = Body(...)):
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
-        import json as json_mod
-        check_result = json_mod.loads(parsed_content)
+        check_result = json.loads(parsed_content)
+        
+        # 验证返回格式
+        check_result.setdefault("issues", [])
+        check_result.setdefault("overall_score", 50)
+        check_result.setdefault("ready_for_next", True)
         
         return _success(check_result)
+    except json.JSONDecodeError as e:
+        logger.error(f"方向检测 JSON 解析失败: {e}")
+        # 返回默认检测结果
+        default_result = {
+            "issues": [
+                {
+                    "type": "warning",
+                    "category": "cases",
+                    "title": "案例数量不足",
+                    "description": "建议至少2-3个具体案例",
+                    "suggestion": "补充更多实战案例",
+                    "can_auto_fix": False
+                }
+            ],
+            "overall_score": 60,
+            "ready_for_next": True
+        }
+        return _success(default_result)
     except Exception as e:
         logger.error(f"方向检测失败: {e}")
         return _error(msg=str(e))
@@ -3542,7 +4246,9 @@ async def recommend_structures(request: Dict = Body(...)):
     except:
         pass
     
-    prompt = f"""你是一个内容结构专家。请基于以下信息，推荐2-3个内容结构方案。
+    prompt = f"""你是一个内容结构专家。请基于以下信息，推荐2-3个文章叙事结构方案。
+
+注意：你推荐的是「文章叙事结构」（文章段落如何组织），不是「分析框架」。分析框架已由用户选定（见下方），请基于该框架，推荐适合的叙事结构。
 
 【MCP 素材摘要】
 {mcp_summary}
@@ -3556,17 +4262,25 @@ async def recommend_structures(request: Dict = Body(...)):
 【作者身份定位】{persona_summary}
 【作者表达范式】{json.dumps(persona_voice, ensure_ascii=False)}
 
-请推荐2-3个内容结构方案，每个方案包含：
-1. 结构名称
-2. 结构描述
+叙事结构示例（不是分析框架，而是文章组织方式）：
+- 问题→拆解→方案（递进式）
+- 现象→本质→启示（剖析式）
+- 故事→洞察→行动（场景化）
+- 对比→分析→结论（对比式）
+- 时间线→里程碑→展望（演进式）
+- 总→分→总（总分式）
+
+请推荐2-3个叙事结构方案，每个方案包含：
+1. 结构名称（叙事结构名，如"递进式"、"剖析式"等，不要重复分析框架的名称）
+2. 结构描述（这个叙事结构如何组织文章段落）
 3. 匹配度
-4. 适用原因
+4. 适用原因（为什么这个叙事结构适合这个方向+框架）
 5. 使用该结构还需要补充的信息（主要是案例/数据）
 
 返回 JSON 格式（不要 markdown 代码块）：
 [
   {{
-    "name": "结构名称",
+    "name": "叙事结构名称",
     "description": "结构描述",
     "match_score": 0.9,
     "reason": "为什么适合",
@@ -3653,7 +4367,38 @@ async def generate_outline_v2(request: Dict = Body(...)):
     except:
         pass
     
-    prompt = f"""你是一个写作提纲生成专家。请基于以下所有信息，生成详细的写作提纲。
+    # 具名骨架定义（固定 5 段式：痛点→拆解→方案）
+    SKELETON_TEMPLATE = {
+        "hook": {
+            "label": "引言（痛点切入）",
+            "description": "用可量化的痛点/场景引入，避免泛化描述",
+        },
+        "problem": {
+            "label": "核心问题",
+            "description": "拆解痛点的核心成因（2-3个）",
+        },
+        "breakdown": {
+            "label": "维度拆解",
+            "description": "按可落地的维度拆解解决路径（3-5个）",
+        },
+        "solution": {
+            "label": "落地方案",
+            "description": "对应每个维度的具体操作步骤/工具/配置",
+        },
+        "action": {
+            "label": "行动建议",
+            "description": "可立即执行的下一步动作（可量化）",
+        },
+    }
+
+    prompt = f"""你是一个写作提纲生成专家。请基于以下所有信息，按「痛点→拆解→方案」骨架生成详细的写作提纲。
+
+【骨架定义】（5 个固定 section，不能增减或改名）
+1. hook（引言）：用可量化的痛点/场景切入，禁止泛化描述
+2. problem（核心问题）：拆解痛点的 2-3 个核心成因
+3. breakdown（维度拆解）：按可落地的维度拆解解决路径（3-5个）
+4. solution（落地方案）：对应每个维度的具体操作步骤/工具/配置
+5. action（行动建议）：可立即执行的下一步动作（可量化）
 
 【MCP 素材摘要】
 {mcp_summary}
@@ -3680,35 +4425,58 @@ async def generate_outline_v2(request: Dict = Body(...)):
 【作者表达范式】
 {json.dumps(persona_voice, ensure_ascii=False)}
 
-请生成详细的写作提纲，包含：
-1. 每个段落的标题
-2. 段落内容要点
-3. 该段落需要的素材（标记已有/缺失）
-4. 段落之间的逻辑衔接
-
-返回 JSON 格式（不要 markdown 代码块）：
+请生成详细的写作提纲，返回 JSON 格式（不要 markdown 代码块）：
 {{
   "title": "文章标题建议",
-  "sections": [
-    {{
+  "direction_alignment_score": 0.95,
+  "direction_alignment_reason": "全文如何紧扣方向「{direction}」,关键章节如何对应方向核心问题",
+  "sections": {{
+    "hook": {{
       "title": "段落标题",
+      "content": "该段落的核心内容概要（2-3句话）",
+      "source_tag": "anchored 或 derived 或 missing",
       "key_points": ["要点1", "要点2"],
-      "materials": {{
-        "has": ["已有素材1"],
-        "needs": ["需要素材1"]
-      }},
       "word_count_estimate": 300
+    }},
+    "problem": {{ ... 同上结构 ... }},
+    "breakdown": {{ ... 同上结构 ... }},
+    "solution": {{ ... 同上结构 ... }},
+    "action": {{ ... 同上结构 ... }}
+  }},
+  "missing_items": [
+    {{
+      "field": "缺失的素材/数据/案例名称",
+      "fill_guidance": "给用户的补充建议（具体可操作，不要泛泛而谈）"
     }}
   ],
-  "total_sections": 段落数量,
   "estimated_total_words": 总字数估算
 }}
 
-注意：
-- 引言和结论各占1个段落
-- 核心内容段落根据框架确定数量
-- 确保理论≤20%，实战≥80%
-- 每个核心段落都应该有案例支撑
+═══════════ 强制规则（必须严格执行）═══════════
+1. 每个 section 必须紧扣方向「{direction}」,严禁跑题
+   - 反面示例：方向是"AI降本增效"，提纲却写"AI技术发展史"（脱离落地场景）
+   - 反面示例：方向是"个人IP构建"，提纲却写"团队管理方法"（脱离个人场景）
+2. direction_alignment_score 评分标准:
+   - ≥0.8: 优秀(全部 section 紧扣方向)
+   - 0.7-0.8: 良好(大部分 section 紧扣方向)
+   - <0.7: 跑题风险(必须重写)
+3. direction_alignment_reason 必须具体到"哪个 section 对应方向的哪个核心问题"
+
+溯源规则（必须严格执行）：
+- source_tag = "anchored"：MCP 摘要或用户补充中明确提及的信息，可直接使用
+- source_tag = "derived"：从已有信息逻辑推导得出的结论，需合理推断
+- source_tag = "missing"：MCP 摘要和补充中完全未提及，必须在 missing_items 中列出并生成 fill_guidance
+
+禁止项：
+- 严禁编造案例、数据、用户画像
+- 严禁使用泛化表述（如"很多企业""通常来说"）
+- 5 个 section 必须全部输出，不能增减
+- missing 项的 fill_guidance 要具体可操作，给出补充方向
+
+内容要求：
+- 理论≤20%，实战≥80%
+- 每个核心段落都应有案例或数据支撑（anchored 优先）
+- 引言和结论要简洁有力
 
 请直接返回 JSON：
 """
@@ -3722,7 +4490,7 @@ async def generate_outline_v2(request: Dict = Body(...)):
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
+                    "max_tokens": 4096,
                     "temperature": 0,
                     "seed": 42,
                 },
@@ -3733,13 +4501,163 @@ async def generate_outline_v2(request: Dict = Body(...)):
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
-        outline = json_mod.loads(parsed_content)
+        import re as _re
+        try:
+            outline = json_mod.loads(parsed_content)
+        except json_mod.JSONDecodeError as je:
+            logger.warning(f"提纲JSON解析失败,尝试修复: {je}")
+            fixed = _re.sub(r",\s*([}\]])", r"\1", parsed_content)
+            fixed = _re.sub(r"}\s*\n\s*\"", '},\n  "', fixed)
+            try:
+                outline = json_mod.loads(fixed)
+            except Exception:
+                m = _re.search(r"\{[\s\S]*\}", parsed_content)
+                if m:
+                    try:
+                        outline = json_mod.loads(m.group(0))
+                    except Exception as ee:
+                        logger.error(f"提纲JSON二次修复仍失败: {ee}")
+                        return _error(msg=f"LLM返回非法JSON: {str(je)[:200]}")
+                else:
+                    return _error(msg=f"LLM返回非法JSON: {str(je)[:200]}")
+        
+        if not isinstance(outline, dict) or "sections" not in outline:
+            return _error(msg="提纲格式不符合v2规范(缺少sections字段)")
+        if isinstance(outline.get("sections"), list):
+            old_sections = outline["sections"]
+            named_keys = ["hook", "problem", "breakdown", "solution", "action"]
+            new_sections = {}
+            for i, sec in enumerate(old_sections[:5]):
+                key = named_keys[i] if i < len(named_keys) else f"section_{i}"
+                if isinstance(sec, dict):
+                    sec.setdefault("source_tag", "derived")
+                    new_sections[key] = sec
+            outline["sections"] = new_sections
+        outline.setdefault("missing_items", [])
+        outline.setdefault("direction_alignment_score", 0.7)
+        outline.setdefault("direction_alignment_reason", "")
+        try:
+            outline_align = float(outline.get("direction_alignment_score") or 0)
+        except (TypeError, ValueError):
+            outline_align = 0.7
+            outline["direction_alignment_score"] = 0.7
+        if outline_align < 0.7:
+            outline["alignment_warning"] = (
+                f"⚠️ 提纲方向对齐度仅 {outline_align*100:.0f}%，"
+                f"可能存在跑题风险，建议点击'重新生成'或人工校对每个 section 是否紧扣「{direction}」"
+            )
+            logger.warning(f"提纲跑题风险: 对齐度{outline_align:.2f}<0.7, 方向='{direction}'")
+        else:
+            outline.setdefault("alignment_warning", "")
         
         session["outline"] = outline
         
         return _success(outline)
     except Exception as e:
         logger.error(f"提纲生成失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/article/generate")
+async def generate_full_article(request: Dict = Body(...)):
+    """
+    基于提纲生成完整文章
+    """
+    session_id = request.get("session_id", "")
+    outline_sections = request.get("outline_sections", [])
+
+    if not session_id:
+        return _error(code=400, msg="缺少 session_id")
+    if not outline_sections:
+        return _error(code=400, msg="缺少提纲内容")
+
+    session = _get_session(session_id)
+    if not session:
+        return _error(code=404, msg="会话不存在")
+
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "deepseek-chat")
+    timeout = llm_config.get("timeout", 120)
+
+    mcp_summary = session.get("mcp_summary", "")
+    persona_summary = session.get("persona_summary", "")
+    persona_voice = session.get("persona_voice", {})
+    direction = session.get("direction", "")
+    framework = session.get("framework", "")
+
+    sections_text = "\n".join([
+        f"- {s.get('title', '')}: {s.get('key_points', [])} (素材: {s.get('materials', {})})"
+        for s in outline_sections
+    ])
+
+    prompt = f"""你是一个专业内容写手。请基于以下提纲，撰写一篇完整的文章。
+
+【写作方向】{direction}
+【分析框架】{framework}
+
+【MCP 素材摘要】
+{mcp_summary}
+
+【作者身份定位】{persona_summary}
+【作者表达范式】{json.dumps(persona_voice, ensure_ascii=False)}
+
+【文章提纲】
+{sections_text}
+
+要求：
+1. 语言风格：专业、实战导向、有洞察力
+2. 内容结构：按照提纲的段落顺序撰写
+3. 每个段落：200-800字，包含具体案例和数据
+4. 理论≤20%，实战≥80%
+5. 段落之间自然衔接
+
+返回 JSON 格式（不要 markdown 代码块）：
+{{
+  "title": "文章标题",
+  "paragraphs": [
+    {{
+      "title": "段落标题",
+      "content": "段落正文内容（包含具体案例、数据、分析）",
+      "word_count": 字数
+    }}
+  ]
+}}
+
+请直接返回 JSON：
+"""
+    
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 8192,
+                    "temperature": 0.3,
+                    "seed": 42,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            
+            content = content.strip()
+            if content.startswith("```"):
+                content = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.MULTILINE).strip()
+            
+            article = json.loads(content)
+            
+            return _success(article)
+    except json.JSONDecodeError as e:
+        logger.error(f"文章生成 JSON 解析失败: {e}")
+        return _error(msg=f"文章生成失败，格式错误: {str(e)}")
+    except Exception as e:
+        logger.error(f"文章生成失败: {e}")
         return _error(msg=str(e))
 
 

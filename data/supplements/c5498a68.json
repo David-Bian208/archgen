@@ -1,0 +1,23 @@
+{
+  "session_id": "c5498a68",
+  "created_at": "2026-06-10T08:50:17.953968",
+  "updated_at": "2026-06-10T08:50:17.954041",
+  "supplements": [
+    {
+      "id": "supp_15c788c4",
+      "type": "case",
+      "dimension": "案例",
+      "content": "某科技公司使用AI工具后，效率提升50%",
+      "source": "manual",
+      "source_detail": {
+        "company": "某科技公司"
+      },
+      "confirmed": false,
+      "domain_tags": [
+        "ai-efficiency"
+      ],
+      "usage_count": 0,
+      "created_at": "2026-06-10T08:50:17.954032"
+    }
+  ]
+}

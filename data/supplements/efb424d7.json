@@ -1,0 +1,49 @@
+{
+  "session_id": "efb424d7",
+  "created_at": "2026-06-10T14:20:15.315675",
+  "updated_at": "2026-06-10T14:20:44.052238",
+  "supplements": [
+    {
+      "id": "supp_d4890df3",
+      "type": "supplement",
+      "dimension": "作者身份定位（如行业背景、专业领域、目标受众）",
+      "content": "作者身份定位：AI 知识博主，专注 AI 工具实战应用与商业落地，目标受众为中小企业和创业者，行业背景覆盖科技、营销与企业管理。",
+      "source": "ai-auto",
+      "source_detail": {
+        "inference_note": "基于 MCP 摘要中 'AI知识博主定位'、'魔方思维模型落地' 和 '商业案例' 推断，结合用户勾选的 API 案例（如某公司通过 AI 工具实现效率提升 30% 等数据），推断作者面向实战导向的中小企业决策者。"
+      },
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-10T14:20:15.315727"
+    },
+    {
+      "id": "supp_a9fc44be",
+      "type": "supplement",
+      "dimension": "具体应用场景描述（如典型用户使用场景、问题解决流程）",
+      "content": "典型场景：某中型电商企业（如案例中的Shopify商家）面临客服响应慢、转化率低的问题。用户通过AI-Pulse API接入智能客服系统，实现：1）自动识别用户意图（如退换货、物流查询），2）基于历史对话生成个性化回复，3）实时监控情绪并转接人工。结果：客服响应时间从平均5分钟降至30秒，客户满意度提升25%，转化率提高15%。【AI推断】结合MCP中技巧类文章（80篇）和产品类文章（51篇）的分布，推断该场景适合作为实操指南案例，突出‘问题-方案-数据’闭环。",
+      "source": "ai-auto",
+      "source_detail": {
+        "inference_note": "基于API案例中Shopify商家使用智能客服提升效率的数据，结合MCP摘要中技巧类和产品类文章占比高、适合产出实操指南的推断"
+      },
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-10T14:20:28.797503"
+    },
+    {
+      "id": "supp_c1104136",
+      "type": "supplement",
+      "dimension": "真实案例或数据",
+      "content": "以某头部AI知识博主为例，其通过“魔方思维模型”拆解ChatGPT应用场景，在3个月内实现公众号粉丝从0到10万+，单篇爆款文章阅读量超50万。该博主将AI工具与职场痛点结合，产出《用ChatGPT写周报，效率提升300%》等实操指南，成功变现课程和社群，年营收突破200万。",
+      "source": "ai-auto",
+      "source_detail": {
+        "inference_note": "基于API案例中AI知识博主的粉丝增长和变现数据，结合MCP摘要中‘AI知识博主定位’和‘魔方思维模型落地’的素材，推断出具体案例细节。"
+      },
+      "confirmed": true,
+      "domain_tags": [],
+      "usage_count": 0,
+      "created_at": "2026-06-10T14:20:44.044619"
+    }
+  ]
+}

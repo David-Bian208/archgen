@@ -69,6 +69,11 @@
                 <a-tag v-if="structure.intro.analysis_type" :color="structure.intro.analysis_color" size="small">
                   {{ structure.intro.analysis_label }}
                 </a-tag>
+                <a-tooltip :content="getConfidenceTooltip(structure.intro.confidence)">
+                  <a-tag v-if="structure.intro.confidence" :color="getConfidenceColor(structure.intro.confidence)" size="small" style="margin-left: 4px">
+                    {{ getConfidenceEmoji(structure.intro.confidence) }} {{ getConfidenceLabel(structure.intro.confidence) }}
+                  </a-tag>
+                </a-tooltip>
                 <a-button v-if="sectionContents.intro && !directionResults['intro']" type="text" size="mini" @click="handleCheckDirection('intro', structure.intro.title, structure.intro.outline)" :loading="checkingDirections['intro']" style="margin-left: 8px">
                   <icon-check-circle /> 检测方向
                 </a-button>
@@ -146,6 +151,29 @@
               </div>
             </div>
 
+            <!-- 补充知识库展示（P0-2：用户可见的补充内容） -->
+            <div class="supplement-kb-section" v-if="supplementList.length > 0">
+              <a-alert type="success" :show-icon="false" style="margin-bottom: 16px">
+                <template #icon><icon-check-circle style="color: #00B42A" /></template>
+                <template #title>
+                  知识库已补充 {{ supplementList.length }} 条内容，AI 生成时将使用这些内容
+                </template>
+              </a-alert>
+              <a-list :data="supplementList" :bordered="true" size="small" class="supplement-list">
+                <template #item="{ item }">
+                  <a-list-item>
+                    <div class="supplement-item">
+                      <a-tag size="small" :color="getSourceColor(item.source)">
+                        {{ getSourceIcon(item.source) }} {{ getSourceLabel(item.source) }}
+                      </a-tag>
+                      <span class="supplement-dimension">{{ item.dimension }}</span>
+                      <div class="supplement-content">{{ item.content }}</div>
+                    </div>
+                  </a-list-item>
+                </template>
+              </a-list>
+            </div>
+
             <!-- 主体段落 -->
             <div v-for="(section, index) in structure.sections" :key="index" class="section-block" :class="sectionBorderClass(`section_${index}`)">
               <div class="section-header">
@@ -156,6 +184,11 @@
                 <a-tag v-if="section.analysis_type" :color="section.analysis_color" size="small">
                   {{ section.analysis_label }}
                 </a-tag>
+                <a-tooltip :content="getConfidenceTooltip(section.confidence)">
+                  <a-tag v-if="section.confidence" :color="getConfidenceColor(section.confidence)" size="small" style="margin-left: 4px">
+                    {{ getConfidenceEmoji(section.confidence) }} {{ getConfidenceLabel(section.confidence) }}
+                  </a-tag>
+                </a-tooltip>
                 <a-button v-if="sectionContents[`section_${index}`] && !directionResults[`section_${index}`]" type="text" size="mini" @click="handleCheckDirection(`section_${index}`, section.title, section.outline)" :loading="checkingDirections[`section_${index}`]" style="margin-left: 8px">
                   <icon-check-circle /> 检测方向
                 </a-button>
@@ -241,6 +274,11 @@
                   <a-tag v-if="structure.conclusion.analysis_type" :color="structure.conclusion.analysis_color" size="small">
                     {{ structure.conclusion.analysis_label }}
                   </a-tag>
+                  <a-tooltip :content="getConfidenceTooltip(structure.conclusion.confidence)">
+                    <a-tag v-if="structure.conclusion.confidence" :color="getConfidenceColor(structure.conclusion.confidence)" size="small" style="margin-left: 4px">
+                      {{ getConfidenceEmoji(structure.conclusion.confidence) }} {{ getConfidenceLabel(structure.conclusion.confidence) }}
+                    </a-tag>
+                  </a-tooltip>
                 </div>
                 <a-button type="text" size="mini" @click="handleAiFillConclusion" :loading="aiFillingSections['conclusion']">
                   <icon-robot /> AI 帮我写
@@ -463,7 +501,7 @@ import { Message } from '@arco-design/web-vue'
 import { IconFolder, IconEdit, IconArrowRight, IconUp, IconDown, IconRobot, IconBulb, IconFile, IconEye, IconCheckCircle, IconCloseCircle } from '@arco-design/web-vue/es/icon'
 import { useAppStore } from '../stores/app'
 import { marked } from 'marked'
-import { generateContentStructure, aiGenerateSection, aiGenerateFullContent, smartFillContent, generateOutlineVersions, checkDirection, aiRewriteSection } from '../utils/api'
+import { generateContentStructure, aiGenerateSection, aiGenerateFullContent, smartFillContent, generateOutlineVersions, checkDirection, aiRewriteSection, listSupplements as apiListSupplements } from '../utils/api'
 
 const appStore = useAppStore()
 const router = useRouter()
@@ -473,6 +511,9 @@ const sectionContents = ref({})
 const aiFilling = ref(false)
 const aiFillingSections = ref({})
 const smartFilling = ref(false)
+
+// 获取 sessionId（从 sessionStorage 获取）
+const sessionId = ref(sessionStorage.getItem('sessionId') || '')
 
 // P3/P4/P5 状态
 const directionResults = ref({})  // { section_key: { severity, issues, suggestion, ... } }
@@ -503,6 +544,65 @@ const sectionBorderClass = (key) => {
   if (severity === 'minor') return 'section-minor'
   if (severity === 'medium') return 'section-medium'
   return 'section-severe'
+}
+
+// 置信度标注辅助函数
+const getConfidenceEmoji = (confidence) => {
+  const map = { high: '✅', medium: '⚠️', low: '❓' }
+  return map[confidence] || '❓'
+}
+
+const getConfidenceLabel = (confidence) => {
+  const map = { high: '高置信', medium: '中置信', low: '低置信' }
+  return map[confidence] || '低置信'
+}
+
+const getConfidenceColor = (confidence) => {
+  const map = { high: 'green', medium: 'orange', low: 'red' }
+  return map[confidence] || 'red'
+}
+
+const getConfidenceTooltip = (confidence) => {
+  const map = {
+    high: '高置信度：基于原文充足内容，内容可靠性高',
+    medium: '中置信度：原文部分充足，部分基于逻辑推演',
+    low: '低置信度：原文不足，内容基于逻辑推演，请谨慎使用',
+  }
+  return map[confidence] || ''
+}
+
+// 补充知识库列表（用户可见的已保存补充内容）
+const supplementList = ref([])
+const supplementLoading = ref(false)
+
+const loadSupplementList = async () => {
+  if (!sessionId.value) return
+  supplementLoading.value = true
+  try {
+    const res = await apiListSupplements(sessionId.value, true) // true = only confirmed
+    if (res.data.code === 0) {
+      supplementList.value = res.data.data.supplements || []
+    }
+  } catch (e) {
+    console.warn('加载补充列表失败:', e)
+  } finally {
+    supplementLoading.value = false
+  }
+}
+
+const getSourceLabel = (source) => {
+  const map = { 'ai-pulse': 'AI-Pulse', 'manual': '手动补充', 'file': '文件提取' }
+  return map[source] || source
+}
+
+const getSourceIcon = (source) => {
+  const map = { 'ai-pulse': '🤖', 'manual': '✏️', 'file': '' }
+  return map[source] || '📌'
+}
+
+const getSourceColor = (source) => {
+  const map = { 'ai-pulse': 'blue', 'manual': 'orange', 'file': 'purple' }
+  return map[source] || 'gray'
 }
 
 const renderedOriginal = computed(() => {
@@ -612,6 +712,7 @@ const handleAiFillIntro = async () => {
       intro.analysis_type || '',
       intro.analysis_suggestion || '',
       topicNeeded.value,
+      sessionId.value,
     )
     if (res.data.code === 0) {
       let content = res.data.data.content
@@ -661,6 +762,7 @@ const handleAiFillConclusion = async () => {
       conclusion.analysis_type || '',
       conclusion.analysis_suggestion || '',
       topicNeeded.value,
+      sessionId.value,
     )
     if (res.data.code === 0) {
       let content = res.data.data.content
@@ -712,6 +814,7 @@ const handleAiFillSection = async (index) => {
       section.analysis_type || '',
       section.analysis_suggestion || '',
       topicNeeded.value,
+      sessionId.value,
     )
     if (res.data.code === 0) {
       let content = res.data.data.content
@@ -743,7 +846,7 @@ const handleAiFillAll = async () => {
   aiFilling.value = true
   try {
     Message.info('AI 正在生成全文，请稍候...')
-    const res = await aiGenerateFullContent(directionName.value, structure.value, originalSummary.value)
+    const res = await aiGenerateFullContent(directionName.value, structure.value, originalSummary.value, sessionId.value)
     if (res.data.code === 0) {
       let fullContent = res.data.data.content
       // 清理 Markdown 代码块标记
@@ -887,6 +990,7 @@ const handleSmartFill = async () => {
 
 onMounted(() => {
   loadStructure()
+  loadSupplementList()
 })
 
 // P3: 运行方向性检测（单个段落）
@@ -974,6 +1078,7 @@ const handleConfirmRewrite = async () => {
       feedback,
       originalSummary.value,
       existingSections,
+      sessionId.value,
     )
     if (res.data.code === 0) {
       let newContent = res.data.data.content
@@ -1247,6 +1352,41 @@ const proceedToNext = () => {
 }
 .section-block:last-child {
   border-bottom: none;
+}
+
+/* P0-2: 补充知识库展示样式 */
+.supplement-kb-section {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: linear-gradient(135deg, #f6ffed 0%, #e6f7ff 100%);
+  border-radius: 8px;
+  border: 1px solid #b7eb8f;
+}
+.supplement-list {
+  background: transparent;
+}
+.supplement-item {
+  width: 100%;
+  padding: 8px 0;
+}
+.supplement-dimension {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 13px;
+  color: #4e5969;
+  font-weight: 500;
+}
+.supplement-content {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #1d2129;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 8px 12px;
+  border-radius: 4px;
 }
 .conclusion-block {
   border-top: 2px solid #00b42a;
