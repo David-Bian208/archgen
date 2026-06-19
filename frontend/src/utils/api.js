@@ -337,10 +337,12 @@ export function generateWorkflowOutline(sessionId) {
   })
 }
 
-export function generateFullArticle(sessionId, outlineSections) {
+export function generateFullArticle(sessionId, outlineSections, options = {}) {
+  const { target_word_count = 2000 } = options
   return api.post('/workflow/article/generate', {
     session_id: sessionId,
     outline_sections: outlineSections,
+    target_word_count: target_word_count,
   }).catch(err => {
     console.error('文章生成API调用失败:', err)
     throw err

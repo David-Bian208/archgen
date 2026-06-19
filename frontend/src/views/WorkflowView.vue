@@ -120,13 +120,13 @@
               </a-descriptions>
 
               <a-alert type="warning" style="margin-top: 16px">
-                <template #title> 完整度评估说明</template>
-                注意：MCP 搜索的「匹配度」评估的是<strong>主题相关性</strong>（文章是否匹配知识库），而这里的「完整度」评估的是<strong>素材充分性</strong>（是否足够支撑一篇高质量文章）。如果完整度偏低，建议先补充素材。
-              </a-alert>
-
-              <a-alert type="info" style="margin-top: 12px">
-                <template #title>📋 补充策略</template>
-                {{ completenessResult.supplement_strategy || '无需额外补充' }}
+                <template #title>  完整度评估说明与补充策略</template>
+                <div style="font-size: 13px; line-height: 1.8">
+                  <div>• <strong>完整度</strong>评估的是<strong>素材充分性</strong>（是否足够支撑一篇高质量文章），不同于MCP搜索的「匹配度」（主题相关性）</div>
+                  <div v-if="completenessResult.supplement_strategy" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(0,0,0,0.1)">
+                    • <strong>补充策略：</strong>{{ completenessResult.supplement_strategy }}
+                  </div>
+                </div>
               </a-alert>
 
               <div v-if="completenessResult.missing_critical?.length" style="margin-top: 16px">
@@ -161,6 +161,19 @@
                     </a-list-item>
                   </template>
                 </a-list>
+                
+                <!-- 一键补充按钮 -->
+                <div v-if="completenessResult.missing_critical.filter((_, idx) => !isSupplemented(idx)).length > 0" style="margin-top: 16px; text-align: center">
+                  <a-button 
+                    type="primary" 
+                    status="success" 
+                    size="large" 
+                    :loading="supplementAllLoading"
+                    @click="supplementAllCritical"
+                  >
+                     一键补充 {{ completenessResult.missing_critical.filter((_, idx) => !isSupplemented(idx)).length }} 项缺口
+                  </a-button>
+                </div>
               </div>
 
               <div v-if="completenessResult.missing_optional?.length" style="margin-top: 12px">
@@ -219,20 +232,8 @@
                     <a-alert type="info" style="width: 100%; margin-bottom: 16px">
                       <template #title> 操作提示</template>
                       逐项补充：点击上方各缺失项的「AI-Pulse + 推断」或「手动补充」按钮<br>
-                      一键补充：点击下方按钮，批量检索并补充所有缺失项
+                      一键补充：点击上方「一键补充缺口」按钮，批量处理所有缺失项
                     </a-alert>
-
-                    <a-space size="large" style="width: 100%" wrap>
-                      <a-button type="primary" size="large" :loading="batchUnifiedLoading" @click="batchUnifiedSupplement">
-                        🤖 一键 AI-Pulse 检索 + 推断全部缺失项
-                      </a-button>
-                      <a-button size="large" @click="batchManualSupplement">
-                         一键手动补充
-                      </a-button>
-                      <a-button v-if="displayCompleteness >= 60" size="large" @click="skipToOutline">
-                        ⏭️ 跳过，直接生成（质量可能较低）
-                      </a-button>
-                    </a-space>
                   </div>
                 </a-space>
               </div>
@@ -788,6 +789,16 @@
 
             <!-- 方向列表 -->
             <div v-else>
+              <!-- 全局推荐横幅 -->
+              <a-alert v-if="directions[0] && directions[0].confidence" type="info" style="margin-bottom: 16px; background: #e8f7ff; border-color: #b3d9ff">
+                <template #message>
+                  <div style="font-size: 13px">
+                    💡 AI 推荐：<strong>{{ directions[0].name }}</strong>
+                    <span v-if="directions[0].reason" style="margin-left: 8px; color: #86909c">{{ directions[0].reason }}</span>
+                  </div>
+                </template>
+              </a-alert>
+
               <div v-for="(d, i) in directions" :key="i" class="direction-card">
               <a-card :bordered="true" hoverable>
                 <template #title>
@@ -797,32 +808,33 @@
                     <span v-else-if="i === 2">🥉 </span>
                     {{ d.name }}
                   </span>
-                  <a-tag :color="getCoverageColor(d.coverage)" style="margin-left: 8px">
+                  <a-tag v-if="d.confidence === 'high'" color="green" style="margin-left: 8px">高匹配</a-tag>
+                  <a-tag v-else-if="d.confidence === 'medium'" color="orange" style="margin-left: 8px">中匹配</a-tag>
+                  <a-tag v-else color="gray" style="margin-left: 8px">低匹配</a-tag>
+                  <a-tag :color="getCoverageColor(d.coverage)" style="margin-left: 4px">
                     匹配度 {{ (d.coverage * 100).toFixed(0) }}%
                   </a-tag>
                 </template>
                 <div class="direction-desc">{{ d.description }}</div>
-                <div class="direction-reason">
-                  <a-typography-text type="secondary">推荐理由：{{ d.reason }}</a-typography-text>
+                
+                <!-- 单行推理信息（极简展示） -->
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e6eb; font-size: 12px; color: #86909c; display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+                  <span v-if="d.reason"> {{ d.reason }}</span>
+                  <span v-if="d.source === 'general_knowledge'" style="color: #ff7d00">⚠️ 基于通用知识</span>
+                  <span v-if="d.scenario">📌 {{ d.scenario }}</span>
+                  <span v-if="d.evidence_quote" style="color: #165dff; cursor: pointer; font-style: italic" @click="showEvidenceQuote(d)">「{{ d.evidence_quote.slice(0, 30) }}...」</span>
                 </div>
                 
                 <!-- 关键缺失项 -->
                 <div v-if="d.missing_critical?.length" class="missing-items">
-                  <a-typography-text strong style="color: #f53f3f">关键缺失项（补充后将提升质量）：</a-typography-text>
-                  <a-list :data="d.missing_critical" size="mini">
-                    <template #item="{ item }">
-                      <a-list-item>
-                        <icon-close-circle-fill style="color: #f53f3f; margin-right: 4px; font-size: 12px" />
-                        <a-typography-text style="font-size: 13px">{{ item }}</a-typography-text>
-                      </a-list-item>
-                    </template>
-                  </a-list>
+                  <a-typography-text strong style="color: #f53f3f; font-size: 12px">需要补充：</a-typography-text>
+                  <span style="font-size: 12px; color: #f53f3f">{{ d.missing_critical.join('、') }}</span>
                 </div>
                 
                 <!-- 其他缺失项 -->
                 <div v-if="d.missing_optional?.length" class="missing-items-optional">
-                  <a-typography-text type="secondary" style="font-size: 13px">
-                    其他缺失项（AI可尝试推断）：{{ d.missing_optional.join('、') }}
+                  <a-typography-text type="secondary" style="font-size: 12px">
+                    AI 可推断：{{ d.missing_optional.join('、') }}
                   </a-typography-text>
                 </div>
 
@@ -863,42 +875,28 @@
                           📚 {{ f.framework_origin }}
                         </a-tag>
                         <a-tag :color="getAlignmentTagColor(f.direction_alignment_score ?? f.match_score)" style="margin-left: 4px">
-                          🎯 方向对齐 {{ ((f.direction_alignment_score ?? f.match_score) * 100).toFixed(0) }}%
-                        </a-tag>
-                        <a-tag color="arcoblue" size="small" style="margin-left: 4px">
-                          综合 {{ (f.match_score * 100).toFixed(0) }}%
+                          🎯 对齐 {{ ((f.direction_alignment_score ?? f.match_score) * 100).toFixed(0) }}%
                         </a-tag>
                       </template>
-                      <div v-if="f.warning" 
-                        :style="{
-                          marginBottom: '8px', 
-                          padding: '8px 10px', 
-                          background: getAlignmentBgColor(f.direction_alignment_score ?? f.match_score),
-                          border: `1px solid ${getAlignmentBorderColor(f.direction_alignment_score ?? f.match_score)}`,
-                          borderRadius: '4px',
-                          fontSize: '12px',
-                          color: getAlignmentTextColor(f.direction_alignment_score ?? f.match_score),
-                          lineHeight: '1.6'
-                        }">
+                      <div style="font-size: 13px">{{ f.description }}</div>
+                      
+                      <!-- 单行匹配信息 -->
+                      <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e6eb; font-size: 12px; color: #86909c; display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+                        <span v-if="f.reason"> {{ f.reason }}</span>
+                        <span v-if="f.source === 'general_knowledge'" style="color: #ff7d00">⚠️ 基于通用知识</span>
+                        <span v-if="f.usage_hint">📌 {{ f.usage_hint }}</span>
+                      </div>
+                      
+                      <!-- 风险提示 -->
+                      <div v-if="f.warning" style="margin-top: 8px; font-size: 12px; color: #ff7d00">
                         {{ f.warning }}
                       </div>
-                      <div style="font-size: 13px">{{ f.description }}</div>
-                      <div v-if="f.direction_alignment_reason" style="margin-top: 8px">
-                        <a-link size="mini" @click="expandedWarnings[j] = !expandedWarnings[j]" style="font-size: 12px">
-                          {{ expandedWarnings[j] ? '收起' : '展开' }}方向对齐推理 ({{ expandedWarnings[j] ? '▲' : '▼' }})
-                        </a-link>
-                        <div v-if="expandedWarnings[j]" style="margin-top: 6px; padding: 6px 8px; background: #f0f7ff; border-radius: 4px; font-size: 12px; color: #165dff; line-height: 1.6">
-                          🎯 <strong>方向对齐说明：</strong>{{ f.direction_alignment_reason }}
-                        </div>
+                      
+                      <!-- 需要补充 -->
+                      <div v-if="f.needs_supplement?.length" style="margin-top: 4px; font-size: 12px; color: #86909c">
+                        还需要：{{ f.needs_supplement.join('、') }}
                       </div>
-                      <a-typography-text type="secondary" style="margin-top: 8px; display: block; font-size: 12px">
-                        适合原因：{{ f.reason }}
-                      </a-typography-text>
-                      <div v-if="f.needs_supplement?.length" style="margin-top: 8px">
-                        <a-typography-text type="secondary" style="font-size: 12px">
-                          使用该框架还需要：{{ f.needs_supplement.join('、') }}
-                        </a-typography-text>
-                      </div>
+                      
                       <a-button 
                         :type="(f.direction_alignment_score ?? f.match_score) >= 0.7 ? 'primary' : 'outline'" 
                         :status="(f.direction_alignment_score ?? f.match_score) >= 0.7 ? 'success' : (f.direction_alignment_score ?? f.match_score) >= 0.6 ? 'warning' : 'default'" 
@@ -954,7 +952,7 @@
                 </div>
                 
                 <!-- 预检测结果 -->
-                <div v-if="preCheckResult">
+                <div v-if="preCheckResult" class="pre-check-result">
                   <!-- 有问题需要细化 -->
                   <div v-if="preCheckResult.issues && preCheckResult.issues.length > 0">
                     <div style="font-weight: 600; color: #1d2129; margin-bottom: 8px"> 还需细化</div>
@@ -974,9 +972,12 @@
                           <a-button v-if="issue.can_auto_fix" size="mini" type="outline" @click="fixIssue(ii)">
                              AI修复
                           </a-button>
-                          <a-button v-else size="mini" type="outline" @click="showIssueDetail(issue)">
-                            查看详情
+                          <a-button size="mini" type="outline" @click="toggleIssueExpand(ii)">
+                            {{ expandedIssues.has(ii) ? '收起详情' : '展开详情' }}
                           </a-button>
+                        </div>
+                        <div v-if="expandedIssues.has(ii)" style="margin-top: 8px; padding: 12px; background: #f7f8fa; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #4e5969; white-space: pre-wrap">
+                          {{ issue.detail || issue.description || '暂无详细信息' }}
                         </div>
                       </div>
                     </div>
@@ -1000,19 +1001,6 @@
                 </div>
               </div>
             </a-card>
-
-            <!-- AI 一键补充缺失项 -->
-            <div v-if="preCheckResult?.issues && preCheckResult.issues.some(i => i.type !== 'pass')" style="margin-bottom: 16px">
-              <a-button 
-                type="primary" 
-                status="success" 
-                long 
-                :loading="aiAutoSupplementLoading"
-                @click="aiAutoSupplementAllMissing"
-              >
-                🤖 AI 智能补充全部
-              </a-button>
-            </div>
 
             <!-- 补充表单 -->
             <a-form :model="supplement2Form" layout="vertical">
@@ -1060,6 +1048,35 @@
                 <a-button @click="skipSupplement2">跳过补充，直接进入检测</a-button>
               </a-space>
             </a-space>
+
+            <!-- AI 补充建议气泡（Cherry 逻辑 P2） -->
+            <div v-if="preCheckResult?.issues && preCheckResult.issues.some(i => i.type !== 'pass')" style="margin-top: 16px; padding: 12px 16px; background: linear-gradient(135deg, #f0f7ff 0%, #e8f4fd 100%); border-radius: 8px; border: 1px solid #b8d4e8">
+              <div style="display: flex; align-items: flex-start; gap: 10px">
+                <span style="font-size: 18px"></span>
+                <div style="flex: 1">
+                  <div style="font-size: 13px; color: #1d2129; font-weight: 500; margin-bottom: 6px">
+                    AI 检测到 {{ preCheckResult.issues.filter(i => i.type === 'error').length }} 项高优缺口{{ preCheckResult.issues.filter(i => i.type === 'warning').length > 0 ? `，${preCheckResult.issues.filter(i => i.type === 'warning').length} 项可优化` : '' }}
+                  </div>
+                  <div v-if="preCheckResult.issues.filter(i => i.type === 'warning').length === 0" style="font-size: 12px; color: #86909c; margin-bottom: 4px">
+                    💡 补充说明：当前检测只关注高优先级问题（红色），补充后会重新检测。可优化项通常为非阻塞性问题，不影响继续流程。
+                  </div>
+                  <div style="font-size: 12px; color: #86909c; line-height: 1.6">
+                    <span v-for="(issue, i) in preCheckResult.issues.filter(i => i.type !== 'pass').slice(0, 3)" :key="i" style="margin-right: 8px">
+                      <a-tag size="mini" :color="issue.type === 'error' ? 'red' : 'orange'">{{ issue.title }}</a-tag>
+                    </span>
+                    <span v-if="preCheckResult.issues.filter(i => i.type !== 'pass').length > 3" style="color: #00b42a; cursor: pointer" @click="scrollToPreCheck">...</span>
+                  </div>
+                  <div style="margin-top: 8px; display: flex; gap: 8px">
+                    <a-button type="primary" size="small" status="success" :loading="aiAutoSupplementLoading" @click="aiAutoSupplementAllMissing">
+                      一键补充 {{ preCheckResult.issues.filter(i => i.type !== 'pass').length }} 项缺口
+                    </a-button>
+                    <a-button size="small" type="text" @click="scrollToPreCheck">
+                      查看详情
+                    </a-button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </a-card>
         </div>
 
@@ -1171,6 +1188,16 @@
             </div>
 
             <div v-else>
+              <!-- 全局推荐横幅 -->
+              <a-alert v-if="structures[0] && structures[0].confidence" type="info" style="margin-bottom: 16px; background: #e8f7ff; border-color: #b3d9ff">
+                <template #message>
+                  <div style="font-size: 13px">
+                    💡 AI 推荐：<strong>{{ structures[0].name }}</strong>
+                    <span v-if="structures[0].reason" style="margin-left: 8px; color: #86909c">{{ structures[0].reason }}</span>
+                  </div>
+                </template>
+              </a-alert>
+
               <div v-for="(s, i) in structures" :key="i" class="structure-card" style="margin-bottom: 12px">
                 <a-card :bordered="true" hoverable>
                   <template #title>
@@ -1178,13 +1205,31 @@
                     <span v-else-if="i === 1"> </span>
                     <span v-else-if="i === 2">🥉 </span>
                     {{ s.name }}
+                    <a-tag v-if="s.confidence === 'high'" color="green" style="margin-left: 8px">高匹配</a-tag>
+                    <a-tag v-else-if="s.confidence === 'medium'" color="orange" style="margin-left: 8px">中匹配</a-tag>
+                    <a-tag v-else color="gray" style="margin-left: 8px">低匹配</a-tag>
+                    <a-tag :color="getCoverageColor(s.match_score || 0.7)" style="margin-left: 4px">
+                      匹配 {{ ((s.match_score || 0.7) * 100).toFixed(0) }}%
+                    </a-tag>
                   </template>
                   <div style="font-size: 13px; line-height: 1.6">{{ s.description }}</div>
-                  <div v-if="s.needs_supplement?.length" style="margin-top: 8px">
-                    <a-typography-text type="secondary" style="font-size: 13px">
-                      需要补充：{{ s.needs_supplement.join('、') }}
-                    </a-typography-text>
+                  
+                  <!-- 单行推理信息 -->
+                  <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e6eb; font-size: 12px; color: #86909c; display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+                    <span v-if="s.reason"> {{ s.reason }}</span>
+                    <span v-if="s.source === 'general_knowledge'" style="color: #ff7d00">⚠️ 基于通用知识</span>
                   </div>
+                  
+                  <!-- 结构分段提示（如果有 sections） -->
+                  <div v-if="s.sections?.length" style="margin-top: 8px; font-size: 12px; color: #86909c">
+                    分段建议：{{ s.sections.map(sec => sec.name).join(' → ') }}
+                  </div>
+                  
+                  <!-- 需要补充 -->
+                  <div v-if="s.missing_content?.length || s.needs_supplement?.length" style="margin-top: 8px; font-size: 12px; color: #f53f3f">
+                    需要补充：{{ [...(s.missing_content || []), ...(s.needs_supplement || [])].join('、') }}
+                  </div>
+                  
                   <a-button type="primary" status="success" style="margin-top: 12px" @click="selectStructure(s)">
                     选择此结构
                   </a-button>
@@ -1349,6 +1394,19 @@
                 <pre style="white-space: pre-wrap; line-height: 1.8; font-size: 14px; margin: 0">{{ typeof outlineResult === 'string' ? outlineResult : JSON.stringify(outlineResult, null, 2) }}</pre>
               </div>
 
+              <!-- 字数选择 -->
+              <div style="margin-top: 20px; padding: 16px; background: #f7f8fa; border-radius: 8px; border: 1px solid #e5e6eb">
+                <div style="font-size: 13px; font-weight: 600; color: #1d2129; margin-bottom: 12px">📏 目标字数</div>
+                <a-radio-group v-model="targetWordCount" type="button" size="large">
+                  <a-radio :value="1000">1000字</a-radio>
+                  <a-radio :value="1500">1500字</a-radio>
+                  <a-radio :value="2000">2000字</a-radio>
+                  <a-radio :value="3000">3000字</a-radio>
+                  <a-radio :value="5000">5000字</a-radio>
+                </a-radio-group>
+                <div style="margin-top: 8px; font-size: 12px; color: #86909c">选择文章的目标字数，AI 将根据此字数生成内容</div>
+              </div>
+
               <a-space style="margin-top: 24px">
                 <a-button type="primary" status="success" @click="goToGenerateArticle">
                   📝 确认生成完整文章
@@ -1509,9 +1567,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import { useAppStore } from '../stores/app'
 import {
   IconSearch,
@@ -2059,8 +2117,10 @@ const supplement2Form = reactive({
 // 预检测相关状态
 const preCheckResult = ref(null)
 const preCheckLoading = ref(false)
+const expandedIssues = ref(new Set())
 const aiAutoSupplementLoading = ref(false)
 const supplementLoading = ref(false)
+const supplementAllLoading = ref(false)
 
 // 方向检测
 const checkingDirection = ref(false)
@@ -2138,6 +2198,7 @@ const selectedStructure = ref(null)
 // 提纲
 const outlineResult = ref(null)
 const showOutlineAlignmentReason = ref(false)
+const targetWordCount = ref(2000) // 默认2000字
 
 // 提纲段落 AI 补充
 const sectionAiDialogIndex = ref(-1)
@@ -2457,12 +2518,19 @@ async function goToDirections() {
     const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value)
     console.log(' 方向推荐响应:', res.data)
     
-    if (res.data.code === 0 && res.data.data?.length > 0) {
-      directions.value = res.data.data
-      Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
-    } else if (res.data.code === 0 && (!res.data.data || res.data.data.length === 0)) {
-      Message.warning('暂无推荐方向，请补充更多信息后重试')
-      // 保持在方向页面，但显示空状态
+    if (res.data.code === 0) {
+      // 兼容新旧格式：新格式有 directions 字段，旧格式直接是数组
+      const data = res.data.data
+      if (data.directions && data.directions.length > 0) {
+        directions.value = data.directions
+        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+      } else if (Array.isArray(data) && data.length > 0) {
+        // 兼容旧格式
+        directions.value = data
+        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+      } else {
+        Message.warning('暂无推荐方向，请补充更多信息后重试')
+      }
     } else {
       Message.error('方向推荐失败: ' + (res.data.msg || '未知错误'))
     }
@@ -2733,7 +2801,7 @@ async function aiAutoSupplement() {
   }
 }
 
-function selectDirection(d) {
+async function selectDirection(d) {
   console.log('========================================')
   console.log(' [DEBUG] selectDirection 被调用')
   console.log(' 选择方向:', d.name)
@@ -2746,8 +2814,26 @@ function selectDirection(d) {
   directionsLoading.value = true
   Message.info(`已选择「${d.name}」，正在推荐框架...`)
   
-  // 异步加载框架
+  // 先保存方向到后端session
+  try {
+    await supplementStep1(sessionId.value, d.name, {})
+    console.log('✅ 方向已保存到后端session')
+  } catch (e) {
+    console.error(' 保存方向失败:', e)
+    Message.error('保存方向失败: ' + e.message)
+    return
+  }
+  
+  // 保存成功后再异步加载框架
   loadFrameworks()
+}
+
+function showEvidenceQuote(item) {
+  Modal.info({
+    title: '原文引用',
+    content: () => h('div', { style: 'white-space: pre-wrap; line-height: 1.8; font-size: 13px' }, item.evidence_quote || '暂无原文引用'),
+    width: 500,
+  })
 }
 
 async function loadFrameworks() {
@@ -2803,7 +2889,7 @@ async function regenerateFrameworks() {
   frameworksLoading.value = false
 }
 
-function selectFramework(f) {
+async function selectFramework(f) {
   console.log('========================================')
   console.log('🔴 [DEBUG] selectFramework 被调用')
   console.log(' 选择框架:', f.name)
@@ -2815,6 +2901,16 @@ function selectFramework(f) {
   
   // 按需检索 API 案例（不再预加载）
   // preloadApiCases()  // 已移除：改为按需检索
+  
+  // 先保存框架到后端session
+  try {
+    await supplementStep2(sessionId.value, f.name, {})
+    console.log('✅ 框架已保存到后端session')
+  } catch (e) {
+    console.error(' 保存框架失败:', e)
+    Message.error('保存框架失败: ' + e.message)
+    return
+  }
   
   // 立即切换到补充页面 (Step 3 - 合并后的补充步骤)
   currentStep.value = 3
@@ -2861,16 +2957,56 @@ async function aiAutoSupplementAllMissing() {
   if (aiAutoSupplementLoading.value || !preCheckResult.value?.issues?.length) return
   aiAutoSupplementLoading.value = true
   try {
+    let thickenCount = 0
+    let needConfirmItems = []
+    
+    // 第一遍：分类处理
     for (const issue of preCheckResult.value.issues) {
       if (issue.type === 'pass') continue
+      
       const res = await apiInferSupplement(sessionId.value, `自动补充：${issue.title}`, {
         mcp_summary: mcpSummary.value || '',
       })
+      
       if (res.data.code === 0 && res.data.data?.content) {
-        supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${issue.title}】\n${res.data.data.content}`
+        const supplementType = res.data.data.supplement_type || 'infer'
+        const confidence = res.data.data.confidence || 0.7
+        
+        // 增厚类：自动采纳（风险低）
+        if (supplementType === 'thicken' && confidence >= 0.7) {
+          supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${issue.title}】\n${res.data.data.content}`
+          thickenCount++
+        } else {
+          // 补全/推断类：收集后弹窗确认
+          needConfirmItems.push({
+            issue,
+            content: res.data.data.content,
+            type: supplementType,
+            confidence,
+            note: res.data.data.inference_note || '',
+          })
+        }
       }
     }
-    Message.success('AI 智能补充完成')
+    
+    // 第二遍：处理需要确认的项
+    if (needConfirmItems.length > 0) {
+      const confirmResult = await showSupplementConfirmDialog(needConfirmItems)
+      if (confirmResult.accepted.length > 0) {
+        for (const item of confirmResult.accepted) {
+          supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${item.issue.title}】\n${item.content}`
+        }
+      }
+    }
+    
+    // 显示总结
+    if (thickenCount > 0) {
+      Message.success(`已自动采纳 ${thickenCount} 项增厚内容`)
+    }
+    if (needConfirmItems.length > 0) {
+      Message.info(`还有 ${needConfirmItems.length} 项需确认的补充已处理`)
+    }
+    
     await runPreCheck()
   } catch (e) {
     Message.error('AI 智能补充失败: ' + e.message)
@@ -2879,10 +3015,60 @@ async function aiAutoSupplementAllMissing() {
   }
 }
 
+// 补充确认弹窗
+function showSupplementConfirmDialog(items) {
+  return new Promise((resolve) => {
+    const accepted = []
+    
+    // 使用 Arco Design 的 Modal 确认
+    const modal = Modal.confirm({
+      title: 'AI 补充内容确认',
+      width: 900,
+      content: () => h('div', { style: 'padding-right: 12px' }, [
+        h('p', { style: 'margin-bottom: 12px; color: #86909c' }, 
+          `检测到 ${items.length} 项补充内容可能改变文章走向，请逐项确认：`),
+        h('div', { style: 'max-height: 500px; overflow-y: auto' },
+          items.map((item, idx) => h('div', {
+            key: idx,
+            style: 'padding: 14px; margin-bottom: 10px; background: #f7f8fa; border-radius: 6px; border-left: 4px solid ' + 
+                   (item.type === 'fill' ? '#f53f3f' : item.type === 'infer' ? '#ff7d00' : '#00b42a')
+          }, [
+            h('div', { style: 'display: flex; justify-content: space-between; margin-bottom: 8px' }, [
+              h('strong', { style: 'font-size: 14px; color: #1d2129' }, `【${item.issue.title}】`),
+              h('span', { style: 'font-size: 12px; color: #86909c' }, 
+                item.type === 'fill' ? ' 补全' : item.type === 'infer' ? '🔍 推断' : '📊 增厚'),
+            ]),
+            h('div', { style: 'padding: 10px; background: #fff; border-radius: 4px; font-size: 13px; line-height: 1.7; color: #1d2129; margin-bottom: 8px' }, 
+              item.content.slice(0, 300) + (item.content.length > 300 ? '...' : '')),
+            h('div', { style: 'font-size: 12px; color: #86909c; font-style: italic' }, 
+              `置信度：${(item.confidence * 100).toFixed(0)}% | ${item.note || '无额外说明'}`),
+          ])),
+        ),
+      ]),
+      okText: `采纳选中的 ${items.length} 项`,
+      cancelText: '全部跳过',
+      onOk: () => {
+        resolve({ accepted: items })
+      },
+      onCancel: () => {
+        resolve({ accepted: [] })
+      },
+    })
+  })
+}
+
 // 建设清单：AI 修复单个问题
 async function fixIssue(idx) {
   const issue = preCheckResult.value?.issues?.[idx]
-  if (!issue) return
+  if (!issue) {
+    Message.warning('未找到该问题，请刷新页面重试')
+    return
+  }
+  
+  if (!issue.can_auto_fix) {
+    Message.info('该问题需要手动补充，请使用"手动补充"功能')
+    return
+  }
   
   // 根据问题类别调用对应的 AI 补充接口
   const categoryMap = {
@@ -2899,24 +3085,32 @@ async function fixIssue(idx) {
     return
   }
   
-  const res = await apiInferSupplement(sessionId.value, `自动补充：${supplementItem}`, {
-    mcp_summary: mcpSummary.value || '',
-  })
-  if (res.data.code === 0 && res.data.data?.content) {
-    supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${supplementItem}】\n${res.data.data.content}`
-    Message.success(`已补充：${supplementItem}`)
-    await runPreCheck()
-  } else {
-    Message.error('补充失败')
+  Message.loading({ content: 'AI 正在分析并补充...', duration: 0 })
+  
+  try {
+    const res = await apiInferSupplement(sessionId.value, `自动补充：${supplementItem}`, {
+      mcp_summary: mcpSummary.value || '',
+    })
+    
+    if (res.data.code === 0 && res.data.data?.content) {
+      supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${supplementItem}】\n${res.data.data.content}`
+      Message.success(`已补充：${supplementItem}`)
+      await runPreCheck()
+    } else {
+      Message.error('补充失败：AI 未能生成有效内容')
+    }
+  } catch (e) {
+    Message.error('补充失败: ' + (e.message || '未知错误'))
   }
 }
 
-// 建设清单：显示问题详情
-function showIssueDetail(issue) {
-  Message.info({
-    content: `${issue.title}\n\n${issue.description}\n\n建议：${issue.suggestion}`,
-    duration: 5000,
-  })
+// 建设清单：切换问题展开/收起
+function toggleIssueExpand(index) {
+  if (expandedIssues.value.has(index)) {
+    expandedIssues.value.delete(index)
+  } else {
+    expandedIssues.value.add(index)
+  }
 }
 
 async function submitSupplement2() {
@@ -2965,6 +3159,14 @@ async function skipSupplement2() {
   } catch (e) {
     supplementLoading.value = false
     Message.error('操作失败: ' + e.message)
+  }
+}
+
+function scrollToPreCheck() {
+  // 滚动到预检测结果区域
+  const preCheckEl = document.querySelector('.pre-check-result')
+  if (preCheckEl) {
+    preCheckEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 }
 
@@ -3121,7 +3323,15 @@ async function goToStructures() {
       supplement2Form,
       mcpSummary.value,
     )
-    structures.value = res.data.data
+    const data = res.data.data
+    // 兼容新旧格式
+    if (data && data.structures) {
+      structures.value = data.structures
+    } else if (Array.isArray(data)) {
+      structures.value = data
+    } else {
+      structures.value = []
+    }
     Message.success('结构推荐完成')
   } catch (e) {
     Message.error('结构推荐失败: ' + e.message)
@@ -3134,13 +3344,26 @@ async function goToStructures() {
   }
 }
 
-function selectStructure(s) {
+async function selectStructure(s) {
   console.log('========================================')
   console.log('🔴 [DEBUG] selectStructure 被调用')
   console.log('🔴 选择结构:', s.name)
   console.log(' 当前状态:', { currentStep: currentStep.value, loading: loading.value })
   console.log('========================================')
   selectedStructure.value = s
+  Message.info(`已选择「${s.name}」结构，正在保存...`)
+  
+  // 先保存结构到后端session
+  try {
+    await supplementStep3(sessionId.value, s.name, {})
+    console.log('✅ 结构已保存到后端session')
+  } catch (e) {
+    console.error(' 保存结构失败:', e)
+    Message.error('保存结构失败: ' + e.message)
+    return
+  }
+  
+  // 保存成功后再生成提纲
   currentStep.value = 6
   loadOutline()
   Message.info(`已选择「${s.name}」结构，正在生成提纲...`)
@@ -3294,7 +3517,7 @@ async function generateArticle() {
   loading.value = true
   try {
     const outlineSections = outlineResult.value?.sections || []
-    const res = await generateFullArticle(sessionId.value, outlineSections)
+    const res = await generateFullArticle(sessionId.value, outlineSections, { target_word_count: targetWordCount.value })
     if (res.data.code === 0 && res.data.data) {
       let articleData = res.data.data
       if (typeof articleData === 'string') {
@@ -3581,6 +3804,179 @@ async function confirmBatchManual() {
   
   // 重新评估完整度
   await reEvaluateCompleteness()
+}
+
+// 一键补充所有关键缺失项（使用AI-Pulse + 推断）
+async function supplementAllCritical() {
+  const missingItems = completenessResult.value.missing_critical || []
+  const unSupplementedItems = missingItems.filter((_, idx) => !isSupplemented(idx))
+  
+  if (unSupplementedItems.length === 0) {
+    Message.warning('没有需要补充的缺失项')
+    return
+  }
+  
+  supplementAllLoading.value = true
+  
+  try {
+    // 第一遍：生成所有补充内容
+    const supplementResults = []
+    
+    for (const item of unSupplementedItems) {
+      try {
+        // Step 1: API检索
+        const keyword = typeof item === 'string' ? item.substring(0, 10) : 'AI'
+        const apiRes = await apiAiPulseSupplement(sessionId.value, item, [keyword])
+        const cases = apiRes.data.code === 0 ? (apiRes.data.data?.cases || []) : []
+        const hasApiCases = cases.length > 0
+        
+        // Step 2: AI推断
+        const inferRes = await apiInferSupplement(sessionId.value, item, {
+          cases: cases,
+          mcp_summary: mcpSummary.value,
+        })
+        
+        if (inferRes.data.code === 0 && inferRes.data.data?.content) {
+          const supplementType = inferRes.data.data.supplement_type || 'infer'
+          const confidence = inferRes.data.data.confidence || 0.7
+          
+          // 判断补充类型
+          let sourceType = ''
+          if (hasApiCases) {
+            sourceType = 'API+AI推断'
+          } else {
+            sourceType = '纯AI推理'
+          }
+          
+          supplementResults.push({
+            item: item,
+            content: inferRes.data.data.content,
+            confidence: confidence,
+            sourceType: sourceType,
+            casesCount: cases.length,
+            inferenceNote: inferRes.data.data.inference_note || '',
+            supplementType: supplementType,
+            index: missingItems.indexOf(item),
+          })
+        }
+      } catch (e) {
+        console.warn(`生成 "${item}" 补充内容失败:`, e)
+      }
+    }
+    
+    supplementAllLoading.value = false
+    
+    if (supplementResults.length === 0) {
+      Message.error('未能生成任何补充内容，请重试')
+      return
+    }
+    
+    // 第二遍：弹窗确认
+    const confirmResult = await showSupplementAllConfirmDialog(supplementResults)
+    
+    // 第三遍：保存用户确认的补充内容
+    if (confirmResult.accepted.length > 0) {
+      let successCount = 0
+      for (const result of confirmResult.accepted) {
+        try {
+          const addRes = await apiAddSupplement(
+            sessionId.value,
+            'supplement',
+            result.item,
+            result.content,
+            result.sourceType === 'API+AI推断' ? 'ai-pulse+infer' : 'ai-infer',
+            { 
+              inference_note: result.inferenceNote, 
+              cases_count: result.casesCount,
+              confidence: result.confidence,
+              supplement_type: result.supplementType,
+            },
+            [],
+          )
+          const suppId = addRes.data.data.supplement_id
+          await apiConfirmSupplement(sessionId.value, suppId)
+          
+          // 更新补充内容状态
+          supplementContents.value[result.index] = {
+            content: result.content.substring(0, 100) + (result.content.length > 100 ? '...' : ''),
+            method: result.sourceType === 'API+AI推断' ? 'ai-pulse+infer' : 'ai-infer',
+            time: new Date().toLocaleString(),
+          }
+          successCount++
+        } catch (e) {
+          console.warn(`保存 "${result.item}" 失败:`, e)
+        }
+      }
+      
+      const skippedCount = confirmResult.skipped.length
+      Message.success(`已保存 ${successCount} 项补充${skippedCount > 0 ? `，跳过 ${skippedCount} 项` : ''}`)
+      
+      // 重新评估完整度
+      await reEvaluateCompleteness()
+    } else {
+      Message.info('已取消所有补充')
+    }
+    
+  } catch (e) {
+    Message.error('一键补充失败: ' + e.message)
+  } finally {
+    supplementAllLoading.value = false
+  }
+}
+
+// 一键补充确认弹窗
+function showSupplementAllConfirmDialog(results) {
+  return new Promise((resolve) => {
+    const accepted = []
+    const skipped = []
+    
+    // 使用 Arco Design 的 Modal 确认
+    const modal = Modal.confirm({
+      title: '一键补充结果预览',
+      width: '900px',
+      content: () => h('div', { style: 'max-height: 500px; overflow-y: auto; padding-right: 12px' }, [
+        h('p', { style: 'margin-bottom: 16px; color: #86909c; font-size: 13px' }, 
+          `已生成 ${results.length} 项补充内容，请逐项确认是否采纳：`),
+        results.map((result, idx) => h('div', {
+          key: idx,
+          style: 'padding: 14px; margin-bottom: 10px; background: #f7f8fa; border-radius: 6px; border-left: 4px solid ' + 
+                 (result.sourceType === 'API+AI推断' ? '#165dff' : '#ff7d00')
+        }, [
+          // 标题行
+          h('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px' }, [
+            h('strong', { style: 'font-size: 14px; color: #1d2129' }, `【${result.item}】`),
+            h('div', { style: 'display: flex; gap: 6px; align-items: center' }, [
+              h('span', { 
+                style: 'padding: 2px 8px; border-radius: 12px; font-size: 11px; background: ' + 
+                       (result.sourceType === 'API+AI推断' ? '#e8f3ff; color: #165dff' : '#fff7e6; color: #ff7d00') 
+              }, result.sourceType === 'API+AI推断' ? '🔍 API+AI推断' : '🤖 纯AI推理'),
+              h('span', { 
+                style: 'padding: 2px 8px; border-radius: 12px; font-size: 11px; background: ' + 
+                       (result.confidence >= 0.8 ? '#f0f9f4; color: #00b42a' : result.confidence >= 0.6 ? '#fff7e6; color: #ff7d00' : '#fff2f0; color: #f53f3f') 
+              }, `置信度 ${(result.confidence * 100).toFixed(0)}%`),
+            ]),
+          ]),
+          // 案例数量提示
+          result.casesCount > 0 ? h('div', { style: 'font-size: 12px; color: #86909c; margin-bottom: 6px' }, 
+            `基于 ${result.casesCount} 个外部案例生成`) : null,
+          // 内容预览
+          h('div', { style: 'padding: 8px 12px; background: #fff; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #4e5969; max-height: 100px; overflow-y: auto; margin-bottom: 6px' }, 
+            result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '')),
+          // 推断说明
+          result.inferenceNote ? h('div', { style: 'font-size: 12px; color: #86909c; font-style: italic' }, 
+            `注：${result.inferenceNote.slice(0, 100)}${result.inferenceNote.length > 100 ? '...' : ''}`) : null,
+        ])),
+      ]),
+      okText: `采纳全部 (${results.length} 项)`,
+      cancelText: '全部跳过',
+      onOk: () => {
+        resolve({ accepted: results, skipped: [] })
+      },
+      onCancel: () => {
+        resolve({ accepted: [], skipped: results })
+      },
+    })
+  })
 }
 
 // ===== 需求1：统一补充功能（合并 API检索 + 推断） =====

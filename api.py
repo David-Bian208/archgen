@@ -579,6 +579,24 @@ async def ai_infer_supplement(request: Dict = Body(...)):
 【作者身份定位】
 {persona_summary}
 
+═══════════ 核心原则（必须严格执行）═══════════
+
+【Cherry 补充原则】
+1. 边界原则：用户原文说了什么 = 边界，绝不越界添加用户没说的观点
+2. 增厚原则：用户说了但只说半句 = 帮他说完（拆层、加类比、加假设案例）
+3. 不发明原则：用户完全没说的 = 不替他说，如需补充必须用疑问句式
+4. 提问>断言：不确定时用"这可能意味着..."而不是"这是..."
+
+【素材来源优先级】（严格按顺序使用）
+- 第1层（最高优先）：用户原文中隐含但未展开的内容（标注：[原文推导]）
+- 第2层：用户原文中类比指向的内容，帮用户说完（标注：[类比展开]）
+- 第3层：公开资料中的通用知识（必须标注"根据公开资料..."）
+- 第4层（绝对禁止）：编造具体数据（"据统计 80%..."）、编造人名/公司案例、编造研究报告
+
+【补充比例控制】
+- 原文 200 字 → 补充后理想 600-800 字（3-4倍）
+- 超过 5 倍说明可能过度解读，请精简
+
 请提供优化建议：
 1. 指出已有内容的不足之处
 2. 补充具体数据、案例或信息
@@ -588,12 +606,25 @@ async def ai_infer_supplement(request: Dict = Body(...)):
 返回 JSON 格式：
 {{
   "content": "优化后的完整内容",
+  "supplement_type": "thicken",
+  "confidence": 0.85,
   "inference_note": "说明优化要点"
 }}
+
+supplement_type 取值说明（必须选一个）：
+- "thicken"（增厚）：用户说了但只说半句，需要展开/拆层/加类比。这类补充风险低，可自动采纳。
+- "fill"（补全）：用户完全没说，但逻辑链有缺口（如缺反驳、缺边界条件）。这类补充可能改变文章走向，需用户确认。
+- "infer"（推断）：基于公开资料的通用知识补充。需标注来源，用户确认后采纳。
+
+confidence 评分标准（0-1）：
+- 0.8-1.0：高置信度，补充内容与用户原文紧密相关
+- 0.6-0.8：中置信度，补充内容合理但与原文关联度一般
+- <0.6：低置信度，建议用户仔细审查
 
 注意：
 - 保留原有内容中有价值的部分
 - 补充具体、可操作的信息
+- 所有补充内容必须在开头标注来源：[原文推导]/[类比展开]/[公开资料]
 - 宁可内容少而精，不要编造
 
 请直接返回 JSON：
@@ -616,21 +647,53 @@ async def ai_infer_supplement(request: Dict = Body(...)):
 【作者身份定位】（只影响语言风格，不影响内容事实）
 {persona_summary}
 
+═══════════ 核心原则（必须严格执行）═══════════
+
+【Cherry 补充原则】
+1. 边界原则：用户原文说了什么 = 边界，绝不越界添加用户没说的观点
+2. 增厚原则：用户说了但只说半句 = 帮他说完（拆层、加类比、加假设案例）
+3. 不发明原则：用户完全没说的 = 不替他说，如需补充必须用疑问句式
+4. 提问>断言：不确定时用"这可能意味着..."而不是"这是..."
+
+【素材来源优先级】（严格按顺序使用）
+- 第1层（最高优先）：用户原文/MCP摘要中隐含但未展开的内容（标注：[原文推导]）
+- 第2层：用户类比指向的内容，帮用户说完（标注：[类比展开]）
+- 第3层：公开资料中的通用知识（必须标注"根据公开资料..."）
+- 第4层（绝对禁止）：编造具体数据（"据统计 80%..."）、编造人名/公司案例、编造研究报告
+
+【补充比例控制】
+- 理想补充比例：原文 200 字 → 补充后 600-800 字（3-4倍）
+- 超过 5 倍说明可能过度解读，请精简
+
 请为这个缺失项生成补充内容，要求：
 1. 优先引用 API 案例中的信息
 2. 结合 MCP 摘要中的已有信息做推断
-3. 如果 API 案例和 MCP 中都没有足够信息，基于常识做合理推断，并标注【AI 推断】
+3. 如果 API 案例和 MCP 中都没有足够信息，基于公开资料做合理推断，并标注[公开资料]
 4. 语言风格要符合作者身份定位（简洁、实战导向）
 5. 内容要具体、可操作
+6. 不确定时，用"这可能意味着..."句式，不要用断言
 
 返回 JSON 格式（不要 markdown 代码块）：
 {{
   "content": "生成的补充内容",
+  "supplement_type": "fill",
+  "confidence": 0.75,
   "inference_note": "说明推断依据，例如：'基于 API 案例 X + MCP 中的 Y 推断'"
 }}
 
+supplement_type 取值说明（必须选一个）：
+- "thicken"（增厚）：用户说了但只说半句，需要展开/拆层/加类比。这类补充风险低，可自动采纳。
+- "fill"（补全）：用户完全没说，但逻辑链有缺口（如缺反驳、缺边界条件）。这类补充可能改变文章走向，需用户确认。
+- "infer"（推断）：基于公开资料的通用知识补充。需标注来源，用户确认后采纳。
+
+confidence 评分标准（0-1）：
+- 0.8-1.0：高置信度，补充内容与用户原文紧密相关
+- 0.6-0.8：中置信度，补充内容合理但与原文关联度一般
+- <0.6：低置信度，建议用户仔细审查
+
 注意：
 - 必须体现 API 案例中的关键信息（公司名、数据、效果等）
+- 所有补充内容必须在开头标注来源：[原文推导]/[类比展开]/[公开资料]/[AI推断]
 - 宁可内容少而精，不要编造
 
 请直接返回 JSON：
@@ -657,6 +720,22 @@ async def ai_infer_supplement(request: Dict = Body(...)):
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
         supplement = json_mod.loads(parsed_content)
+        
+        # 确保返回格式包含新字段（Phase 3）
+        supplement.setdefault("supplement_type", "infer")
+        supplement.setdefault("confidence", 0.7)
+        
+        # 验证 supplement_type 取值范围
+        valid_types = ["thicken", "fill", "infer"]
+        if supplement.get("supplement_type") not in valid_types:
+            supplement["supplement_type"] = "infer"
+        
+        # 验证 confidence 取值范围
+        try:
+            conf = float(supplement.get("confidence", 0.7))
+            supplement["confidence"] = max(0.0, min(1.0, conf))
+        except:
+            supplement["confidence"] = 0.7
         
         return _success(supplement)
     except Exception as e:
@@ -3715,7 +3794,7 @@ async def analyze_directions_v2(request: Dict = Body(...)):
     except:
         pass
     
-    prompt = f"""你是一个内容策划专家。请基于以下素材，推荐5个写作方向。
+    prompt = f"""你是一个内容策划专家。请基于以下素材，推荐2-3个写作方向。
 
 【MCP 素材摘要】
 {mcp_summary}
@@ -3723,29 +3802,47 @@ async def analyze_directions_v2(request: Dict = Body(...)):
 【作者身份定位】
 {persona_summary}
 
-请推荐5个写作方向，每个方向包含：
-1. 方向名称
-2. 方向描述
-3. 匹配度（0-1，根据素材覆盖度）
-4. 推荐理由
-5. 关键缺失项（必须补充的，最多3个）
-6. 其他缺失项（AI可尝试推断的）
-7. 推荐框架列表
+═══════════ 透明推理原则（必须严格执行）═══════════
+1. 每个方向必须有推荐理由（基于素材中的哪一点）
+2. 标注推荐来源：
+   - user_content: 直接从素材推导
+   - user_implied: 素材隐含但未明说
+   - general_knowledge: 基于通用领域知识
+3. 提供2-3个选项，不替用户做决定
+4. 标注置信度：high/medium/low（由你判断，基于素材充分度）
 
-返回 JSON 格式（不要 markdown 代码块），按匹配度降序排列：
+═══════════ 生成原则 ═══════════
+- 如果素材不足，标注 confidence=low，不要编造
+- 如果推荐基于通用知识，标注 source=general_knowledge
+- 每个方向必须具体可操作，不要泛泛而谈
+- evidence_quote 可选：如果能准确引用素材原文就加上，不能则留空字符串
+
+请推荐2-3个写作方向，返回 JSON 格式（不要 markdown 代码块）：
 [
   {{
-    "name": "方向名称",
-    "description": "方向描述",
+    "name": "主张型：论证 Vibe Coding 的优越性",
+    "description": "方向描述（1-2句话）",
     "coverage": 0.85,
-    "reason": "推荐理由",
-    "missing_critical": ["关键缺失项1", "关键缺失项2", "关键缺失项3"],
-    "missing_optional": ["可选缺失项1", "可选缺失项2"],
+    "reason": "基于你提到的'比传统编程快很多'这一主张性表述",
+    "evidence_quote": "它比传统编程快很多，特别适合快速原型开发",
+    "source": "user_content",
+    "confidence": "high",
+    "scenario": "适合说服持怀疑态度的开发者读者",
+    "risk": "需要提供具体数据支撑'快很多'的说法",
+    "missing_critical": ["关键缺失项1", "关键缺失项2"],
+    "missing_optional": ["可选缺失项1"],
     "frameworks": ["推荐框架1", "推荐框架2"]
   }}
 ]
 
-请直接返回 JSON 数组：
+最后增加一个推荐字段：
+{{
+  "directions": [...],
+  "recommendation": "主张型",
+  "recommendation_reason": "你的素材有明确主张语气，且有反面质疑（适合做驳论）"
+}}
+
+请直接返回 JSON：
 """
     
     try:
@@ -3768,9 +3865,62 @@ async def analyze_directions_v2(request: Dict = Body(...)):
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
-        directions = json_mod.loads(parsed_content)
+        result_data = json_mod.loads(parsed_content)
         
-        return _success(directions)
+        # 确保返回格式包含透明推理字段（Phase 4 P0 兜底逻辑）
+        valid_sources = ["user_content", "user_implied", "general_knowledge"]
+        valid_confidence = ["high", "medium", "low"]
+        
+        if isinstance(result_data, dict) and "directions" in result_data:
+            # 新格式：{"directions": [...], "recommendation": ...}
+            for d in result_data["directions"]:
+                if not isinstance(d, dict):
+                    continue
+                d.setdefault("source", "user_implied")
+                d.setdefault("confidence", "medium")
+                d.setdefault("reason", "")
+                d.setdefault("evidence_quote", "")
+                d.setdefault("scenario", "")
+                d.setdefault("risk", "")
+                d.setdefault("missing_critical", [])
+                d.setdefault("missing_optional", [])
+                d.setdefault("frameworks", [])
+                
+                # 校验字段值
+                if d.get("source") not in valid_sources:
+                    d["source"] = "user_implied"
+                if d.get("confidence") not in valid_confidence:
+                    d["confidence"] = "medium"
+            
+            result_data.setdefault("recommendation", "")
+            result_data.setdefault("recommendation_reason", "")
+        elif isinstance(result_data, list):
+            # 兼容旧格式：直接返回数组
+            for d in result_data:
+                if not isinstance(d, dict):
+                    continue
+                d.setdefault("source", "user_implied")
+                d.setdefault("confidence", "medium")
+                d.setdefault("reason", "")
+                d.setdefault("evidence_quote", "")
+                d.setdefault("scenario", "")
+                d.setdefault("risk", "")
+                d.setdefault("missing_critical", [])
+                d.setdefault("missing_optional", [])
+                d.setdefault("frameworks", [])
+                
+                if d.get("source") not in valid_sources:
+                    d["source"] = "user_implied"
+                if d.get("confidence") not in valid_confidence:
+                    d["confidence"] = "medium"
+            
+            result_data = {
+                "directions": result_data,
+                "recommendation": "",
+                "recommendation_reason": "",
+            }
+        
+        return _success(result_data)
     except Exception as e:
         logger.error(f"方向推荐失败: {e}")
         return _error(msg=str(e))
@@ -3842,13 +3992,22 @@ async def match_frameworks_v2(request: Dict = Body(...)):
 【作者认知过滤】
 {persona_filter}
 
+═══════════ 透明推理原则（必须严格执行）═══════════
+1. 每个框架必须有推荐理由（为什么匹配用户方向）
+2. 标注推荐来源：
+   - user_content: 直接从方向描述推导
+   - user_implied: 方向隐含但未明说
+   - general_knowledge: 基于通用领域知识
+3. 标注方向对齐度（direction_alignment_score，0-1）
+4. 如果对齐度<0.6，请勿推荐
+
 ═══════════ 强制规则（必须严格执行）═══════════
 1. 每个推荐框架必须能直接服务于「{direction}」这个具体方向
 2. 严禁推荐与方向核心场景脱节的通用框架
    - 反面示例：方向是"个人IP构建"，却推荐"领导力框架"（适用于组织管理，不适合个人IP）
    - 反面示例：方向是"AI降本增效"，却推荐"组织变革框架"（脱离技术落地场景）
 3. 必须在 reason 中明确写出"框架的每个维度如何对应方向的关键问题"
-4. 必须输出 direction_alignment_score（方向对齐度，0-1），评分标准:
+4. 方向对齐度评分标准:
    - ≥0.8: 优秀(框架核心维度与方向高度契合)
    - 0.7-0.8: 良好(大部分维度贴合,可推荐)
    - 0.6-0.7: 勉强(需要转化使用,要在 warning 中说明)
@@ -3856,19 +4015,22 @@ async def match_frameworks_v2(request: Dict = Body(...)):
 5. 如果实在找不到3个对齐度≥0.6的框架，宁可只返回1-2个，也不要凑数
 6. warning 字段必须用"业务视角"(站在决策者角度),不要用技术视角
    - ✅ 正确: "⚠️ 风险提示:该框架偏向组织管理,若用于个人IP构建需自行转化语境,建议优先参考前两项"
-   - ❌ 错误: "该框架原用于管理者对下属的辅导..."(技术视角)
+   -  错误: "该框架原用于管理者对下属的辅导..."(技术视角)
+7. evidence_quote 可选：如果能准确引用方向描述就加上，不能则留空字符串
 
 返回 JSON 格式（不要 markdown 代码块），按 direction_alignment_score 降序排列：
 [
   {{
     "name": "框架名称",
     "description": "框架描述（1-2句话）",
-    "match_score": 0.9,
     "direction_alignment_score": 0.95,
     "direction_alignment_reason": "该框架的XX维度对应方向的YY关键问题，ZZ维度对应...",
-    "reason": "为什么适合（具体到方向场景，不要泛泛而谈）",
-    "warning": "如果对齐度<0.8，写明业务视角的潜在风险；否则留空字符串",
+    "reason": "为什么适合（具体到方向场景）",
+    "evidence_quote": "你的方向描述中...（可选）",
+    "source": "user_content",
     "framework_origin": "管理学/营销学/心理学/经济学/技术架构/内容创作 等学科归属",
+    "usage_hint": "这个框架适合用来做什么",
+    "warning": "如果对齐度<0.8，写明业务视角的潜在风险；否则留空字符串",
     "needs_supplement": ["需要补充的信息1", "需要补充的信息2"]
   }}
 ]
@@ -3903,13 +4065,20 @@ async def match_frameworks_v2(request: Dict = Body(...)):
         for fw in frameworks:
             fw.setdefault("name", "未知框架")
             fw.setdefault("description", "")
-            fw.setdefault("match_score", 0.5)
             fw.setdefault("direction_alignment_score", fw.get("match_score", 0.5))
             fw.setdefault("direction_alignment_reason", "")
             fw.setdefault("reason", "")
-            fw.setdefault("warning", "")
+            fw.setdefault("evidence_quote", "")
+            fw.setdefault("source", "user_implied")
             fw.setdefault("framework_origin", "")
+            fw.setdefault("usage_hint", "")
+            fw.setdefault("warning", "")
             fw.setdefault("needs_supplement", [])
+            
+            # 校验 source 取值
+            valid_sources = ["user_content", "user_implied", "general_knowledge"]
+            if fw.get("source") not in valid_sources:
+                fw["source"] = "user_implied"
             try:
                 align = float(fw.get("direction_alignment_score") or 0)
             except (TypeError, ValueError):
@@ -4326,25 +4495,48 @@ async def recommend_structures(request: Dict = Body(...)):
 - 时间线→里程碑→展望（演进式）
 - 总→分→总（总分式）
 
-请推荐2-3个叙事结构方案，每个方案包含：
-1. 结构名称（叙事结构名，如"递进式"、"剖析式"等，不要重复分析框架的名称）
-2. 结构描述（这个叙事结构如何组织文章段落）
-3. 匹配度
-4. 适用原因（为什么这个叙事结构适合这个方向+框架）
-5. 使用该结构还需要补充的信息（主要是案例/数据）
+═══════════ 透明推理原则（必须严格执行）═══════════
+1. 每个结构必须有推荐理由（为什么这个结构适合用户方向+框架）
+2. 标注推荐来源：
+   - user_content: 直接从方向/框架描述推导
+   - user_implied: 方向/框架隐含但未明说
+   - general_knowledge: 基于通用写作知识
+3. 提供2-3个选项，不替用户做决定
+4. 标注置信度：high/medium/low（由你判断）
 
-返回 JSON 格式（不要 markdown 代码块）：
+═══════════ 生成原则 ═══════════
+- 结构建议要具体到"每段填什么"，不要只给抽象框架
+- 明确标注用户已有什么、还缺什么
+- 如果用户内容不足，标注 confidence=low
+- evidence_quote 可选：如果能准确引用方向/框架描述就加上，不能则留空字符串
+
+请推荐2-3个叙事结构方案，返回 JSON 格式（不要 markdown 代码块）：
 [
   {{
-    "name": "叙事结构名称",
-    "description": "结构描述",
+    "name": "递进式",
+    "description": "结构描述（文章如何分段组织）",
     "match_score": 0.9,
-    "reason": "为什么适合",
-    "needs_supplement": ["需要补充的信息"]
+    "reason": "为什么这个结构适合你的方向+框架",
+    "evidence_quote": "你的方向中提到...（可选）",
+    "source": "user_content",
+    "confidence": "high",
+    "sections": [
+      {{"name": "开场", "hint": "用一句话吸引注意力"}},
+      {{"name": "分析", "hint": "基于你提到的XX展开"}},
+      {{"name": "总结", "hint": "重申核心观点"}}
+    ],
+    "missing_content": ["还需要补充的案例或数据"]
   }}
 ]
 
-请直接返回 JSON 数组：
+最后增加一个推荐字段：
+{{
+  "structures": [...],
+  "recommendation": "递进式",
+  "recommendation_reason": "你的方向是主张型，递进式结构适合层层深入论证"
+}}
+
+请直接返回 JSON：
 """
     
     try:
@@ -4367,9 +4559,53 @@ async def recommend_structures(request: Dict = Body(...)):
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
-        structures = json_mod.loads(parsed_content)
+        result_data = json_mod.loads(parsed_content)
         
-        return _success(structures)
+        # 后端兜底逻辑（Phase 4 P1）
+        valid_sources = ["user_content", "user_implied", "general_knowledge"]
+        valid_confidence = ["high", "medium", "low"]
+        
+        if isinstance(result_data, dict) and "structures" in result_data:
+            for s in result_data["structures"]:
+                if not isinstance(s, dict):
+                    continue
+                s.setdefault("source", "user_implied")
+                s.setdefault("confidence", "medium")
+                s.setdefault("reason", "")
+                s.setdefault("evidence_quote", "")
+                s.setdefault("sections", [])
+                s.setdefault("missing_content", [])
+                
+                if s.get("source") not in valid_sources:
+                    s["source"] = "user_implied"
+                if s.get("confidence") not in valid_confidence:
+                    s["confidence"] = "medium"
+            
+            result_data.setdefault("recommendation", "")
+            result_data.setdefault("recommendation_reason", "")
+        elif isinstance(result_data, list):
+            for s in result_data:
+                if not isinstance(s, dict):
+                    continue
+                s.setdefault("source", "user_implied")
+                s.setdefault("confidence", "medium")
+                s.setdefault("reason", "")
+                s.setdefault("evidence_quote", "")
+                s.setdefault("sections", [])
+                s.setdefault("missing_content", [])
+                
+                if s.get("source") not in valid_sources:
+                    s["source"] = "user_implied"
+                if s.get("confidence") not in valid_confidence:
+                    s["confidence"] = "medium"
+            
+            result_data = {
+                "structures": result_data,
+                "recommendation": "",
+                "recommendation_reason": "",
+            }
+        
+        return _success(result_data)
     except Exception as e:
         logger.error(f"结构推荐失败: {e}")
         return _error(msg=str(e))
@@ -4621,6 +4857,7 @@ async def generate_full_article(request: Dict = Body(...)):
     """
     session_id = request.get("session_id", "")
     outline_sections = request.get("outline_sections", [])
+    target_word_count = request.get("target_word_count", 2000)
 
     if not session_id:
         return _error(code=400, msg="缺少 session_id")
@@ -4643,15 +4880,29 @@ async def generate_full_article(request: Dict = Body(...)):
     direction = session.get("direction", "")
     framework = session.get("framework", "")
 
+    # 处理 sections：可能是 dict 或 list
+    if isinstance(outline_sections, dict):
+        sections_list = list(outline_sections.values())
+    elif isinstance(outline_sections, list):
+        sections_list = outline_sections
+    else:
+        return _error(code=400, msg="提纲格式不正确")
+
+    logger.info(f"文章生成 - sections类型: {type(outline_sections).__name__}, 数量: {len(sections_list)}")
+    logger.info(f"文章生成 - session数据: direction={direction}, framework={framework}")
+
     sections_text = "\n".join([
-        f"- {s.get('title', '')}: {s.get('key_points', [])} (素材: {s.get('materials', {})})"
-        for s in outline_sections
+        f"- {s.get('title', s.get('label', ''))}: {s.get('key_points', [])} (素材: {s.get('materials', {})})"
+        for s in sections_list
     ])
+    
+    logger.info(f"文章生成 - 提纲内容: {sections_text[:200]}...")
 
     prompt = f"""你是一个专业内容写手。请基于以下提纲，撰写一篇完整的文章。
 
 【写作方向】{direction}
 【分析框架】{framework}
+【目标字数】{target_word_count}字
 
 【MCP 素材摘要】
 {mcp_summary}
@@ -4665,9 +4916,10 @@ async def generate_full_article(request: Dict = Body(...)):
 要求：
 1. 语言风格：专业、实战导向、有洞察力
 2. 内容结构：按照提纲的段落顺序撰写
-3. 每个段落：200-800字，包含具体案例和数据
-4. 理论≤20%，实战≥80%
-5. 段落之间自然衔接
+3. 总字数控制在 {target_word_count} 字左右（±10%）
+4. 每个段落：合理分配字数，包含具体案例和数据
+5. 理论≤20%，实战≥80%
+6. 段落之间自然衔接
 
 返回 JSON 格式（不要 markdown 代码块）：
 {{

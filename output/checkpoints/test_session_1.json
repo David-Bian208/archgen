@@ -1,0 +1,12 @@
+{
+  "session_id": "test_session_1",
+  "step": 1,
+  "step_name": "html_gen",
+  "status": "completed",
+  "results": {
+    "status": "success"
+  },
+  "error": null,
+  "created_at": 1781670803.149242,
+  "updated_at": 1781670803.149244
+}
