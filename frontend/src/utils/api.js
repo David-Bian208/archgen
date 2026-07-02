@@ -1,9 +1,46 @@
 import axios from 'axios'
+import { Message } from '@arco-design/web-vue'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000,  // 30秒超时
+  timeout: 120000,  // 120秒超时（LLM 调用最长可达 60-120 秒）
 })
+
+// 请求拦截器：添加时间戳防缓存
+api.interceptors.request.use(
+  config => config,
+  error => Promise.reject(error)
+)
+
+// 响应拦截器：自动检测业务错误
+api.interceptors.response.use(
+  response => {
+    const body = response.data
+    // 如果后端返回标准格式 { code, msg, data }，自动检测错误
+    if (body && typeof body.code === 'number' && body.code !== 0) {
+      console.error('[API] 业务错误:', body.code, body.msg)
+      Message.error(body.msg || '请求失败')
+      return Promise.reject(new Error(body.msg || '请求失败'))
+    }
+    return response  // 保持原始 Axios 响应，不自动解包
+  },
+  error => {
+    if (error.code === 'ECONNABORTED') {
+      console.warn('[API] 请求超时:', error.message)
+      Message.warning('请求超时，AI 处理时间较长，请稍后重试')
+    } else if (error.response) {
+      const status = error.response.status
+      if (status === 500) {
+        console.error('[API] 服务器错误:', error.response.data)
+      } else if (status === 404) {
+        console.warn('[API] 接口不存在:', error.config?.url)
+      }
+    } else if (error.request) {
+      console.error('[API] 网络错误，请检查后端服务')
+    }
+    return Promise.reject(error)
+  }
+)
 
 export function getCategories() {
   return api.get('/categories')
@@ -95,6 +132,25 @@ export function generatePreview(frameworkKey, data, sourceText, style = 'minimal
   return api.post('/generate/preview', { framework_key: frameworkKey, data, source_text: sourceText, style, size })
 }
 
+// 新版配图：LLM 直接生成 HTML 信息图
+export function generateInfographic(frameworkName, articleContent, personaContext = '') {
+  return api.post('/generate/infographic', {
+    framework_name: frameworkName,
+    article_content: articleContent,
+    persona_context: personaContext,
+  })
+}
+
+// 新版配图迭代：基于反馈重新生成
+export function reviseInfographic(currentHtml, feedback, frameworkName = '', articleContent = '') {
+  return api.post('/generate/infographic/revise', {
+    current_html: currentHtml,
+    feedback,
+    framework_name: frameworkName,
+    article_content: articleContent,
+  })
+}
+
 export async function downloadBlob(blob, filename) {
   const url = window.URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -126,6 +182,11 @@ export function mcpSearch(topic, folders) {
 // MCP 题材推荐
 export function mcpSuggest(params) {
   return api.post('/mcp/suggest', params)
+}
+
+// MCP 按主题匹配文件并返回内容（纯关键词匹配 + 文件读取，不调 LLM）
+export function mcpMatchFiles(params) {
+  return api.post('/mcp/match-files', params)
 }
 
 // MCP 分类列表（用于筛选）
@@ -283,28 +344,88 @@ export function matchFrameworksV2(sessionId, direction, supplement1, mcpSummary)
 
 export function supplementStep2(sessionId, framework, supplementInfo) {
   return api.post('/workflow/supplement/2', {
+
     session_id: sessionId,
     framework,
     supplement_info: supplementInfo,
   })
 }
 
-export function checkWorkflowDirection(sessionId, direction, framework, supplement, mcpSummary) {
+// 框架填充（C 步骤）
+export function fillFramework(sessionId, frameworkKey, frameworkName, direction, supplement2, mcpSummary) {
+  return api.post('/workflow/framework/fill', {
+    session_id: sessionId,
+    framework_key: frameworkKey,
+    framework_name: frameworkName,
+    direction,
+    supplement_2: supplement2,
+    mcp_summary: mcpSummary,
+  })
+}
+
+export function fillFrameworkSlot(sessionId, slotKey, supplementInput = '', confirmedSources = []) {
+  return api.post('/workflow/slot/fill', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    supplement_input: supplementInput,
+    confirmed_sources: confirmedSources,
+  })
+}
+
+export function uploadSlotSource(sessionId, slotKey, content, filename = 'upload.txt', fileType = 'text') {
+  return api.post('/workflow/slot/upload_source', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    content: content,
+    filename: filename,
+    file_type: fileType,
+  })
+}
+
+export function batchFillFrameworkSlots(sessionId) {
+  return api.post('/workflow/slot/batch_fill', {
+    session_id: sessionId,
+  })
+}
+
+export function getFrameworkSlots(frameworkKey, sessionId = '') {
+  const params = sessionId ? { session_id: sessionId } : {}
+  return api.get(`/frameworks/${frameworkKey}/slots`, { params })
+}
+
+export function searchSlotFragments(sessionId, keywords, direction) {
+  return api.post('/workflow/slot/search', {
+    session_id: sessionId,
+    keywords: keywords,
+    direction: direction,
+  })
+}
+
+export function checkCoherence(sessionId) {
+  return api.post('/workflow/direction/check', {
+    session_id: sessionId,
+    check_mode: 'coherence',
+  })
+}
+
+export function checkWorkflowDirection(sessionId, direction, framework, supplement, mcpSummary, kbFileList = [], supplement1, analysisBody = '') {
   return api.post('/workflow/direction/check', {
     session_id: sessionId,
     direction,
     framework,
-    supplement_1: {},
+    supplement_1: supplement1 || { text: mcpSummary || '' },
     supplement_2: supplement,
     mcp_summary: mcpSummary,
+    kb_file_list: kbFileList,
+    analysis_body: analysisBody,
   })
 }
 
-export function fixWorkflowDirection(sessionId, issue, supplement, mcpSummary, direction, framework) {
+export function fixWorkflowDirection(sessionId, issue, supplement, mcpSummary, direction, framework, supplement1) {
   return api.post('/workflow/direction/fix', {
     session_id: sessionId,
     issue,
-    supplement_1: {},
+    supplement_1: supplement1 || { text: mcpSummary || '' },
     supplement_2: supplement,
     mcp_summary: mcpSummary,
     direction,
@@ -312,12 +433,12 @@ export function fixWorkflowDirection(sessionId, issue, supplement, mcpSummary, d
   })
 }
 
-export function recommendStructures(sessionId, direction, framework, supplement, mcpSummary) {
+export function recommendStructures(sessionId, direction, framework, supplement, mcpSummary, supplement1) {
   return api.post('/workflow/structures/recommend', {
     session_id: sessionId,
     direction,
     framework,
-    supplement_1: {},
+    supplement_1: supplement1 || { text: mcpSummary || '' },
     supplement_2: supplement,
     mcp_summary: mcpSummary,
   })
@@ -338,11 +459,15 @@ export function generateWorkflowOutline(sessionId) {
 }
 
 export function generateFullArticle(sessionId, outlineSections, options = {}) {
-  const { target_word_count = 2000 } = options
+  const { target_word_count = 2000, step5_supplements = '', step6_materials = [] } = options
   return api.post('/workflow/article/generate', {
     session_id: sessionId,
     outline_sections: outlineSections,
     target_word_count: target_word_count,
+    step5_supplements: step5_supplements,
+    step6_materials: step6_materials,
+  }, {
+    timeout: 300000,  // 文章生成需要较长时间，设置5分钟超时
   }).catch(err => {
     console.error('文章生成API调用失败:', err)
     throw err
@@ -368,13 +493,30 @@ export function aiPulseSupplement(sessionId, missingItem, keywords) {
 }
 
 export function aiInferSupplement(sessionId, missingItem, params = {}) {
-  const { cases = [], mcp_summary = '', existing_content = '' } = params
+  const {
+    cases = [],
+    mcp_summary = '',
+    existing_content = '',
+    kb_file_list = [],
+    user_prompt = '',
+    user_files = [],
+    useKB = false,
+    selectedKBFiles = [],
+    useWebSearch = false,
+    webSearchKeyword = '',
+  } = params
   return api.post('/workflow/supplement/ai-infer', {
     session_id: sessionId,
     missing_item: missingItem,
     mcp_summary: mcp_summary || '',
     selected_cases: cases,
     existing_content: existing_content || '',
+    kb_file_list: kb_file_list,
+    user_prompt: user_prompt || '',
+    user_files: user_files || [],
+    kb_files: useKB ? selectedKBFiles : [],
+    use_web_search: useWebSearch,
+    web_search_keyword: webSearchKeyword || '',
   })
 }
 
@@ -450,6 +592,256 @@ export function pipelineFullWorkflow(articleText, directionList, persona, enable
     direction_list: directionList,
     persona,
     enable_source_validation: enableValidation,
+  })
+}
+
+// ===== ArchGen v2.0: 知识评估 + 降级链 =====
+
+export function smartSupplement(sessionId, topic, context, missingItems = [], missingItem = {}, forceLevel = null, retrievalResults = []) {
+  return api.post('/workflow/supplement/smart', {
+    session_id: sessionId,
+    topic,
+    context,
+    missing_items: missingItems,
+    missing_item: missingItem,
+    force_level: forceLevel,
+    retrieval_results: retrievalResults,
+  })
+}
+
+export function degradeSupplement(sessionId, currentLevel, topic, context, missingItem = {}) {
+  return api.post('/workflow/supplement/degrade', {
+    session_id: sessionId,
+    current_level: currentLevel,
+    topic,
+    context,
+    missing_item: missingItem,
+  })
+}
+
+export function clearAssessmentCache(sessionId, cacheKey = null) {
+  return api.post('/workflow/supplement/clear-cache', {
+    session_id: sessionId,
+    cache_key: cacheKey,
+  })
+}
+
+// Step 3 起草模式：基于通用知识生成参考草稿（不走降级链）
+export function supplementDraft(sessionId, direction, framework, missingItem = '', userHint = '') {
+  return api.post('/workflow/supplement/draft', {
+    session_id: sessionId,
+    direction: direction,
+    framework: framework,
+    missing_item: missingItem,
+    user_hint: userHint,
+  })
+}
+
+// ===== 埋点与数据看板 =====
+
+export function recordAnalyticsEvent(eventData) {
+  return api.post('/analytics/event', eventData)
+}
+
+export function getAnalyticsEvents(sessionId = '', limit = 100) {
+  const params = sessionId ? `?session_id=${sessionId}&limit=${limit}` : `?limit=${limit}`
+  return api.get(`/analytics/events${params}`)
+}
+
+export function getSessionSummary(sessionId) {
+  return api.get(`/analytics/session/${sessionId}`)
+}
+
+export function getAnalyticsOverview(days = 7) {
+  return api.get(`/analytics/overview?days=${days}`)
+}
+
+// ===== A/B 测试 =====
+
+export function assignABTest(sessionId, experimentKey = 'degradation_alert') {
+  return api.post('/ab-test/assign', {
+    session_id: sessionId,
+    experiment_key: experimentKey,
+  })
+}
+
+export function getABExperiments() {
+  return api.get('/ab-test/experiments')
+}
+
+export function startABExperiment(experimentKey, startDate = null, endDate = null) {
+  return api.post('/ab-test/start', {
+    experiment_key: experimentKey,
+    start_date: startDate,
+    end_date: endDate,
+  })
+}
+
+export function pauseABExperiment(experimentKey) {
+  return api.post('/ab-test/pause', { experiment_key: experimentKey })
+}
+
+export function stopABExperiment(experimentKey) {
+  return api.post('/ab-test/stop', { experiment_key: experimentKey })
+}
+
+export function calculateSignificance(groupA, groupB) {
+  return api.post('/ab-test/significance', { group_a: groupA, group_b: groupB })
+}
+
+
+// ====================================================================
+// V4.0 三列分析工作台 — 新增 API
+// ====================================================================
+
+/**
+ * V4 SSE 流式：AI 流式推理生成槽位清单
+ * @param {string} sessionId
+ * @param {string} topic - 创作主题
+ * @param {string} materialPoolSummary - 素材池概览文本
+ * @param {object} callbacks - { onThinking(text), onSlot(slot), onDone(slots), onError(msg) }
+ * @returns {Promise<AbortController>} - 用于中断流式连接
+ */
+export function generateSlots(sessionId, topic, materialPoolSummary, callbacks) {
+  console.log('📡 generateSlots 被调用:', { sessionId, topic, materialPoolSummary })
+  const controller = new AbortController()
+
+  fetch('/api/workflow/slot/generate_slots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      topic,
+      material_pool_summary: materialPoolSummary || '',
+    }),
+    signal: controller.signal,
+  }).then(async (response) => {
+    console.log('📡 generateSlots fetch 响应:', { ok: response.ok, status: response.status })
+    if (!response.ok) {
+      callbacks.onError?.(`HTTP ${response.status}`)
+      return
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            console.log('📡 收到 SSE 数据:', data)
+            if (data.type === 'thinking') {
+              callbacks.onThinking?.(data.text)
+            } else if (data.type === 'slot') {
+              callbacks.onSlot?.({
+                slot_key: data.slot_key,
+                label: data.label,
+                description: data.description,
+              })
+            } else if (data.type === 'done') {
+              callbacks.onDone?.(data.slots)
+            } else if (data.type === 'error') {
+              callbacks.onError?.(data.msg)
+            }
+          } catch (e) {
+            // 忽略 JSON 解析错误（可能是不完整的数据行）
+          }
+        }
+      }
+    }
+  }).catch((err) => {
+    console.error('📡 generateSlots fetch 错误:', err)
+    if (err.name !== 'AbortError') {
+      callbacks.onError?.(err.message)
+    }
+  })
+
+  return controller
+}
+
+/**
+ * V4 生成槽位间关系图谱
+ */
+export function getSlotRelations(sessionId, confirmedSlots) {
+  return api.post('/workflow/slot/slot_relations', {
+    session_id: sessionId,
+    confirmed_slots: confirmedSlots,
+  })
+}
+
+/**
+ * V4 素材匹配：将素材池分配到槽位
+ */
+export function matchMaterials(sessionId, confirmedSlots) {
+  return api.post('/workflow/slot/match_materials', {
+    session_id: sessionId,
+    confirmed_slots: confirmedSlots,
+  })
+}
+
+/**
+ * V4 生成单槽位提纲
+ */
+export function generateSlotOutline(sessionId, slotKey, topic, materials, writingPlan = '') {
+  return api.post('/workflow/slot/generate_outline', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    topic,
+    materials: materials || [],
+    writing_plan: writingPlan,
+  })
+}
+
+/**
+ * V4 批量填充（素材+提纲并行）
+ */
+export function batchFillV4(sessionId, confirmedSlots) {
+  return api.post('/workflow/slot/batch_fill_v4', {
+    session_id: sessionId,
+    confirmed_slots: confirmedSlots,
+  })
+}
+
+/**
+ * V4 追问 AI（支持槽位确认阶段 + 编辑面板）
+ */
+export function askFollowup(sessionId, context, slotKey, question, history = []) {
+  return api.post('/workflow/slot/ask_followup', {
+    session_id: sessionId,
+    context: context,         // 'slot_confirmation' | 'edit_panel'
+    slot_key: slotKey || '',
+    question,
+    history: history || [],
+  })
+}
+
+/**
+ * V4 素材可行性预检：统计每个槽位素材覆盖度 + AI 替换建议
+ */
+export function preCheckMaterials(sessionId, confirmedSlots) {
+  return api.post('/workflow/slot/pre_check_materials', {
+    session_id: sessionId,
+    confirmed_slots: confirmedSlots,
+  })
+}
+
+/**
+ * V4 素材池统一构建：进入 Step 3 时调用
+ */
+export function buildMaterialPool(sessionId, mcpSummary = '', mcpFiles = []) {
+  return api.post('/workflow/slot/build_material_pool', {
+    session_id: sessionId,
+    mcp_summary: mcpSummary || '',
+    mcp_files: mcpFiles || [],
   })
 }
 

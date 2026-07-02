@@ -3,240 +3,156 @@
     <a-page-header title="智能写作工作流" @back="$router.push('/mcp-search')">
     </a-page-header>
 
-    <!-- 进度条 -->
-    <div class="progress-bar">
-      <a-steps :current="currentStep" direction="horizontal" size="small" style="max-width: 100%; margin: 0 auto">
-        <a-step title="扫描" />
-        <a-step title="评估" />
-        <a-step title="方向+框架" />
-        <a-step title="补充" />
-        <a-step title="检测" />
-        <a-step title="结构推荐" />
-        <a-step title="提纲" />
-        <a-step title="完整文章" />
-      </a-steps>
+    <!-- 竖排步骤列表 -->
+    <div class="step-summary-list">
+      <div 
+        v-for="(name, index) in stepNames" 
+        :key="index" 
+        class="step-summary-item"
+        :class="{ 
+          'is-completed': index < currentStep, 
+          'is-current': index === currentStep, 
+          'is-future': index > currentStep 
+        }"
+      >
+        <div class="step-summary-header" @click="toggleStepCollapse(index)">
+          <span class="step-status-icon">
+            <template v-if="index < currentStep">✅</template>
+            <template v-else-if="index === currentStep">🔄</template>
+            <template v-else>○</template>
+          </span>
+          <span class="step-name">{{ name }}</span>
+          <span v-if="index < currentStep && stepSummaries[index] && !collapsedSteps[index]" class="step-summary-text">
+            ：{{ stepSummaries[index] }}
+          </span>
+          <span v-if="index < currentStep && stepSummaries[index]" class="step-collapse-icon">
+            {{ collapsedSteps[index] ? '▶' : '▼' }}
+          </span>
+        </div>
+        <!-- 展开详情区域 -->
+        <div v-if="collapsedSteps[index] && index < currentStep && stepDetails[index]" class="step-detail-content">
+          {{ stepDetails[index] }}
+        </div>
+      </div>
     </div>
 
     <!-- 主内容区 -->
     <div class="content-area">
       <a-spin dot :loading="loading" tip="加载中...">
-        <!-- Step 0: MCP扫描结果展示 -->
+        <!-- Step 0: 选题 -->
         <div v-if="currentStep === 0" class="step-content">
-          <a-card title="MCP 扫描完成">
-            <template #extra>
-              <a-tag color="green">{{ mcpFiles.length }} 个文件</a-tag>
-            </template>
-            <div class="mcp-summary">
-              <a-typography-text type="secondary">摘要预览：</a-typography-text>
-              <div class="summary-text">{{ mcpSummary ? mcpSummary.substring(0, 500) + '...' : '无摘要' }}</div>
-            </div>
-            <a-space style="margin-top: 16px">
-              <a-button type="primary" @click="goToCompletenessEval">
-                开始完整度评估
-              </a-button>
-              <a-button @click="$router.push('/mcp-search')">
-                返回重新搜索
-              </a-button>
-            </a-space>
-          </a-card>
-        </div>
-
-        <!-- Step 1: 完整度评估 -->
-        <div v-if="currentStep === 1" class="step-content">
-          <!-- 编辑主题和参考资料信息 -->
-          <a-card style="margin-bottom: 16px">
+          <a-card>
             <template #title>
-              <icon-book /> 写作主题与参考资料
+              <a-space>
+                <span>选题推荐</span>
+                <a-tag v-if="scannedFolders.length" color="arcoblue" size="small">{{ scannedFolders.length }} 个知识库</a-tag>
+              </a-space>
             </template>
-            <a-descriptions :column="2" size="small">
-              <a-descriptions-item label="写作主题">
-                {{ appStore.selectedTopic?.name || mcpTopic || '未指定' }}
-              </a-descriptions-item>
-              <a-descriptions-item label="参考资料数量">
-                {{ mcpFiles?.length || 0 }} 篇
-              </a-descriptions-item>
-              <a-descriptions-item label="资料概览" :span="2">
-                <a-typography-text type="secondary">
-                  {{ mcpSummary?.substring(0, 200) || '暂无资料' }}{{ mcpSummary && mcpSummary.length > 200 ? '...' : '' }}
-                </a-typography-text>
-              </a-descriptions-item>
-              <a-descriptions-item label="来源文件" :span="2" v-if="mcpFiles?.length">
-                <a-space wrap>
-                  <a-tag v-for="(f, i) in mcpFiles.slice(0, 5)" :key="i">
-                    {{ f.substring(0, 30) }}{{ f.length > 30 ? '...' : '' }}
-                  </a-tag>
-                  <a-tag v-if="mcpFiles.length > 5">+{{ mcpFiles.length - 5 }} 更多</a-tag>
-                </a-space>
-              </a-descriptions-item>
-            </a-descriptions>
-          </a-card>
-
-          <a-card title="信息完整度评估">
-            <!-- 加载中 -->
-            <div v-if="loading" style="text-align: center; padding: 80px 0">
-              <a-spin :size="50" dot tip="正在评估信息完整度..." />
-            </div>
-
-            <!-- 未评估：显示空状态 + 触发按钮 -->
-            <div v-else-if="!completenessResult" style="text-align: center; padding: 60px 0">
-              <a-empty description="尚未评估">
-                <template #image>
-                  <icon-file style="font-size: 64px; color: #c9cdd4" />
-                </template>
-              </a-empty>
-              <a-button type="primary" size="large" @click="goToCompletenessEval" style="margin-top: 16px">
-                <icon-scan /> 开始完整度评估
+            <template #extra>
+              <a-button type="text" size="small" @click="refreshTopics" :loading="topicsLoading">
+                <IconRefresh style="margin-right: 4px" /> 换一批
               </a-button>
+            </template>
+
+            <!-- 加载中状态 -->
+            <div v-if="topicsLoading" style="text-align: center; padding: 40px">
+              <a-spin :size="50" dot tip="AI 正在分析推荐选题..." />
             </div>
 
-            <!-- 评估结果已加载 -->
-            <div v-else>
-              <!-- 完整度统一处理为 0-100 的整数 -->
-              <a-progress 
-                :percent="displayCompleteness / 100" 
-                :color="getCompletenessColor(displayCompleteness)" 
-                :stroke-width="12"
-                :show-text="false"
-              />
-              <div style="margin-top: 12px">
-                <a-tag :color="getCompletenessColor(displayCompleteness)" size="large">
-                  信息完整度：{{ displayCompleteness }}%
-                </a-tag>
-              </div>
-
-              <a-descriptions :column="2" style="margin-top: 16px" bordered>
-                <a-descriptions-item label="核心概念清晰度">
-                  {{ completenessResult.dimensions?.concept_clarity || 'N/A' }}%
-                </a-descriptions-item>
-                <a-descriptions-item label="应用场景具体性">
-                  {{ completenessResult.dimensions?.scenario_specificity || 'N/A' }}%
-                </a-descriptions-item>
-                <a-descriptions-item label="案例/数据丰富度">
-                  {{ completenessResult.dimensions?.case_richness || 'N/A' }}%
-                </a-descriptions-item>
-                <a-descriptions-item label="目标读者明确性">
-                  {{ completenessResult.dimensions?.audience_clarity || 'N/A' }}%
-                </a-descriptions-item>
-              </a-descriptions>
-
-              <a-alert type="warning" style="margin-top: 16px">
-                <template #title>  完整度评估说明与补充策略</template>
-                <div style="font-size: 13px; line-height: 1.8">
-                  <div>• <strong>完整度</strong>评估的是<strong>素材充分性</strong>（是否足够支撑一篇高质量文章），不同于MCP搜索的「匹配度」（主题相关性）</div>
-                  <div v-if="completenessResult.supplement_strategy" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(0,0,0,0.1)">
-                    • <strong>补充策略：</strong>{{ completenessResult.supplement_strategy }}
+            <!-- 话题列表 -->
+            <div v-else-if="topics.length" class="topic-list">
+              <div
+                v-for="(t, i) in topics"
+                :key="i"
+                class="topic-item"
+                :class="{ 
+                  selected: selectedDirection?.name === t.name,
+                  'topic-excellent': (t.overall_score || 0) >= 80,
+                  'topic-good': (t.overall_score || 0) >= 60 && (t.overall_score || 0) < 80,
+                  'topic-poor': (t.overall_score || 0) < 60
+                }"
+                @click="selectDirectionAndAdvance(t)"
+              >
+                <div class="topic-header">
+                  <div class="topic-name">{{ t.name }}</div>
+                  <a-tag v-if="selectedDirection?.name === t.name" color="arcoblue" size="small">已选</a-tag>
+                  <a-tag v-if="(t.overall_score || 0) >= 80" color="green" size="small">⭐ 推荐</a-tag>
+                  <a-tag v-else-if="(t.overall_score || 0) >= 60" color="orange" size="small">💡 良好</a-tag>
+                  <a-tag v-else color="red" size="small">⚠️ 待补充</a-tag>
+                </div>
+                <div class="topic-desc">{{ t.description }}</div>
+                <div class="topic-meta">
+                  <div class="meta-item">
+                    <span class="meta-label">覆盖度</span>
+                    <div class="progress-track">
+                      <div class="progress-fill" :style="{ width: (t.coverage * 100).toFixed(0) + '%' }"></div>
+                    </div>
+                    <span class="meta-value">{{ (t.coverage * 100).toFixed(0) }}%</span>
                   </div>
                 </div>
-              </a-alert>
+                <div class="topic-reason">
+                  <IconBulb style="color: #F7BA2A; margin-right: 4px; font-size: 14px" />
+                  <span>{{ t.reason }}</span>
+                </div>
+                <div v-if="t.needed" class="topic-needed">
+                  <span class="needed-label">需要补充：</span>
+                  <span>{{ t.needed }}</span>
+                </div>
 
-              <div v-if="completenessResult.missing_critical?.length" style="margin-top: 16px">
-                <a-typography-text strong style="color: #f53f3f"> 关键缺失项（建议优先补充）：</a-typography-text>
-                <a-list :data="completenessResult.missing_critical" size="small" style="margin-top: 8px">
-                  <template #item="{ item, index }">
-                    <a-list-item :style="{ padding: '12px 16px', borderRadius: '4px', background: isSupplemented(index) ? '#f7f8fa' : '#fff2f0' }">
-                      <div v-if="isSupplemented(index)">
-                        <icon-check-circle-fill style="color: #00b42a; margin-right: 8px; font-size: 16px" />
-                        <div style="flex: 1">
-                          <div style="font-size: 14px">{{ item }}</div>
-                          <div v-if="getSupplementContent(index)" style="margin-top: 6px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px; color: #4e5969; line-height: 1.6; max-height: 80px; overflow-y: auto">
-                            {{ getSupplementContent(index) }}
+                <!-- 3 分制评估 -->
+                <div v-if="t.direction_score || t.deficiency_score || t.overall_score" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e6eb">
+                  <a-row :gutter="12">
+                    <a-col :span="8">
+                      <div class="score-card" :class="{ 'score-high': t.direction_score >= 80, 'score-medium': t.direction_score >= 60 && t.direction_score < 80, 'score-low': t.direction_score < 60 }">
+                        <div class="score-title">方向适合度</div>
+                        <div class="score-value" :style="{ color: t.direction_score >= 80 ? '#00b42a' : t.direction_score >= 60 ? '#f7ba1e' : '#f53f3f' }">
+                          {{ t.direction_score || 0 }}<span class="score-unit">分</span>
+                        </div>
+                        <div class="score-desc">
+                          {{ t.direction_analysis || '暂无分析' }}
+                        </div>
+                      </div>
+                    </a-col>
+                    <a-col :span="8">
+                      <div class="score-card" :class="{ 'score-high': t.deficiency_score >= 80, 'score-medium': t.deficiency_score >= 50 && t.deficiency_score < 80, 'score-low': t.deficiency_score < 50 }">
+                        <div class="score-title">内容完整度</div>
+                        <div class="score-value" :style="{ color: t.deficiency_score >= 80 ? '#00b42a' : t.deficiency_score >= 50 ? '#f7ba1e' : '#f53f3f' }">
+                          {{ t.deficiency_score || 0 }}<span class="score-unit">分</span>
+                        </div>
+                        <div class="score-details">
+                          <div v-for="(detail, di) in (t.deficiency_details || []).slice(0, 2)" :key="di" class="detail-item">
+                            <a-tag v-if="detail.severity === 'high'" size="small" color="red">高</a-tag>
+                            <a-tag v-else-if="detail.severity === 'medium'" size="small" color="orange">中</a-tag>
+                            <a-tag v-else size="small" color="arcoblue">低</a-tag>
+                            <span>{{ detail.item }}</span>
                           </div>
                         </div>
-                        <a-button type="primary" text size="mini" style="margin-left: 8px" @click="openEditSupplementModal(index)">
-                          编辑
-                        </a-button>
                       </div>
-                      <div v-else>
-                        <icon-close-circle-fill style="color: #f53f3f; margin-right: 8px; font-size: 16px" />
-                        <div style="flex: 1; font-size: 14px">{{ item }}</div>
-                        <a-space size="mini" style="margin-left: 8px">
-                          <a-button type="primary" size="mini" @click="openUnifiedSupplementModal(index)">
-                            🤖 AI-Pulse + 推断
-                          </a-button>
-                          <a-button size="mini" @click="openManualSupplement(index)">
-                            手动补充
-                          </a-button>
-                        </a-space>
+                    </a-col>
+                    <a-col :span="8">
+                      <div class="score-card" :class="{ 'score-high': t.overall_score >= 80, 'score-medium': t.overall_score >= 60 && t.overall_score < 80, 'score-low': t.overall_score < 60 }">
+                        <div class="score-title">综合评分</div>
+                        <div class="score-value" :style="{ color: t.overall_score >= 80 ? '#00b42a' : t.overall_score >= 60 ? '#f7ba1e' : '#f53f3f' }">
+                          {{ t.overall_score || 0 }}<span class="score-unit">分</span>
+                        </div>
+                        <div class="score-tag">
+                          <a-tag v-if="(t.overall_score || 0) >= 80" color="green" size="small">可直接生成</a-tag>
+                          <a-tag v-else-if="(t.overall_score || 0) >= 60" color="orange" size="small">建议补充</a-tag>
+                          <a-tag v-else color="red" size="small">素材不足</a-tag>
+                        </div>
                       </div>
-                    </a-list-item>
-                  </template>
-                </a-list>
-                
-                <!-- 一键补充按钮 -->
-                <div v-if="completenessResult.missing_critical.filter((_, idx) => !isSupplemented(idx)).length > 0" style="margin-top: 16px; text-align: center">
-                  <a-button 
-                    type="primary" 
-                    status="success" 
-                    size="large" 
-                    :loading="supplementAllLoading"
-                    @click="supplementAllCritical"
-                  >
-                     一键补充 {{ completenessResult.missing_critical.filter((_, idx) => !isSupplemented(idx)).length }} 项缺口
-                  </a-button>
+                    </a-col>
+                  </a-row>
                 </div>
               </div>
+            </div>
 
-              <div v-if="completenessResult.missing_optional?.length" style="margin-top: 12px">
-                <a-typography-text type="secondary">
-                  可选缺失项（AI可尝试推断）：{{ (completenessResult.missing_optional || []).join('、') }}
-                </a-typography-text>
-              </div>
-
-              <!-- 检查是否所有关键缺失项都已补充 -->
-              <div v-if="allCriticalSupplemented" style="margin-top: 16px">
-                <a-alert type="success" style="margin-bottom: 16px">
-                  <template #title>✅ 所有关键缺失项已补充完毕</template>
-                  信息已充足，可以点击按钮进入下一步
-                </a-alert>
-                <a-space style="margin-top: 16px">
-                  <a-button type="primary" status="success" size="large" @click="goToDirections">
-                     下一步：推荐写作方向
-                  </a-button>
-                  <a-button size="large" @click="skipToOutline">
-                    直接生成提纲
-                  </a-button>
-                </a-space>
-              </div>
-
-              <div v-else>
-                <a-space style="margin-top: 20px" wrap>
-                  <!-- 5A: 信息充足 -->
-                  <a-button v-if="displayCompleteness >= 80" type="primary" status="success" size="large" @click="skipToOutline">
-                    ✅ 信息充足，直接生成提纲
-                  </a-button>
-
-                  <!-- 5B/5C: 需要补充 -->
-                  <div v-if="displayCompleteness < 80" style="width: 100%">
-                    <a-alert :type="completenessResult.mode === 'framework' ? 'error' : 'warning'" style="width: 100%; margin-bottom: 16px">
-                      <template #title>
-                        {{ completenessResult.mode_label || '需要补充关键信息' }}
-                      </template>
-                      <template #default>
-                        <div v-if="completenessResult.mode === 'framework'">
-                          知识库信息严重不足，将采用框架构建模式。建议补充关键信息后重新评估。
-                        </div>
-                        <div v-else-if="completenessResult.mode && completenessResult.mode.startsWith('degraded')">
-                          部分信息缺失，将采用{{ (completenessResult.mode_label || '').replace('模式', '') }}模式生成内容。
-                        </div>
-                        <div v-else>
-                          {{ displayCompleteness >= 60 ? '建议补充关键信息以提升文章质量' : '信息不足，必须补充后才能生成高质量内容' }}
-                        </div>
-                        <ul v-if="completenessResult.suggestions?.length" style="margin: 8px 0 0 16px; padding: 0">
-                          <li v-for="(s, i) in completenessResult.suggestions" :key="i" style="margin-bottom: 4px; font-size: 13px">
-                            {{ s }}
-                          </li>
-                        </ul>
-                      </template>
-                    </a-alert>
-
-                    <a-alert type="info" style="width: 100%; margin-bottom: 16px">
-                      <template #title> 操作提示</template>
-                      逐项补充：点击上方各缺失项的「AI-Pulse + 推断」或「手动补充」按钮<br>
-                      一键补充：点击上方「一键补充缺口」按钮，批量处理所有缺失项
-                    </a-alert>
-                  </div>
-                </a-space>
-              </div>
+            <!-- 空状态 -->
+            <div v-else style="text-align: center; padding: 40px; color: #86909c">
+              <a-empty description="暂无推荐选题，请返回知识库检索页重新搜索" />
+              <a-button type="primary" style="margin-top: 16px" @click="$router.push('/mcp-search')">
+                返回检索
+              </a-button>
             </div>
           </a-card>
         </div>
@@ -764,400 +680,231 @@
           </a-space>
         </a-modal>
 
-        <!-- Step 2: 推荐写作方向 -->
-        <div v-if="currentStep === 2" class="step-content">
-          <a-card>
-            <template #title>
-              <a-space>
-                <span>推荐写作方向</span>
-                <a-button type="text" size="mini" @click="refreshDirection" :disabled="directionsLoading">
-                   换一批
-                </a-button>
-                <a-tag>共 {{ directions.length }} 个方向</a-tag>
-              </a-space>
-            </template>
-
-            <!-- 加载中状态 -->
-            <div v-if="directionsLoading" style="text-align: center; padding: 40px">
-              <a-spin :size="50" dot tip="AI 正在分析推荐写作方向..." />
-            </div>
-
-            <!-- 空数据状态 -->
-            <div v-else-if="directions.length === 0" style="text-align: center; padding: 40px; color: #86909c">
-              <a-empty description="暂无推荐方向，请点击「换一批」重试" />
-            </div>
-
-            <!-- 方向列表 -->
-            <div v-else>
-              <!-- 全局推荐横幅 -->
-              <a-alert v-if="directions[0] && directions[0].confidence" type="info" style="margin-bottom: 16px; background: #e8f7ff; border-color: #b3d9ff">
-                <template #message>
-                  <div style="font-size: 13px">
-                    💡 AI 推荐：<strong>{{ directions[0].name }}</strong>
-                    <span v-if="directions[0].reason" style="margin-left: 8px; color: #86909c">{{ directions[0].reason }}</span>
-                  </div>
-                </template>
-              </a-alert>
-
-              <div v-for="(d, i) in directions" :key="i" class="direction-card">
-              <a-card :bordered="true" hoverable>
-                <template #title>
-                  <span style="font-size: 16px">
-                    <span v-if="i === 0">🥇 </span>
-                    <span v-else-if="i === 1">🥈 </span>
-                    <span v-else-if="i === 2">🥉 </span>
-                    {{ d.name }}
-                  </span>
-                  <a-tag v-if="d.confidence === 'high'" color="green" style="margin-left: 8px">高匹配</a-tag>
-                  <a-tag v-else-if="d.confidence === 'medium'" color="orange" style="margin-left: 8px">中匹配</a-tag>
-                  <a-tag v-else color="gray" style="margin-left: 8px">低匹配</a-tag>
-                  <a-tag :color="getCoverageColor(d.coverage)" style="margin-left: 4px">
-                    匹配度 {{ (d.coverage * 100).toFixed(0) }}%
-                  </a-tag>
-                </template>
-                <div class="direction-desc">{{ d.description }}</div>
-                
-                <!-- 单行推理信息（极简展示） -->
-                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e6eb; font-size: 12px; color: #86909c; display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
-                  <span v-if="d.reason"> {{ d.reason }}</span>
-                  <span v-if="d.source === 'general_knowledge'" style="color: #ff7d00">⚠️ 基于通用知识</span>
-                  <span v-if="d.scenario">📌 {{ d.scenario }}</span>
-                  <span v-if="d.evidence_quote" style="color: #165dff; cursor: pointer; font-style: italic" @click="showEvidenceQuote(d)">「{{ d.evidence_quote.slice(0, 30) }}...」</span>
-                </div>
-                
-                <!-- 关键缺失项 -->
-                <div v-if="d.missing_critical?.length" class="missing-items">
-                  <a-typography-text strong style="color: #f53f3f; font-size: 12px">需要补充：</a-typography-text>
-                  <span style="font-size: 12px; color: #f53f3f">{{ d.missing_critical.join('、') }}</span>
-                </div>
-                
-                <!-- 其他缺失项 -->
-                <div v-if="d.missing_optional?.length" class="missing-items-optional">
-                  <a-typography-text type="secondary" style="font-size: 12px">
-                    AI 可推断：{{ d.missing_optional.join('、') }}
-                  </a-typography-text>
-                </div>
-
-                <a-button type="primary" status="success" style="margin-top: 12px" @click="selectDirection(d)">
-                  选择此方向，加载框架
-                </a-button>
-              </a-card>
-              
-              <!-- 选中该方向后，显示推荐框架 -->
-              <div v-if="selectedDirection?.name === d.name && (frameworks.length > 0 || frameworksBanner)" style="margin-top: 16px">
-                <a-alert type="info" style="margin-bottom: 12px">
-                  <template #title>🎯 已选择方向：{{ d.name }}，以下是推荐框架</template>
-                </a-alert>
-                
-                <a-alert v-if="frameworksBanner" 
-                  :type="frameworksMode === 'rejected' ? 'error' : 'warning'" 
-                  style="margin-bottom: 12px">
-                  <template #title>{{ frameworksMode === 'rejected' ? '推荐失败' : '降级推荐提示' }}</template>
-                  <div style="font-size: 13px; line-height: 1.6">{{ frameworksBanner }}</div>
-                </a-alert>
-                
-                <div v-if="frameworks.length > 0" style="margin-bottom: 12px; display: flex; justify-content: flex-end">
-                  <a-button size="small" :loading="frameworksLoading" @click="regenerateFrameworks">
-                    🔄 重新推荐
-                  </a-button>
-                </div>
-                
-                <a-spin v-if="frameworksLoading" :size="50" dot tip="正在重新推荐..." />
-                <div v-else>
-                  <div v-for="(f, j) in frameworks" :key="j" class="framework-card" style="margin-bottom: 12px">
-                    <a-card :bordered="true" hoverable size="small" :style="{ borderLeft: `4px solid ${getAlignmentColor(f.direction_alignment_score ?? f.match_score)}` }">
-                      <template #title>
-                        <span v-if="j === 0"> </span>
-                        <span v-else-if="j === 1">🥈 </span>
-                        <span v-else-if="j === 2">🥉 </span>
-                        {{ f.name }}
-                        <a-tag v-if="f.framework_origin" size="small" color="gray" style="margin-left: 8px">
-                          📚 {{ f.framework_origin }}
-                        </a-tag>
-                        <a-tag :color="getAlignmentTagColor(f.direction_alignment_score ?? f.match_score)" style="margin-left: 4px">
-                          🎯 对齐 {{ ((f.direction_alignment_score ?? f.match_score) * 100).toFixed(0) }}%
-                        </a-tag>
-                      </template>
-                      <div style="font-size: 13px">{{ f.description }}</div>
-                      
-                      <!-- 单行匹配信息 -->
-                      <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e6eb; font-size: 12px; color: #86909c; display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
-                        <span v-if="f.reason"> {{ f.reason }}</span>
-                        <span v-if="f.source === 'general_knowledge'" style="color: #ff7d00">⚠️ 基于通用知识</span>
-                        <span v-if="f.usage_hint">📌 {{ f.usage_hint }}</span>
-                      </div>
-                      
-                      <!-- 风险提示 -->
-                      <div v-if="f.warning" style="margin-top: 8px; font-size: 12px; color: #ff7d00">
-                        {{ f.warning }}
-                      </div>
-                      
-                      <!-- 需要补充 -->
-                      <div v-if="f.needs_supplement?.length" style="margin-top: 4px; font-size: 12px; color: #86909c">
-                        还需要：{{ f.needs_supplement.join('、') }}
-                      </div>
-                      
-                      <a-button 
-                        :type="(f.direction_alignment_score ?? f.match_score) >= 0.7 ? 'primary' : 'outline'" 
-                        :status="(f.direction_alignment_score ?? f.match_score) >= 0.7 ? 'success' : (f.direction_alignment_score ?? f.match_score) >= 0.6 ? 'warning' : 'default'" 
-                        size="small" 
-                        style="margin-top: 12px" 
-                        @click="selectFramework(f)"
-                      >
-                        {{ (f.direction_alignment_score ?? f.match_score) >= 0.7 ? '选择此框架' : (f.direction_alignment_score ?? f.match_score) >= 0.6 ? '⚠️ 谨慎选择(需转化)' : '不推荐(请选其他)' }}
-                      </a-button>
-                    </a-card>
-                  </div>
-                </div>
-              </div>
-            </div>
-            </div>
-          </a-card>
-        </div>
-
-        <!-- Step 3: 补充 - 完善分析内容 -->
-        <div v-if="currentStep === 3" class="step-content">
-          <a-card title="补充分析内容">
-            <!-- 原文状态展示 -->
-            <a-alert type="info" style="margin-bottom: 16px">
-              <template #title>📄 原文核心信息</template>
-              <div style="max-height: 120px; overflow-y: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap">
-                {{ mcpSummary || '暂无MCP摘要信息' }}
-              </div>
-            </a-alert>
-
-            <!-- 当前状态 + 检测结果（建设清单风格） -->
-            <a-card :bordered="true" style="margin-bottom: 16px; background: #f7f8fa">
-              <template #title>
-                <a-space>
-                  <span>当前信息状态</span>
-                  <a-button 
-                    type="text" 
-                    size="mini" 
-                    :loading="preCheckLoading" 
-                    @click="runPreCheck"
-                  >
-                    🔄 重新检测
-                  </a-button>
-                </a-space>
-              </template>
-              <div style="font-size: 13px; line-height: 1.8">
-                <!-- ✅ 已具备 -->
-                <div style="margin-bottom: 12px">
-                  <div style="font-weight: 600; color: #00b42a; margin-bottom: 6px">✅ 已具备</div>
-                  <div style="padding-left: 16px">
-                    <div>• <strong>方向：</strong>{{ selectedDirection?.name || '未选择' }}</div>
-                    <div>• <strong>框架：</strong>{{ selectedFramework?.name || '未选择' }}</div>
-                  </div>
-                </div>
-                
-                <!-- 预检测结果 -->
-                <div v-if="preCheckResult" class="pre-check-result">
-                  <!-- 有问题需要细化 -->
-                  <div v-if="preCheckResult.issues && preCheckResult.issues.length > 0">
-                    <div style="font-weight: 600; color: #1d2129; margin-bottom: 8px"> 还需细化</div>
-                    <div style="padding-left: 16px">
-                      <div v-for="(issue, ii) in preCheckResult.issues" :key="ii" style="margin-bottom: 8px; padding: 8px; background: #fff; border-radius: 4px; border-left: 3px solid #e5e6eb">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px">
-                          <div style="display: flex; align-items: center; gap: 6px">
-                            <span :style="{ fontSize: '14px' }">{{ issue.type === 'error' ? '🔴' : issue.type === 'warning' ? '🟡' : '🟢' }}</span>
-                            <strong style="font-size: 13px">{{ issue.title }}</strong>
-                          </div>
-                          <a-tag v-if="issue.type === 'error'" size="mini" color="red">高优</a-tag>
-                          <a-tag v-else-if="issue.type === 'warning'" size="mini" color="orange">中优</a-tag>
-                          <a-tag v-else size="mini" color="green">优化</a-tag>
-                        </div>
-                        <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">{{ issue.description }}</div>
-                        <div style="display: flex; gap: 4px; flex-wrap: wrap">
-                          <a-button v-if="issue.can_auto_fix" size="mini" type="outline" @click="fixIssue(ii)">
-                             AI修复
-                          </a-button>
-                          <a-button size="mini" type="outline" @click="toggleIssueExpand(ii)">
-                            {{ expandedIssues.has(ii) ? '收起详情' : '展开详情' }}
-                          </a-button>
-                        </div>
-                        <div v-if="expandedIssues.has(ii)" style="margin-top: 8px; padding: 12px; background: #f7f8fa; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #4e5969; white-space: pre-wrap">
-                          {{ issue.detail || issue.description || '暂无详细信息' }}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <!-- 完整度提示（不再用红色分数） -->
-                    <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #e5e6eb; font-size: 12px; color: #86909c">
-                      内容完整度：{{ (preCheckResult.score / 100 * 100).toFixed(0) }}%（{{ preCheckResult.issues.filter(i => i.type === 'error').length }}项需优先处理）
-                    </div>
-                  </div>
-                  
-                  <!-- 没问题 -->
-                  <div v-else>
-                    <a-typography-text type="success">✅ 信息充足，可直接生成提纲</a-typography-text>
-                  </div>
-                </div>
-                
-                <div v-else-if="!preCheckLoading" style="margin-top: 8px">
-                  <a-button type="text" size="mini" @click="runPreCheck">
-                    📋 点击检测缺失项
-                  </a-button>
-                </div>
-              </div>
-            </a-card>
-
-            <!-- 补充表单 -->
-            <a-form :model="supplement2Form" layout="vertical">
-              <a-form-item label="补充方式">
-                <a-radio-group v-model="supplement2Method">
-                  <a-radio value="file">从知识库选择文件</a-radio>
-                  <a-radio value="text">粘贴补充文本</a-radio>
-                </a-radio-group>
-              </a-form-item>
-
-              <a-form-item v-if="supplement2Method === 'file'" label="选择文件">
-                <a-tree-select
-                  v-model="supplement2File"
-                  :data="kbTreeData"
-                  placeholder="选择要补充的文件..."
-                  tree-checkable
-                  allow-search
-                />
-              </a-form-item>
-
-              <a-form-item v-if="supplement2Method === 'text'" label="补充文本">
-                <a-textarea
-                  v-model="supplement2Text"
-                  placeholder="补充核心痛点、解决方案、避坑指南等分析内容..."
-                  :auto-size="{ minRows: 4, maxRows: 10 }"
-                />
-              </a-form-item>
-
-              <a-form-item label="核心痛点">
-                <a-textarea v-model="supplement2Form.painPoint" placeholder="用户/读者面临的核心问题是什么？" :auto-size="{ minRows: 2, maxRows: 4 }" />
-              </a-form-item>
-              <a-form-item label="解决方案">
-                <a-textarea v-model="supplement2Form.solution" placeholder="你推荐的解决方案是什么？" :auto-size="{ minRows: 2, maxRows: 4 }" />
-              </a-form-item>
-              <a-form-item label="避坑指南">
-                <a-textarea v-model="supplement2Form.pitfalls" placeholder="常见错误或需要注意的事项..." :auto-size="{ minRows: 2, maxRows: 4 }" />
-              </a-form-item>
-            </a-form>
-
+        <!-- 草稿模式弹窗（Step 3 起草用） -->
+        <a-modal
+          v-model:visible="draftModalVisible"
+          :title="`起草补充：${draftModalItem}`"
+          width="800px"
+          :footer="null"
+        >
+          <a-alert type="warning" style="margin-bottom: 16px">
+            <template #title>⚠️ AI 参考草稿</template>
+            以下为 AI 基于通用模式的推导参考，请核实后使用。
+          </a-alert>
+          
+          <!-- 加载中 -->
+          <div v-if="draftLoading" style="text-align: center; padding: 40px">
+            <a-spin :size="50" dot tip="AI 正在生成参考草稿..." />
+          </div>
+          
+          <!-- 草稿内容 -->
+          <div v-else>
+            <a-textarea
+              v-model="draftContent"
+              :auto-size="{ minRows: 12, maxRows: 20 }"
+              placeholder="AI 参考草稿..."
+            />
+            <a-typography-text type="secondary" style="font-size: 12px; margin-top: 8px; display: block">
+              提示：您可以直接编辑内容，确保准确后再确认使用
+            </a-typography-text>
             <a-space style="margin-top: 16px; width: 100%; justify-content: space-between">
-              <a-space>
-                <a-button type="primary" status="success" :loading="supplementLoading" @click="submitSupplement2">
-                  确认补充
-                </a-button>
-                <a-button @click="skipSupplement2">跳过补充，直接进入检测</a-button>
-              </a-space>
+              <a-button @click="closeDraftModal">取消</a-button>
+              <a-button type="primary" status="success" @click="confirmDraftSupplement" :loading="draftSaving">
+                确认使用，保存到知识库
+              </a-button>
             </a-space>
+          </div>
+        </a-modal>
 
-            <!-- AI 补充建议气泡（Cherry 逻辑 P2） -->
-            <div v-if="preCheckResult?.issues && preCheckResult.issues.some(i => i.type !== 'pass')" style="margin-top: 16px; padding: 12px 16px; background: linear-gradient(135deg, #f0f7ff 0%, #e8f4fd 100%); border-radius: 8px; border: 1px solid #b8d4e8">
-              <div style="display: flex; align-items: flex-start; gap: 10px">
-                <span style="font-size: 18px"></span>
-                <div style="flex: 1">
-                  <div style="font-size: 13px; color: #1d2129; font-weight: 500; margin-bottom: 6px">
-                    AI 检测到 {{ preCheckResult.issues.filter(i => i.type === 'error').length }} 项高优缺口{{ preCheckResult.issues.filter(i => i.type === 'warning').length > 0 ? `，${preCheckResult.issues.filter(i => i.type === 'warning').length} 项可优化` : '' }}
-                  </div>
-                  <div v-if="preCheckResult.issues.filter(i => i.type === 'warning').length === 0" style="font-size: 12px; color: #86909c; margin-bottom: 4px">
-                    💡 补充说明：当前检测只关注高优先级问题（红色），补充后会重新检测。可优化项通常为非阻塞性问题，不影响继续流程。
-                  </div>
-                  <div style="font-size: 12px; color: #86909c; line-height: 1.6">
-                    <span v-for="(issue, i) in preCheckResult.issues.filter(i => i.type !== 'pass').slice(0, 3)" :key="i" style="margin-right: 8px">
-                      <a-tag size="mini" :color="issue.type === 'error' ? 'red' : 'orange'">{{ issue.title }}</a-tag>
-                    </span>
-                    <span v-if="preCheckResult.issues.filter(i => i.type !== 'pass').length > 3" style="color: #00b42a; cursor: pointer" @click="scrollToPreCheck">...</span>
-                  </div>
-                  <div style="margin-top: 8px; display: flex; gap: 8px">
-                    <a-button type="primary" size="small" status="success" :loading="aiAutoSupplementLoading" @click="aiAutoSupplementAllMissing">
-                      一键补充 {{ preCheckResult.issues.filter(i => i.type !== 'pass').length }} 项缺口
-                    </a-button>
-                    <a-button size="small" type="text" @click="scrollToPreCheck">
-                      查看详情
-                    </a-button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </a-card>
+        <!-- Step 2: 三列分析工作台 -->
+        <div v-if="currentStep === 2" class="step-content">
+          <ThreeColumnWorkbench
+            :phase="phase"
+            :streaming-thinking="streamingThinking"
+            :stream-done="streamDone"
+            :confirmed-slots="confirmedSlots"
+            :slot-materials="slotMaterials"
+            :slot-outlines="slotOutlines"
+            :writing-plans="writingPlans"
+            :slot-relations-data="slotRelations"
+            :editing-slot="editingSlot"
+            :show-edit-panel="showEditPanel"
+            :followup-history="followupHistory"
+            :all-slots-confirmed="allSlotsConfirmed"
+            :pre-check-results="preCheckResults"
+            :pre-check-running="preCheckRunning"
+            @update-slot="(k, u) => updateSlot(k, u)"
+            @remove-slot="removeSlot"
+            @add-slot="addSlot"
+            @confirm-slots="confirmAndFill"
+            @stop-stream="stopStream"
+            @open-edit-panel="openEditPanel"
+            @close-edit-panel="closeEditPanel"
+            @save-plan="saveWritingPlan"
+            @add-material="addMaterialToSlot"
+            @ask-followup="askFollowupQuestion"
+            @run-pre-check="runSlotPreCheck"
+            @adopt-alternative="adoptAlternative"
+            @proceed-to-article="currentStep = 3"
+          />
         </div>
 
-        <!-- Step 4: 方向检测 -->
-        <div v-if="currentStep === 4" class="step-content">
-          <a-card title="方向检测">
+        <!-- Step 1: 补充 - 完善分析内容 -->
+        <div v-if="currentStep === 1" class="step-content">
+          <StepSupplement
+            ref="step2SupplementDialogRef"
+            :mcp-summary="mcpSummary"
+            :mcp-files="mcpFiles"
+            :selected-direction="selectedDirection"
+            :selected-framework="selectedFramework"
+            :pre-check-loading="preCheckLoading"
+            :pre-check-result="preCheckResult"
+            :supplement2-text="supplement2Text"
+            :supplement2-html="supplement2Html"
+            :supplement-confirmed="supplementConfirmed"
+            :pending-supplement-data="pendingSupplementData"
+            :expanded-issues="expandedIssues"
+            :kb-tree-data="kbTreeData"
+            :material-pool="materialPool"
+            :step2-supplement-dialog-visible="step2SupplementDialogVisible"
+            :run-pre-check="runPreCheck"
+            :confirm-supplement-and-proceed="confirmSupplementAndProceed"
+            :skip-supplement2="skipSupplement2"
+            :handle-step2-supplement-submit="handleStep2SupplementSubmit"
+            :handle-step2-supplement-confirm="handleStep2SupplementConfirm"
+            :open-step2-supplement-dialog="openStep2SupplementDialog"
+            :open-supplement-dialog="openSupplementDialog"
+            :toggle-issue-expand="toggleIssueExpand"
+            @update:step2-supplement-dialog-visible="step2SupplementDialogVisible = $event"
+          />
+        </div>
+
+        <!-- Step 3: 检测 - 方向/结构一致性检测 -->
+        <div v-if="currentStep === 3" class="step-content">
+          <a-card title="交付审核（门卫模式）">
             <a-alert type="info" style="margin-bottom: 16px">
-              <template #title>检测内容是否偏离选定方向</template>
-              方向：{{ selectedDirection?.name }}
+              <template #title>抓大放小：只拦方向错误/内容为空/事实冲突</template>
+              方向：{{ selectedDirection?.name }} | 框架：{{ selectedFramework?.name }}
             </a-alert>
 
             <div v-if="checkingDirection" style="text-align: center; padding: 40px">
-              <a-spin :size="50" dot tip="正在检测..." />
+              <a-spin :size="50" dot tip="正在审核..." />
             </div>
 
             <div v-else-if="directionCheckResult">
-              <div style="margin-bottom: 16px; text-align: center">
-                <a-button 
-                  type="primary" 
-                  status="warning" 
-                  :loading="aiSupplementAllLoading"
-                  @click="aiSupplementAllIssues"
-                >
-                  🤖 一键AI补充所有问题
-                </a-button>
-              </div>
-              
-              <div v-for="(issue, i) in directionCheckResult" :key="i" class="issue-card" style="margin-bottom: 12px">
-                <a-card :bordered="true" :type="issue.type === 'error' ? 'danger' : issue.type === 'warning' ? 'warning' : 'normal'">
-                  <template #title>
-                    <a-space>
-                      <span v-if="issue.type === 'error'">🔴</span>
-                      <span v-else-if="issue.type === 'warning'">🟡</span>
-                      <span v-else>🟢</span>
-                      <span>{{ issue.title }}</span>
-                      <a-tag :color="issue.type === 'error' ? 'red' : issue.type === 'warning' ? 'orange' : 'green'" size="small">
-                        {{ issue.type === 'error' ? '错误' : issue.type === 'warning' ? '警告' : '通过' }}
-                      </a-tag>
-                    </a-space>
-                  </template>
-                  <div style="font-size: 13px; line-height: 1.6">{{ issue.description }}</div>
-                  
-                  <div style="margin-top: 12px">
-                    <a-space>
-                      <a-button size="small" status="primary" @click="editSingleIssue(i)">
-                        编辑
-                      </a-button>
-                      <a-button v-if="issue.type !== 'pass'" size="small" @click="ignoreIssue(i)">忽略</a-button>
-                    </a-space>
-                    <div v-if="editingIssueIndex === i" style="margin-top: 12px; padding: 12px; background: #f7f8fa; border-radius: 4px">
-                      <a-textarea 
-                        v-model="editingIssueContent" 
-                        :placeholder="`针对「${issue.title}」补充内容...`"
-                        :auto-size="{ minRows: 3, maxRows: 8 }"
-                        style="margin-bottom: 8px"
-                      />
+              <!-- 3次强制放行提示 -->
+              <a-alert v-if="directionCheckMeta.force_passed" type="warning" style="margin-bottom: 16px">
+                <template #title>⚠️ 系统检测 3 次未通过，已自动放行</template>
+                建议手动检查后继续，或返回补充内容
+              </a-alert>
+
+              <!-- 阻断区：必须修复才能继续 -->
+              <div v-if="blockIssues.length > 0" style="margin-bottom: 20px">
+                <div :style="{ fontSize: '15px', fontWeight: 600, marginBottom: '12px', color: directionCheckMeta.force_passed ? '#ff7d00' : '#f53f3f' }">
+                  {{ directionCheckMeta.force_passed ? '⚠️ 以下问题未修复（已强制放行）' : ' 需要修复（' + blockIssues.length + ' 项阻塞）' }}
+                </div>
+                <div v-for="(issue, i) in blockIssues" :key="'block-'+i" class="issue-card" style="margin-bottom: 12px">
+                  <a-card :bordered="true" type="danger">
+                    <template #title>
                       <a-space>
-                        <a-button type="primary" size="small" :loading="editingIssueLoading" @click="confirmSingleIssue(i)">
-                          确认补充
-                        </a-button>
-                        <a-button size="small" status="success" :loading="aiSingleIssueLoading" @click="aiGenerateSingleIssue(i)">
-                          🤖 AI 智能补充
-                        </a-button>
-                        <a-button size="small" @click="cancelEditIssue">取消</a-button>
+                        <span>🔴</span>
+                        <span>{{ issue.title }}</span>
+                        <a-tag color="red" size="small">阻塞</a-tag>
                       </a-space>
+                    </template>
+                    <div style="font-size: 13px; line-height: 1.6">{{ issue.description }}</div>
+                    
+                    <div style="margin-top: 12px">
+                      <a-space>
+                        <!-- 结构性问题：回退重选 -->
+                        <a-button 
+                          v-if="issue.category === 'direction' || issue.category === 'framework'"
+                          size="small" 
+                          status="warning"
+                          @click="goBackToStep3"
+                        >
+                          回退重选
+                        </a-button>
+                        <!-- 内容级阻塞：编辑补充 -->
+                        <a-button 
+                          v-else
+                          size="small" 
+                          status="primary" 
+                          @click="editSingleIssue(directionCheckResult.indexOf(issue))"
+                        >
+                          编辑补充
+                        </a-button>
+                        <a-button size="small" status="success" :loading="aiSingleIssueLoading" @click="aiGenerateSingleIssue(directionCheckResult.indexOf(issue))">
+                          🤖 AI 补充
+                        </a-button>
+                      </a-space>
+                      <div v-if="editingIssueIndex === directionCheckResult.indexOf(issue)" style="margin-top: 12px; padding: 12px; background: #f7f8fa; border-radius: 4px">
+                        <a-textarea 
+                          v-model="editingIssueContent" 
+                          :placeholder="`针对「${issue.title}」补充内容...`"
+                          :auto-size="{ minRows: 3, maxRows: 8 }"
+                          style="margin-bottom: 8px"
+                        />
+                        <a-space>
+                          <a-button type="primary" size="small" :loading="editingIssueLoading" @click="confirmSingleIssue(directionCheckResult.indexOf(issue))">
+                            确认补充
+                          </a-button>
+                          <a-button size="small" @click="cancelEditIssue">取消</a-button>
+                        </a-space>
+                      </div>
                     </div>
-                  </div>
-                </a-card>
+                  </a-card>
+                </div>
               </div>
 
+              <!-- 建议区：不阻塞，可跳过 -->
+              <div v-if="suggestIssues.length > 0" style="margin-bottom: 20px">
+                <div style="font-size: 15px; font-weight: 600; color: #ff9a2e; margin-bottom: 12px">
+                  💡 建议优化（{{ suggestIssues.length }} 项，不阻塞）
+                </div>
+                <div v-for="(issue, i) in suggestIssues" :key="'suggest-'+i" class="issue-card" style="margin-bottom: 12px">
+                  <a-card :bordered="true" type="warning">
+                    <template #title>
+                      <a-space>
+                        <span></span>
+                        <span>{{ issue.title }}</span>
+                        <a-tag color="orange" size="small">建议</a-tag>
+                      </a-space>
+                    </template>
+                    <div style="font-size: 13px; line-height: 1.6">{{ issue.description }}</div>
+                    
+                    <div style="margin-top: 12px">
+                      <a-space>
+                        <a-button size="small" status="success" :loading="aiSingleIssueLoading" @click="aiGenerateSingleIssue(directionCheckResult.indexOf(issue))">
+                          🤖 AI 补充
+                        </a-button>
+                      </a-space>
+                    </div>
+                  </a-card>
+                </div>
+              </div>
+
+              <!-- 底部操作按钮 -->
               <div style="margin-top: 16px; text-align: center">
-                <a-button 
-                  type="primary" 
-                  status="success" 
-                  :disabled="hasErrors"
-                  @click="currentStep = 5"
-                >
-                  全部通过，进入下一步 →
-                </a-button>
+                <a-space>
+                  <a-button 
+                    type="primary" 
+                    status="success" 
+                    :disabled="hasErrors"
+                    @click="currentStep = 5"
+                  >
+                    进入下一步 →
+                  </a-button>
+                  <a-button 
+                    v-if="suggestIssues.length > 0"
+                    status="warning"
+                    @click="skipSuggestionsAndContinue"
+                  >
+                    跳过建议，继续 →
+                  </a-button>
+                </a-space>
                 <div v-if="hasErrors" style="margin-top: 8px; color: #f53f3f; font-size: 13px">
-                  请先修复所有错误项
+                  请先修复所有阻塞项
                 </div>
               </div>
             </div>
@@ -1171,8 +918,8 @@
           </a-card>
         </div>
 
-        <!-- Step 5: 推荐内容结构 -->
-        <div v-if="currentStep === 5" class="step-content">
+        <!-- Step 4: 结构推荐 -->
+        <div v-if="currentStep === 4" class="step-content">
           <a-card title="推荐内容结构">
             <a-alert type="info" style="margin-bottom: 16px">
               <template #title>AI 推荐的文章结构</template>
@@ -1239,8 +986,8 @@
           </a-card>
         </div>
 
-        <!-- Step 6: 写作提纲展示 -->
-        <div v-if="currentStep === 6" class="step-content">
+        <!-- Step 5: 提纲生成 -->
+        <div v-if="currentStep === 5" class="step-content">
           <a-card title="写作提纲">
             <div v-if="outlineResult" class="outline-result">
               <!-- v2 格式：具名 section (对象) + source_tag + missing_items -->
@@ -1287,9 +1034,18 @@
                       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px">
                         <span style="font-size: 12px; color: #86909c">{{ idx + 1 }}.</span>
                         <strong style="color: #4e5969">{{ item.field }}</strong>
+                        <a-tag v-if="outlineResult.global_supplements?.[item.field]" size="mini" color="green">已补充</a-tag>
                       </div>
-                      <div style="color: #4e5969; line-height: 1.6; padding-left: 20px">
+                      <div style="color: #4e5969; line-height: 1.6; padding-left: 20px; margin-bottom: 8px">
                         💡 {{ item.fill_guidance }}
+                      </div>
+                      <div v-if="outlineResult.global_supplements?.[item.field]" style="padding: 10px; background: #f7f8fa; border-radius: 4px; font-size: 13px; line-height: 1.7; color: #1d2129; border-left: 3px solid #00b42a">
+                        <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">🤖 AI 补充内容：</div>
+                        <a-textarea
+                          v-model="outlineResult.global_supplements[item.field]"
+                          :auto-size="{ minRows: 2, maxRows: 6 }"
+                          style="width: 100%"
+                        />
                       </div>
                     </div>
                   </div>
@@ -1314,6 +1070,28 @@
                     <ul style="margin: 0; padding-left: 20px; color: #4e5969; line-height: 1.8">
                       <li v-for="(point, pIdx) in section.key_points" :key="pIdx">{{ point }}</li>
                     </ul>
+                  </div>
+                  
+                  <!-- 该版块关联的缺失项（按 section 分组） -->
+                  <div v-if="getSectionMissingItems(key)?.length" style="margin-bottom: 12px; padding: 12px; background: #fff7e8; border-radius: 6px; border: 1px solid #ffbb96">
+                    <div style="font-weight: 600; color: #d46b08; margin-bottom: 8px; font-size: 13px">⚠️ 本版块需补充（共 {{ getSectionMissingItems(key).length }} 项）</div>
+                    <div v-for="(item, idx) in getSectionMissingItems(key)" :key="idx" style="margin-bottom: 8px; padding: 8px; background: #fff; border-radius: 4px; font-size: 13px">
+                      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px">
+                        <strong style="color: #4e5969">{{ item.field }}</strong>
+                        <a-tag v-if="outlineResult.global_supplements?.[item.field]" size="mini" color="green">已补充</a-tag>
+                      </div>
+                      <div style="color: #4e5969; line-height: 1.5; padding-left: 4px; margin-bottom: 6px">
+                        💡 {{ item.fill_guidance }}
+                      </div>
+                      <div v-if="outlineResult.global_supplements?.[item.field]" style="padding: 8px; background: #f7f8fa; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #1d2129; border-left: 3px solid #00b42a">
+                        <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">🤖 AI 补充内容：</div>
+                        <a-textarea
+                          v-model="outlineResult.global_supplements[item.field]"
+                          :auto-size="{ minRows: 2, maxRows: 6 }"
+                          style="width: 100%"
+                        />
+                      </div>
+                    </div>
                   </div>
                   
                   <div v-if="section.materials" style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px">
@@ -1438,14 +1216,18 @@
           </a-card>
         </div>
 
-        <!-- Step 7: 完整文章生成 -->
-        <div v-if="currentStep === 7" class="step-content">
+        <!-- Step 6: 文章生成 -->
+        <div v-if="currentStep === 6" class="step-content">
           <a-card title="完整文章">
             <div v-if="articleResult">
               <div style="margin-bottom: 24px">
                 <h3 style="color: #1d2129; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #e5e6eb">
-                  📄 {{ articleResult.title || '完整文章' }}
+                   {{ articleResult.title || '完整文章' }}
                 </h3>
+                <div style="display: flex; justify-content: center; gap: 32px; margin-bottom: 16px; padding: 12px; background: #f0f9ff; border-radius: 6px; font-size: 14px; color: #4e5969">
+                  <span> 正文：<strong style="color: #1d2129">{{ totalWordCount }}</strong> 字</span>
+                  <span>🎙️ 朗读：约 <strong style="color: #1d2129">{{ readingTime }}</strong> 分钟</span>
+                </div>
                 <div style="text-align: center; margin-bottom: 16px">
                   <a-space>
                     <a-button type="primary" status="success" :loading="articleOneClickLoading" @click="articleOneClickRegenerate">
@@ -1453,6 +1235,9 @@
                     </a-button>
                     <a-button type="primary" @click="exportArticle">
                       📥 导出文章
+                    </a-button>
+                    <a-button type="primary" status="warning" @click="goToGenerateImage">
+                      🖼️ 生成配图
                     </a-button>
                     <a-button @click="currentStep = 6">
                       ← 返回提纲
@@ -1542,6 +1327,49 @@
             </div>
           </a-card>
         </div>
+
+        <!-- Step 7: 配图生成 -->
+        <div v-if="currentStep === 7" class="step-content">
+          <a-card title="生成配图">
+            <div v-if="generatedImageUrl">
+              <div style="text-align: center; margin-bottom: 24px">
+                <a-space>
+                  <a-button type="primary" @click="downloadGeneratedImage">
+                     下载图片
+                  </a-button>
+                  <a-button @click="currentStep = 7">
+                    ← 返回文章
+                  </a-button>
+                </a-space>
+              </div>
+              <div class="generated-image-container">
+                <img :src="generatedImageUrl" class="generated-image" alt="生成的配图" />
+              </div>
+            </div>
+            <div v-else-if="imageGenerating" style="text-align: center; padding: 60px 0">
+              <a-spin :size="50" dot tip="正在生成配图..." />
+              <div style="margin-top: 16px; color: #86909c; font-size: 13px">
+                正在将文章内容转为可视化图片，请稍候...
+              </div>
+            </div>
+            <div v-else style="text-align: center; padding: 60px 0">
+              <a-empty description="尚未生成配图" />
+              <div style="margin-top: 16px; padding: 16px; background: #f7f8fa; border-radius: 8px; max-width: 500px; margin-left: auto; margin-right: auto">
+                <a-typography-text type="secondary" size="small">
+                  将根据选中的框架和文章内容生成可视化配图
+                </a-typography-text>
+              </div>
+              <a-space style="margin-top: 24px">
+                <a-button type="primary" size="large" :loading="imageGenerating" @click="handleGenerateImage">
+                  🖼️ 生成配图
+                </a-button>
+                <a-button size="large" @click="currentStep = 7">
+                  ← 返回文章
+                </a-button>
+              </a-space>
+            </div>
+          </a-card>
+        </div>
       </a-spin>
     </div>
 
@@ -1571,6 +1399,7 @@ import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch, h } f
 import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { useAppStore } from '../stores/app'
+import { marked } from 'marked'
 import {
   IconSearch,
   IconExclamationCircleFill,
@@ -1582,7 +1411,12 @@ import {
   IconFile,
   IconBook,
   IconBulb,
+  IconRefresh,
 } from '@arco-design/web-vue/es/icon'
+import ThreeColumnWorkbench from '../components/workflow/ThreeColumnWorkbench.vue'
+import StepSupplement from '../components/workflow/StepSupplement.vue'
+import { useStep3Workbench } from '../composables/useStep3_Workbench'
+import { useSession } from '../composables/useSession'
 import {
   createWorkflowSession,
   getWorkflowSessionStatus,
@@ -1601,10 +1435,18 @@ import {
   aiAutoSupplement as apiAiAutoSupplement,
   aiPulseSupplement as apiAiPulseSupplement,
   aiInferSupplement as apiInferSupplement,
+  smartSupplement as apiSmartSupplement,
+  degradeSupplement as apiDegradeSupplement,
+  supplementDraft as apiSupplementDraft,
+  recordAnalyticsEvent,
   readFolderFile,
   addSupplement as apiAddSupplement,
   confirmSupplement as apiConfirmSupplement,
   listSupplements as apiListSupplements,
+  generateDiagram as apiGenerateDiagram,
+  mcpSuggest as apiMcpSuggest,
+  mcpMatchFiles as apiMcpMatchFiles,
+  mcpSearch as apiMcpSearch,
 } from '../utils/api'
 
 const route = useRoute()
@@ -1612,12 +1454,29 @@ const router = useRouter()
 const appStore = useAppStore()
 
 const loading = ref(false)
-const currentStep = ref(0)
-const sessionId = ref('')
+const { currentStep, sessionId } = useSession()
+const collapsedSteps = ref({})
 const mcpSummary = ref('')
 const mcpFiles = ref([])
 const kbTreeData = ref([])
 const mcpTopic = ref('')
+
+// V4.0 三列工作台
+const {
+  phase, streamingThinking, streamDone, confirmedSlots,
+  slotMaterials, slotOutlines, writingPlans, slotRelations,
+  editingSlot, showEditPanel, followupHistory, allSlotsConfirmed,
+  preCheckResults, preCheckRunning,
+  startStreamSlots, stopStream, updateSlot, removeSlot, addSlot,
+  confirmAndFill, openEditPanel, closeEditPanel, saveWritingPlan,
+  addMaterialToSlot, askFollowupQuestion, runPreCheck: runSlotPreCheck, adoptAlternative,
+} = useStep3Workbench()
+
+// 话题推荐
+const topics = ref([])
+const topicsLoading = ref(false)
+const scannedFolders = ref([])
+const fileCount = ref(0)
 
 // 完整度评估
 const completenessResult = ref(null)
@@ -1721,6 +1580,14 @@ const unifiedInferLoading = ref(false)
 const unifiedInferResult = ref(null)
 const unifiedSaving = ref(false)
 
+// 草稿模式状态（Step 3 起草用）
+const draftModalVisible = ref(false)
+const draftModalItem = ref('')
+const draftModalItemIndex = ref(-1)
+const draftContent = ref('')
+const draftLoading = ref(false)
+const draftSaving = ref(false)
+
 // 旧版状态（保留兼容）
 const supplementModalMethod = ref('text')
 const supplementModalFile = ref([])
@@ -1729,6 +1596,14 @@ const aiSupplementing = ref(false)
 const extractingFileContent = ref(false)
 const extractedFileContent = ref(false)
 const extractedFileCount = ref(0)
+
+// ArchGen v2.0: 智能补充状态
+const smartSupplementResult = ref(null) // 存储智能补充结果
+const smartSupplementLoading = ref(false)
+const currentKnowledgeLevel = ref('L1') // 当前知识级别
+const canDegrade = ref(false) // 是否可以降级
+const degradationCount = ref(0) // 已降级次数
+const maxDegradationCount = 2 // 最大降级次数
 
 // 关键缺失项补充状态跟踪
 const supplementContents = ref({}) // { index: { content, method, time } }
@@ -1767,6 +1642,146 @@ const allCriticalSupplemented = computed(() => {
   if (missingCritical.length === 0) return false
   return missingCritical.every((_, idx) => isSupplemented(idx))
 })
+
+// 步骤总结文案
+const stepSummaries = computed(() => {
+  const summaries = {}
+  
+  // Step 0: 选题
+  if (selectedDirection.value?.name) {
+    summaries[0] = selectedDirection.value.name
+  } else if (topics.value.length > 0) {
+    summaries[0] = `${topics.value.length} 个推荐方向`
+  }
+  
+  // Step 1: 补充
+  if (completenessResult.value?.missing_critical) {
+    const supplemented = completenessResult.value.missing_critical.filter((_, idx) => isSupplemented(idx)).length
+    summaries[1] = supplemented > 0 ? `补充了${supplemented}项` : ''
+  }
+  
+  // Step 2: 框架
+  if (selectedFramework.value?.name) {
+    summaries[2] = selectedFramework.value.name
+  }
+  
+  // Step 3: 检测
+  if (directionCheckResult.value && Array.isArray(directionCheckResult.value)) {
+    const problemCount = directionCheckResult.value.filter(issue => issue.type !== 'pass').length
+    summaries[3] = problemCount > 0 ? `${problemCount}个问题` : '通过'
+  }
+  
+  // Step 4: 结构
+  if (selectedStructure.value?.name) {
+    summaries[4] = selectedStructure.value.name
+  }
+  
+  // Step 5: 提纲
+  if (outlineResult.value?.sections) {
+    summaries[5] = `${outlineResult.value.sections.length} 个章节`
+  }
+  
+  // Step 6: 文章
+  if (articleResult.value?.paragraphs) {
+    const wordCount = articleResult.value.paragraphs.reduce((sum, p) => sum + (p.word_count || 0), 0)
+    summaries[6] = wordCount > 0 ? `${wordCount} 字` : ''
+  }
+  
+  // Step 7: 配图
+  if (generatedImageUrl.value) {
+    summaries[7] = '已生成'
+  }
+  
+  return summaries
+})
+
+// 步骤详细内容（展开时显示）
+const stepDetails = computed(() => {
+  const details = {}
+  
+  // Step 0: 选题
+  if (selectedDirection.value?.name) {
+    details[0] = `已选题：「${selectedDirection.value.name}」`
+    if (selectedDirection.value.description) {
+      details[0] += `\n说明：${selectedDirection.value.description}`
+    }
+  }
+  
+  // Step 1: 补充
+  if (completenessResult.value?.missing_critical) {
+    const total = completenessResult.value.missing_critical.length
+    const done = completenessResult.value.missing_critical.filter((_, idx) => isSupplemented(idx)).length
+    details[1] = `补充进度：${done}/${total} 项`
+    if (completenessResult.value.supplement_strategy) {
+      details[1] += `\n策略：${completenessResult.value.supplement_strategy}`
+    }
+  }
+  
+  // Step 2: 框架
+  if (selectedFramework.value?.name) {
+    details[2] = `已选框架：「${selectedFramework.value.name}」`
+    if (selectedFramework.value.description) {
+      details[2] += `\n说明：${selectedFramework.value.description}`
+    }
+  }
+  
+  // Step 3: 检测
+  if (directionCheckResult.value && Array.isArray(directionCheckResult.value)) {
+    const passCount = directionCheckResult.value.filter(i => i.type === 'pass').length
+    const warnCount = directionCheckResult.value.filter(i => i.type === 'warning').length
+    const failCount = directionCheckResult.value.filter(i => i.type === 'fail').length
+    details[3] = `通过 ${passCount} 项，警告 ${warnCount} 项，未通过 ${failCount} 项`
+    const firstFail = directionCheckResult.value.find(i => i.type !== 'pass')
+    if (firstFail) {
+      details[3] += `\n主要问题：${firstFail.message || ''}`
+    }
+  }
+  
+  // Step 4: 结构
+  if (selectedStructure.value?.name) {
+    details[4] = `已选结构：「${selectedStructure.value.name}」`
+    if (selectedStructure.value.description) {
+      details[4] += `\n说明：${selectedStructure.value.description}`
+    }
+  }
+  
+  // Step 5: 提纲
+  if (outlineResult.value?.sections) {
+    const sections = outlineResult.value.sections
+    details[5] = `共 ${sections.length} 个章节`
+    sections.forEach((s, i) => {
+      details[5] += `\n  ${i + 1}. ${s.title || s.name || ''}`
+    })
+  }
+  
+  // Step 6: 文章
+  if (articleResult.value) {
+    const title = articleResult.value.title || ''
+    const paragraphs = articleResult.value.paragraphs || []
+    const wordCount = paragraphs.reduce((sum, p) => sum + (p.word_count || 0), 0)
+    details[6] = `标题：${title}`
+    details[6] += `\n段落数：${paragraphs.length} 个`
+    details[6] += `\n总字数：${wordCount} 字`
+  }
+  
+  // Step 7: 配图
+  if (generatedImageUrl.value) {
+    details[7] = '配图已生成'
+    if (selectedFramework.value?.name) {
+      details[7] += `\n框架：${selectedFramework.value.name}`
+    }
+  }
+  
+  return details
+})
+
+// 步骤名称（V4 三列工作台：5 步）
+const stepNames = ['选题', '补充', '分析工作台', '文章', '配图']
+
+// 切换步骤折叠状态
+function toggleStepCollapse(stepIndex) {
+  collapsedSteps.value[stepIndex] = !collapsedSteps.value[stepIndex]
+}
 
 // 分步骤工作流：打开补充弹窗（触发 API 检索）
 async function openSupplementModal(index) {
@@ -2108,11 +2123,24 @@ const expandedWarnings = ref({})
 const supplement2Method = ref('text')
 const supplement2File = ref([])
 const supplement2Text = ref('')
+const pendingSupplementData = ref(null)
 const supplement2Form = reactive({
   painPoint: '',
   solution: '',
   pitfalls: '',
 })
+
+// 补充2 衍生状态
+const supplement2Html = computed(() => {
+  if (!supplement2Text.value) return ''
+  try { return marked.parse(supplement2Text.value, { breaks: true, async: false }) }
+  catch (e) { return supplement2Text.value }
+})
+const supplementConfirmed = ref(false)
+const materialPool = ref([])
+const step2SupplementDialogVisible = ref(false)
+const step2SupplementDialogRef = ref(null)
+const lastSupplementMeta = ref(null)
 
 // 预检测相关状态
 const preCheckResult = ref(null)
@@ -2125,6 +2153,7 @@ const supplementAllLoading = ref(false)
 // 方向检测
 const checkingDirection = ref(false)
 const directionCheckResult = ref(null)
+const directionCheckMeta = ref({ force_passed: false, ready_for_next: true, check_count: 0, overall_score: 0 })
 const fixingIssueIndex = ref(-1)
 const editingIssueIndex = ref(-1)
 const editingIssueContent = ref('')
@@ -2132,7 +2161,21 @@ const editingIssueLoading = ref(false)
 const aiSingleIssueLoading = ref(false)
 const hasErrors = computed(() => {
   if (!directionCheckResult.value) return false
-  return directionCheckResult.value.some(issue => issue.type === 'error')
+  // 强制放行时不阻塞
+  if (directionCheckMeta.value.force_passed) return false
+  // 门卫模式：只有 block 级别才阻塞
+  return directionCheckResult.value.some(issue => issue.level === 'block' || issue.type === 'error')
+})
+
+// 分两区：阻塞项 vs 建议项
+const blockIssues = computed(() => {
+  if (!directionCheckResult.value) return []
+  return directionCheckResult.value.filter(issue => issue.level === 'block' || issue.type === 'error')
+})
+
+const suggestIssues = computed(() => {
+  if (!directionCheckResult.value) return []
+  return directionCheckResult.value.filter(issue => issue.level === 'suggest' || (issue.type === 'warning' && issue.level !== 'block'))
 })
 
 // AI-Pulse 补充
@@ -2212,6 +2255,19 @@ const sectionAiUploadFiles = ref([])
 
 // 完整文章
 const articleResult = ref(null)
+
+// 正文字数统计（所有段落字数之和）
+const totalWordCount = computed(() => {
+  if (!articleResult.value?.paragraphs) return 0
+  return articleResult.value.paragraphs.reduce((sum, p) => sum + (p.word_count || 0), 0)
+})
+
+// 朗读时间（按每分钟 300 字计算）
+const readingTime = computed(() => {
+  const minutes = Math.ceil(totalWordCount.value / 300)
+  return minutes < 1 ? 1 : minutes
+})
+
 const articleAiDialogIndex = ref(-1)
 const articleAiInput = ref('')
 const articleAiKbFiles = ref([])
@@ -2219,6 +2275,10 @@ const articleAiUploadFiles = ref([])
 const articleAiLoading = ref(false)
 const articleAiResult = ref('')
 const articleOneClickLoading = ref(false)
+
+// 生成配图
+const generatedImageUrl = ref('')
+const imageGenerating = ref(false)
 
 // 知识库收藏弹窗（P1 预留）
 const showExportModal = ref(false)
@@ -2246,14 +2306,150 @@ onMounted(async () => {
     mcpFiles.value = []
   }
 
-  // 创建会话
-  try {
-    const res = await createWorkflowSession()
-    if (!isMounted) return
-    sessionId.value = res.data.data.session_id
-  } catch (e) {
-    if (isMounted) Message.error('创建会话失败: ' + e.message)
+  const existingSessionId = route.query.sessionId || ''
+
+  // 从 MCPSearchView 进入: 创建 session, 读取 MCP 素材
+  if (route.query.folders && !existingSessionId) {
+    try {
+      const res = await createWorkflowSession()
+      if (!isMounted) return
+      sessionId.value = res.data.data.session_id
+
+      // 解析 folders 参数
+      let folders = []
+      try {
+        folders = JSON.parse(route.query.folders || '[]')
+      } catch (e) { folders = [] }
+
+      // 设置主题
+      const topicName = route.query.topic || ''
+      if (topicName) {
+        mcpTopic.value = topicName
+        selectedDirection.value = { name: topicName }
+        try {
+          await supplementStep1(sessionId.value, topicName, {})
+          console.log('✅ 方向已保存到后端 session:', topicName)
+        } catch (e) {
+          console.warn('保存方向失败:', e)
+        }
+      }
+
+      // 读取 MCP 选中文件夹的内容，填充素材
+      if (folders.length > 0) {
+        try {
+          if (topicName) {
+            // 有主题：使用 apiMcpMatchFiles 获取主题相关的文件及内容
+            const matchRes = await apiMcpMatchFiles({
+              topic: topicName,
+              folders,
+            })
+            if (matchRes.data?.code === 0 && matchRes.data.data) {
+              const matchData = matchRes.data.data
+              mcpFiles.value = (matchData.matched_files || []).map(f => ({
+                name: f.name || '',
+                content: f.content || '',
+              }))
+              mcpSummary.value = `已搜索「${topicName}」相关素材 ${matchData.total || mcpFiles.value.length} 篇`
+              console.log('📂 MCP 匹配素材已加载:', { topic: topicName, matched: mcpFiles.value.length, total: matchData.total })
+            } else {
+              // 降级：读取所有文件
+              const allFiles = []
+              for (const folder of folders) {
+                try {
+                  const folderRes = await listFolderFiles(folder)
+                  if (folderRes.data?.code === 0 && folderRes.data.data) {
+                    allFiles.push(...folderRes.data.data.map(f => (typeof f === 'string' ? f : f.path || f.name || '')))
+                  }
+                } catch (e) { /* skip */ }
+              }
+              mcpFiles.value = allFiles
+              mcpSummary.value = `已选择 ${folders.length} 个文件夹，共 ${allFiles.length} 个文件（后端搜索降级）`
+            }
+          } else {
+            // 无主题：读取所有文件
+            const allFiles = []
+            const sampleContents = []
+            for (const folder of folders) {
+              try {
+                const folderRes = await listFolderFiles(folder)
+                if (folderRes.data?.code === 0 && folderRes.data.data) {
+                  const files = folderRes.data.data || []
+                  allFiles.push(...files.map(f => (typeof f === 'string' ? f : f.path || f.name || '')))
+                  // 读取前 3 个文件内容作为摘要
+                  const textFiles = files.filter(f => {
+                    const name = (f.name || f.path || '').toLowerCase()
+                    return name.endsWith('.md') || name.endsWith('.txt') || name.endsWith('.json')
+                  }).slice(0, 3)
+                  for (const f of textFiles) {
+                    try {
+                      const filePath = typeof f === 'string' ? f : f.path
+                      const contentRes = await readFolderFile(folder, filePath)
+                      if (contentRes.data?.code === 0 && contentRes.data.data?.content) {
+                        const text = contentRes.data.data.content.slice(0, 800)
+                        sampleContents.push(text)
+                      }
+                    } catch (e) { /* skip single file read errors */ }
+                  }
+                }
+              } catch (e) { console.warn('读取文件夹失败:', folder, e) }
+            }
+            mcpFiles.value = allFiles
+            if (sampleContents.length > 0) {
+              mcpSummary.value = sampleContents.join('\n\n')
+            } else {
+              mcpSummary.value = `已选择 ${folders.length} 个文件夹，共 ${allFiles.length} 个文件`
+            }
+            console.log('📂 MCP 素材已加载:', { files: allFiles.length, summaryLen: mcpSummary.value.length })
+          }
+        } catch (e) {
+          console.error('加载 MCP 素材失败:', e)
+        }
+      }
+
+      // 有主题则直接进入 Step 1（补充），否则 Step 0（选题）
+      currentStep.value = topicName ? 1 : 0
+      if (!topicName) {
+        await loadTopics()
+      }
+    } catch (e) {
+      if (isMounted) Message.error('创建会话失败: ' + e.message)
+      return
+    }
+    // 加载知识库文件树
+    const settings = JSON.parse(localStorage.getItem('archgen_settings') || '{}')
+    const kbPath = settings.knowledgeBasePath || '/home/admin/Desktop/AI 博主'
+    try {
+      const res = await listFolderFiles(kbPath)
+      if (!isMounted) return
+      if (res.data.code === 0) {
+        kbTreeData.value = convertToTreeData(res.data.data)
+      }
+    } catch (e) {
+      console.error('加载知识库文件失败:', e)
+    }
     return
+  }
+
+  if (existingSessionId) {
+    // 从 TopicSuggestView 跳转过来，使用已有的 session
+    sessionId.value = existingSessionId
+    // 设置已选择的主题（方向）
+    const topicName = route.query.topic || ''
+    if (topicName) {
+      mcpTopic.value = topicName
+      selectedDirection.value = { name: topicName }
+      // 保存方向到后端 session
+      try {
+        await supplementStep1(sessionId.value, topicName, {})
+        console.log('✅ 方向已保存到后端 session:', topicName)
+        // 预加载框架推荐
+        loadFrameworks()
+      } catch (e) {
+        console.warn('保存方向到 session 失败:', e)
+      }
+    }
+    // 现有 session，从 Step 1（框架）开始
+    currentStep.value = 1
   }
 
   // 加载知识库文件树
@@ -2268,19 +2464,46 @@ onMounted(async () => {
   } catch (e) {
     console.error('加载知识库文件失败:', e)
   }
+
+  // 恢复后端 session 中的框架信息（防止页面刷新后丢失）
+  try {
+    const sessionRes = await getWorkflowSessionStatus(sessionId.value)
+    if (sessionRes.data.code === 0 && sessionRes.data.data?.step2?.selected_framework) {
+      const fwData = sessionRes.data.data.step2.selected_framework
+      // 后端可能返回字符串或对象
+      if (typeof fwData === 'string') {
+        // 旧格式：只有名称字符串
+        selectedFramework.value = {
+          name: fwData,
+          key: FRAMEWORK_NAME_TO_KEY[fwData] || null,
+        }
+      } else if (typeof fwData === 'object') {
+        // 新格式：包含 name 和 key
+        selectedFramework.value = {
+          name: fwData.name || '',
+          key: fwData.key || FRAMEWORK_NAME_TO_KEY[fwData.name] || null,
+        }
+      }
+      console.log('✅ 从后端 session 恢复框架:', selectedFramework.value)
+    }
+  } catch (e) {
+    console.warn('恢复框架信息失败:', e)
+  }
 })
 
 onUnmounted(() => {
   // 清理：防止异步操作在组件卸载后执行
 })
 
-// 监听步骤变化，进入步骤4时自动触发方向检测，进入步骤5时自动加载结构推荐
-watch(currentStep, async (newStep) => {
-  if (newStep === 4 && !directionCheckResult.value && !checkingDirection.value) {
-    await runDirectionCheck()
-  }
-  if (newStep === 5 && structures.value.length === 0) {
-    await goToStructures()
+// 监听步骤变化，进入步骤2时自动触发槽位流式推理
+watch(currentStep, (newStep) => {
+  // V4.0: 进入三列分析工作台时自动启动流式推理
+  if (newStep === 2) {
+    phase.value = 'init'
+    const topic = selectedDirection.value?.name || mcpTopic.value || 'AI 写作'
+    const summary = mcpSummary.value || ''
+    console.log('🚀 开始调用 startStreamSlots:', { topic, summary, sessionId: sessionId.value })
+    startStreamSlots(topic, summary)
   }
 })
 
@@ -2297,6 +2520,31 @@ function getCompletenessColor(score) {
   if (score >= 80) return '#00b42a'
   if (score >= 60) return '#f7ba1e'
   return '#f53f3f'
+}
+
+function getScoreColor(score) {
+  if (score >= 80) return '#00b42a'
+  if (score >= 60) return '#f7ba1e'
+  return '#f53f3f'
+}
+
+function getScoreTagColor(score) {
+  if (score >= 80) return 'green'
+  if (score >= 60) return 'orange'
+  return 'red'
+}
+
+function getScoreLabel(score) {
+  if (score >= 80) return '素材充足'
+  if (score >= 60) return '需补充后推进'
+  return '素材不足'
+}
+
+function getReverseScoreColor(score) {
+  // 缺失度越高越红，越低越绿（反向）
+  if (score >= 80) return '#f53f3f'
+  if (score >= 50) return '#f7ba1e'
+  return '#00b42a'
 }
 
 function getCoverageColor(coverage) {
@@ -2389,6 +2637,11 @@ function getSectionNumber(key) {
   return order.indexOf(key) + 1
 }
 
+function getSectionMissingItems(sectionKey) {
+  if (!outlineResult.value?.missing_items) return []
+  return outlineResult.value.missing_items.filter(item => item.section === sectionKey)
+}
+
 const outlineCompletenessStatus = computed(() => {
   if (!outlineResult.value?.sections) return 'red'
   const sections = outlineResult.value.sections
@@ -2417,6 +2670,67 @@ function getCompletenessStatusLabel(status) {
   }
 }
 
+async function loadTopics() {
+  topicsLoading.value = true
+  try {
+    const folders = scannedFolders.value.length > 0
+      ? scannedFolders.value
+      : (route.query.folders ? JSON.parse(route.query.folders) : [])
+
+    if (!folders.length) {
+      Message.warning('缺少知识库文件夹信息')
+      return
+    }
+
+    const res = await apiMcpSuggest({
+      topic: route.query.topic || '',
+      folders,
+      categories: route.query.categories ? JSON.parse(route.query.categories) : [],
+      time_range: route.query.timeRange || 'all',
+      start_date: route.query.startDate || '',
+      end_date: route.query.endDate || '',
+    })
+
+    if (res.data.code === 0) {
+      // 话题数据 + 补充评估分数（后端可能不返回，用已有字段推导）
+      topics.value = (res.data.data.topics || []).map(t => {
+        const coverage = t.coverage || 0.5
+        const evalData = t.evaluation || {
+          direction_score: Math.round(coverage * 100),
+          deficiency_score: Math.round((1 - coverage) * 100),
+          overall_score: Math.round(coverage * 100),
+          direction_analysis: t.reason || '',
+          deficiency_details: t.needed ? [{ item: t.needed, severity: 'medium', explanation: t.needed }] : [],
+          supplement_strategy: coverage >= 0.7 ? '信息充足' : coverage >= 0.4 ? '需补充关键信息' : '素材严重不足'
+        }
+        return {
+          ...t,
+          ...evalData,
+          evaluation: evalData
+        }
+      })
+      mcpSummary.value = res.data.data.summary || ''
+      mcpFiles.value = res.data.data.source_files || []
+      fileCount.value = res.data.data.file_count || 0
+      scannedFolders.value = folders
+    } else {
+      Message.error(res.data.msg || '话题推荐失败')
+    }
+  } catch (e) {
+    Message.error('话题推荐失败: ' + e.message)
+  } finally {
+    topicsLoading.value = false
+  }
+}
+
+async function refreshTopics() {
+  // 清除当前选中的方向
+  selectedDirection.value = null
+  // 重新加载选题
+  await loadTopics()
+  Message.success('已刷新选题推荐')
+}
+
 async function goToCompletenessEval() {
   console.log('========================================')
   console.log('🔴 [DEBUG] goToCompletenessEval 被调用')
@@ -2442,12 +2756,9 @@ async function goToCompletenessEval() {
       }
       completenessResult.value = { ...rawData, completeness }
       
-      loading.value = false
-      
-      setTimeout(() => {
-        currentStep.value = 1
-        Message.success('完整度评估完成')
-      }, 100)
+      // 评估完成后，直接加载方向推荐
+      Message.success('完整度评估完成，正在推荐写作方向...')
+      loadDirectionsInternal()
     } else {
       loading.value = false
       Message.error('评估失败: ' + (res.data.msg || '未知错误'))
@@ -2456,6 +2767,42 @@ async function goToCompletenessEval() {
     console.error('评估异常:', e)
     loading.value = false
     Message.error('评估失败: ' + e.message)
+  }
+}
+
+// 内部加载方向（与 goToDirections 相同逻辑，但不从外部入口调用）
+async function loadDirectionsInternal() {
+  if (!sessionId.value) {
+    loading.value = false
+    return
+  }
+  
+  currentStep.value = 1
+  directions.value = []
+  directionsLoading.value = true
+  
+  try {
+    const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value)
+    if (res.data.code === 0) {
+      const data = res.data.data
+      if (data.directions && data.directions.length > 0) {
+        directions.value = data.directions
+        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+      } else if (Array.isArray(data) && data.length > 0) {
+        directions.value = data
+        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+      } else {
+        Message.warning('暂无推荐方向，请补充更多信息后重试')
+      }
+    } else {
+      Message.error('方向推荐失败: ' + (res.data.msg || '未知错误'))
+    }
+  } catch (e) {
+    console.error('方向推荐异常:', e)
+    Message.error('方向推荐失败: ' + e.message)
+  } finally {
+    loading.value = false
+    directionsLoading.value = false
   }
 }
 
@@ -2508,39 +2855,26 @@ async function goToDirections() {
     return
   }
   
-  // 立即切换到方向页面（显示加载状态）
-  currentStep.value = 2
-  loading.value = true
-  directions.value = []
-  directionsLoading.value = true
-  
-  try {
-    const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value)
-    console.log(' 方向推荐响应:', res.data)
-    
-    if (res.data.code === 0) {
-      // 兼容新旧格式：新格式有 directions 字段，旧格式直接是数组
-      const data = res.data.data
-      if (data.directions && data.directions.length > 0) {
-        directions.value = data.directions
-        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
-      } else if (Array.isArray(data) && data.length > 0) {
-        // 兼容旧格式
-        directions.value = data
-        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
-      } else {
-        Message.warning('暂无推荐方向，请补充更多信息后重试')
+  // 如果还没有评估结果，先跑评估再加载方向
+  if (!completenessResult.value) {
+    loading.value = true
+    try {
+      const res = await evaluateCompleteness(sessionId.value, mcpSummary.value)
+      if (res.data.code === 0) {
+        const rawData = res.data.data
+        let completeness = rawData.completeness || 0
+        if (completeness > 0 && completeness <= 1) {
+          completeness = Math.round(completeness * 100)
+        }
+        completenessResult.value = { ...rawData, completeness }
       }
-    } else {
-      Message.error('方向推荐失败: ' + (res.data.msg || '未知错误'))
+    } catch (e) {
+      console.warn('自动评估失败，继续加载方向:', e)
     }
-  } catch (e) {
-    console.error('🔴 方向推荐异常:', e)
-    Message.error('方向推荐失败: ' + e.message)
-  } finally {
-    loading.value = false
-    directionsLoading.value = false
   }
+  
+  // 加载方向推荐（await 确保评估完成后再渲染）
+  await loadDirectionsInternal()
 }
 
 // 换一批：重新推荐方向（使用时间戳避免重复）
@@ -2801,6 +3135,208 @@ async function aiAutoSupplement() {
   }
 }
 
+// ===== ArchGen v2.0: 智能补充函数 =====
+
+async function smartSupplement(topic, missingItem = {}, missingItems = [], forceLevel = null) {
+  // 智能补充：集成知识评估 + 降级链
+  // Args:
+  //   topic: 话题/维度名称
+  //   missingItem: 缺失项详情
+  //   missingItems: 所有缺失项列表
+  //   forceLevel: 强制级别（用于降级，null = 自动评估）
+  smartSupplementLoading.value = true
+  
+  try {
+    // Step 1: 先调用 AI-Pulse 检索（获取实际检索结果）
+    let retrievalResults = []
+    try {
+      const keyword = typeof topic === 'string' ? topic.substring(0, 10) : 'AI'
+      const apiRes = await apiAiPulseSupplement(sessionId.value, topic, [keyword])
+      if (apiRes.data.code === 0) {
+        retrievalResults = apiRes.data.data?.cases || []
+      }
+    } catch (e) {
+      console.warn(`AI-Pulse 检索 "${topic}" 失败:`, e)
+    }
+    
+    // 构建上下文（文章 + 大纲 + MCP 摘要）
+    const context = `
+MCP 摘要：
+${mcpSummary.value || '无'}
+
+已选择方向：${selectedDirection.value?.name || '无'}
+已选择框架：${selectedFramework.value?.name || '无'}
+`
+    
+    const res = await apiSmartSupplement(
+      sessionId.value,
+      topic,
+      context,
+      missingItems,
+      missingItem,
+      forceLevel,
+      retrievalResults,  // 传入实际检索结果
+    )
+    
+    if (res.data.code === 0) {
+      const data = res.data.data
+      smartSupplementResult.value = data
+      currentKnowledgeLevel.value = data.knowledge_level || 'L1'
+      canDegrade.value = data.can_degrade !== false && degradationCount.value < maxDegradationCount
+      
+      // 拒补模式处理
+      if (data.mode === 'refuse') {
+        Message.warning(data.alert_message || '未检索到相关资料，建议手动补充')
+        return data
+      }
+      
+      // 根据知识级别显示不同提示
+      const levelMessages = {
+        L0: '✅ 知识充足，已生成具体内容',
+        L1: '⚠️ 基于通用模式推导，部分内容需要你补充',
+        L2: '❓ AI 知识有限，已生成引导问题',
+        L3: '🔗 基于类比推导，请验证后使用',
+        L4: '📐 已提供逻辑框架，请填写具体内容',
+      }
+      Message.success(levelMessages[data.knowledge_level] || '智能补充完成')
+      
+      // 埋点采集
+      recordAnalyticsEvent({
+        session_id: sessionId.value,
+        event_type: 'supplement_complete',
+        topic: topic,
+        knowledge_level: data.knowledge_level,
+        assessment_confidence: data.assessment_confidence || 'medium',
+        assessment_cached: data.assessment_cached || false,
+        content_length: (data.content || '').length,
+        has_evidence: !!data.evidence_quote,
+        has_gap_hint: !!data.gap_hint,
+        questions_count: (data.questions || []).length,
+        reevaluate: data.reevaluate || false,
+        can_degrade: data.can_degrade !== false,
+        user_action: null,
+        degradation_count: degradationCount.value,
+      }).catch(err => console.error('埋点采集失败:', err))
+      
+      return data
+    } else {
+      Message.error(res.data.msg || '智能补充失败')
+      return null
+    }
+  } catch (e) {
+    console.error('智能补充失败:', e)
+    Message.error('智能补充失败: ' + e.message)
+    return null
+  } finally {
+    smartSupplementLoading.value = false
+  }
+}
+
+async function selectDirectionAndAdvance(t) {
+  // 选择方向并自动进入下一步
+  selectedDirection.value = { name: t.name, description: t.description }
+  mcpTopic.value = t.name
+  
+  Message.success(`已选择「${t.name}」，正在加载框架...`)
+  
+  // 保存方向到后端 session
+  try {
+    await supplementStep1(sessionId.value, t.name, {})
+  } catch (e) {
+    console.warn('保存方向到 session 失败:', e)
+  }
+  
+  // 加载主题匹配的文件（从文件夹中按主题关键词过滤）
+  try {
+    const folders = JSON.parse(route.query.folders || '[]')
+    if (folders.length > 0) {
+      const matchRes = await apiMcpMatchFiles({
+        topic: t.name,
+        folders,
+      })
+      if (matchRes.data?.code === 0 && matchRes.data.data) {
+        const matchData = matchRes.data.data
+        mcpFiles.value = (matchData.matched_files || []).map(f => ({
+          name: f.name || '',
+          content: f.content || '',
+        }))
+        mcpSummary.value = `已搜索「${t.name}」相关素材 ${matchData.total || mcpFiles.value.length} 篇`
+        console.log('📂 主题匹配素材已加载:', { topic: t.name, matched: mcpFiles.value.length, total: matchData.total })
+      }
+    }
+  } catch (e) {
+    console.warn('加载主题匹配素材失败:', e)
+  }
+  
+  // 自动进入补充步骤
+  currentStep.value = 1
+}
+
+async function degradeSupplement() {
+  // 用户对当前级别不满意，降级一级重新生成
+  if (!canDegrade.value || !smartSupplementResult.value) return
+  
+  smartSupplementLoading.value = true
+  
+  try {
+    const topic = currentSupplementItem.value?.dimension || currentSupplementItem.value?.label || ''
+    const context = `
+MCP 摘要：
+${mcpSummary.value || '无'}
+
+已选择方向：${selectedDirection.value?.name || '无'}
+已选择框架：${selectedFramework.value?.name || '无'}
+`
+    
+    const res = await apiDegradeSupplement(
+      sessionId.value,
+      currentKnowledgeLevel.value,
+      topic,
+      context,
+      currentSupplementItem.value || {},
+    )
+    
+    if (res.data.code === 0) {
+      const data = res.data.data
+      smartSupplementResult.value = data
+      currentKnowledgeLevel.value = data.knowledge_level || 'L1'
+      degradationCount.value += 1
+      canDegrade.value = data.can_degrade !== false && degradationCount.value < maxDegradationCount
+      
+      Message.warning(`已降级到 ${data.knowledge_level}，${data.alert_message || '请查看内容'}`)
+      
+      // 埋点采集
+      recordAnalyticsEvent({
+        session_id: sessionId.value,
+        event_type: 'degrade',
+        topic: topic,
+        knowledge_level: data.knowledge_level,
+        assessment_confidence: 'medium',
+        assessment_cached: false,
+        content_length: (data.content || '').length,
+        has_evidence: !!data.evidence_quote,
+        has_gap_hint: !!data.gap_hint,
+        questions_count: (data.questions || []).length,
+        reevaluate: data.reevaluate || false,
+        can_degrade: data.can_degrade !== false,
+        user_action: 'degrade',
+        degradation_count: degradationCount.value,
+      }).catch(err => console.error('埋点采集失败:', err))
+      
+      return data
+    } else {
+      Message.error(res.data.msg || '降级补充失败')
+      return null
+    }
+  } catch (e) {
+    console.error('降级补充失败:', e)
+    Message.error('降级补充失败: ' + e.message)
+    return null
+  } finally {
+    smartSupplementLoading.value = false
+  }
+}
+
 async function selectDirection(d) {
   console.log('========================================')
   console.log(' [DEBUG] selectDirection 被调用')
@@ -2902,23 +3438,24 @@ async function selectFramework(f) {
   // 按需检索 API 案例（不再预加载）
   // preloadApiCases()  // 已移除：改为按需检索
   
-  // 先保存框架到后端session
+  // 保存框架 + 补充数据到后端session
   try {
-    await supplementStep2(sessionId.value, f.name, {})
-    console.log('✅ 框架已保存到后端session')
+    const supplementData = pendingSupplementData.value || {}
+    await supplementStep2(sessionId.value, f, supplementData)
+    console.log('✅ 框架+补充数据已保存到后端session:', f.name)
   } catch (e) {
     console.error(' 保存框架失败:', e)
     Message.error('保存框架失败: ' + e.message)
     return
   }
   
-  // 立即切换到补充页面 (Step 3 - 合并后的补充步骤)
+  // 切换到检测页面 (Step 3)
   currentStep.value = 3
   
   // 自动触发预检测，显示缺失项清单
   setTimeout(() => runPreCheck(), 100)
   
-  Message.success(`已选择「${f.name}」框架，正在检测缺失项...`)
+  Message.success(`已选择「${f.name}」框架，正在检测...`)
 }
 
 async function runPreCheck() {
@@ -2972,15 +3509,21 @@ async function aiAutoSupplementAllMissing() {
         const supplementType = res.data.data.supplement_type || 'infer'
         const confidence = res.data.data.confidence || 0.7
         
+        // 根据 supplement_type 生成标记
+        const typeTag = supplementType === 'thicken' ? '增厚补充'
+                    : supplementType === 'fill' ? '补全补充'
+                    : '推断补充'
+
         // 增厚类：自动采纳（风险低）
         if (supplementType === 'thicken' && confidence >= 0.7) {
-          supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${issue.title}】\n${res.data.data.content}`
+          supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${issue.title}】\n[${typeTag}] ${res.data.data.content}`
           thickenCount++
         } else {
           // 补全/推断类：收集后弹窗确认
           needConfirmItems.push({
             issue,
             content: res.data.data.content,
+            typeTag,
             type: supplementType,
             confidence,
             note: res.data.data.inference_note || '',
@@ -2994,7 +3537,7 @@ async function aiAutoSupplementAllMissing() {
       const confirmResult = await showSupplementConfirmDialog(needConfirmItems)
       if (confirmResult.accepted.length > 0) {
         for (const item of confirmResult.accepted) {
-          supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${item.issue.title}】\n${item.content}`
+          supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${item.issue.title}】\n[${item.typeTag}] ${item.content}`
         }
       }
     }
@@ -3025,22 +3568,22 @@ function showSupplementConfirmDialog(items) {
       title: 'AI 补充内容确认',
       width: 900,
       content: () => h('div', { style: 'padding-right: 12px' }, [
-        h('p', { style: 'margin-bottom: 12px; color: #86909c' }, 
+        h('p', { style: 'margin-bottom: 12px; color: #86909c' },
           `检测到 ${items.length} 项补充内容可能改变文章走向，请逐项确认：`),
         h('div', { style: 'max-height: 500px; overflow-y: auto' },
           items.map((item, idx) => h('div', {
             key: idx,
-            style: 'padding: 14px; margin-bottom: 10px; background: #f7f8fa; border-radius: 6px; border-left: 4px solid ' + 
+            style: 'padding: 14px; margin-bottom: 10px; background: #f7f8fa; border-radius: 6px; border-left: 4px solid ' +
                    (item.type === 'fill' ? '#f53f3f' : item.type === 'infer' ? '#ff7d00' : '#00b42a')
           }, [
             h('div', { style: 'display: flex; justify-content: space-between; margin-bottom: 8px' }, [
               h('strong', { style: 'font-size: 14px; color: #1d2129' }, `【${item.issue.title}】`),
-              h('span', { style: 'font-size: 12px; color: #86909c' }, 
-                item.type === 'fill' ? ' 补全' : item.type === 'infer' ? '🔍 推断' : '📊 增厚'),
+              h('span', { style: 'font-size: 12px; color: #86909c' },
+                ` ${item.typeTag || (item.type === 'fill' ? '补全' : item.type === 'infer' ? '推断' : '增厚')}`),
             ]),
-            h('div', { style: 'padding: 10px; background: #fff; border-radius: 4px; font-size: 13px; line-height: 1.7; color: #1d2129; margin-bottom: 8px' }, 
+            h('div', { style: 'padding: 10px; background: #fff; border-radius: 4px; font-size: 13px; line-height: 1.7; color: #1d2129; margin-bottom: 8px' },
               item.content.slice(0, 300) + (item.content.length > 300 ? '...' : '')),
-            h('div', { style: 'font-size: 12px; color: #86909c; font-style: italic' }, 
+            h('div', { style: 'font-size: 12px; color: #86909c; font-style: italic' },
               `置信度：${(item.confidence * 100).toFixed(0)}% | ${item.note || '无额外说明'}`),
           ])),
         ),
@@ -3091,9 +3634,13 @@ async function fixIssue(idx) {
     const res = await apiInferSupplement(sessionId.value, `自动补充：${supplementItem}`, {
       mcp_summary: mcpSummary.value || '',
     })
-    
+
     if (res.data.code === 0 && res.data.data?.content) {
-      supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${supplementItem}】\n${res.data.data.content}`
+      const supplementType = res.data.data.supplement_type || 'infer'
+      const typeTag = supplementType === 'thicken' ? '增厚补充'
+                  : supplementType === 'fill' ? '补全补充'
+                  : '推断补充'
+      supplement2Text.value += (supplement2Text.value ? '\n\n' : '') + `【${supplementItem}】\n[${typeTag}] ${res.data.data.content}`
       Message.success(`已补充：${supplementItem}`)
       await runPreCheck()
     } else {
@@ -3113,53 +3660,168 @@ function toggleIssueExpand(index) {
   }
 }
 
+// 保存补充数据并进入框架选择
 async function submitSupplement2() {
-  console.log('========================================')
-  console.log('🔴 [DEBUG] submitSupplement2 被调用')
-  console.log('🔴 当前状态:', { currentStep: currentStep.value, supplementLoading: supplementLoading.value })
-  console.log('🔴 selectedFramework:', selectedFramework.value)
-  console.log('========================================')
-  
-  if (!selectedFramework.value) {
-    Message.error('未选择框架，请先返回选择框架')
-    return
+  // 收集补充表单数据到临时变量
+  const supplementInfo = {}
+  if (supplement2Text.value) supplementInfo.text = supplement2Text.value
+  if (supplement2UploadFiles.value && supplement2UploadFiles.value.length > 0) {
+    supplementInfo.upload_files = supplement2UploadFiles.value
   }
-  
-  let supplementInfo = { ...supplement2Form }
-  if (supplement2Method.value === 'text') {
-    supplementInfo.text = supplement2Text.value
-  } else {
+  if (supplement2KbFiles.value && supplement2KbFiles.value.length > 0) {
+    supplementInfo.kb_files = supplement2KbFiles.value
+  }
+  if (supplement2File.value && supplement2File.value.length > 0) {
     supplementInfo.files = supplement2File.value
   }
 
+  pendingSupplementData.value = supplementInfo
+  supplementLoading.value = false
+  Message.success('补充已保存，正在加载框架推荐...')
+  currentStep.value = 2
+  await loadFrameworks()
+}
+
+// 跳过补充，直接进入框架选择
+async function skipSupplement2() {
+  pendingSupplementData.value = {}
+  supplementLoading.value = false
+  supplementConfirmed.value = true
+  Message.info('已跳过补充，正在启动分析工作台...')
+  currentStep.value = 2
+}
+
+// 确认补充完毕，进入下一步
+function confirmSupplementAndProceed() {
+  if (!supplement2Text.value) {
+    Message.warning('请先补充内容')
+    return
+  }
+  supplementConfirmed.value = true
+  Message.success('补充已确认，正在启动分析工作台...')
+  currentStep.value = 2
+}
+
+// 打开 Step 2 补充对话框
+function openStep2SupplementDialog() {
+  step2SupplementDialogVisible.value = true
+}
+
+// 提交 Step 2 补充（调用后端 AI 推断）
+async function handleStep2SupplementSubmit({ userPrompt, userFiles, useKB, selectedKBFiles, useWebSearch, webSearchKeyword }) {
   supplementLoading.value = true
   try {
-    await supplementStep2(sessionId.value, selectedFramework.value.name, supplementInfo)
-    supplementLoading.value = false
-    currentStep.value = 4
-    Message.success('补充已保存，正在进行方向检测...')
+    if (!preCheckResult.value) {
+      await runPreCheck()
+    }
+    let missingItems = '分析内容待补充'
+    if (preCheckResult.value?.issues) {
+      const items = preCheckResult.value.issues
+        .filter(i => i.type !== 'pass')
+        .map(i => i.title)
+      if (items.length > 0) {
+        missingItems = '需要补充以下内容项：' + items.join('、')
+      }
+    }
+    let effectivePrompt = userPrompt || ''
+    if (!effectivePrompt && preCheckResult.value?.issues) {
+      const missingTitles = preCheckResult.value.issues
+        .filter(i => i.type !== 'pass')
+        .map(i => i.title)
+      if (missingTitles.length > 0) {
+        effectivePrompt = `请根据检测到的缺失项（${missingTitles.join('、')}），自动推断补充内容`
+      } else {
+        effectivePrompt = '请根据检测到的缺失项，自动推断补充内容'
+      }
+    }
+    step2SupplementDialogRef.value?.step2SupplementDialogRef?.setProgressStep?.(1)
+    const res = await apiInferSupplement(
+      sessionId.value,
+      missingItems,
+      {
+        mcp_summary: mcpSummary.value || '',
+        kb_file_list: mcpFiles.value || [],
+        user_prompt: effectivePrompt,
+        user_files: userFiles || [],
+        existing_content: supplement2Text.value || '',
+        useKB: useKB || false,
+        selectedKBFiles: selectedKBFiles || [],
+        useWebSearch: useWebSearch || false,
+        webSearchKeyword: webSearchKeyword || '',
+      }
+    )
+    if (res.data.code === 0 && res.data.data) {
+      lastSupplementMeta.value = {
+        inference_note: res.data.data.inference_note || '',
+        supplement_type: res.data.data.supplement_type || 'infer',
+        confidence: res.data.data.confidence || 0.7,
+        matched_materials: res.data.data.matched_materials || { kb_files: [], ai_pulse_articles: [] },
+      }
+      step2SupplementDialogRef.value?.step2SupplementDialogRef?.setGeneratedContent?.(res.data.data.content)
+    } else {
+      Message.error(res.data.msg || '补充失败')
+      step2SupplementDialogRef.value?.step2SupplementDialogRef?.setError?.()
+    }
   } catch (e) {
+    console.error('Step 2 supplement error:', e)
+    Message.error('补充失败，请重试')
+    step2SupplementDialogRef.value?.step2SupplementDialogRef?.setError?.()
+  } finally {
     supplementLoading.value = false
-    Message.error('操作失败: ' + e.message)
   }
 }
 
-async function skipSupplement2() {
-  if (!selectedFramework.value) {
-    Message.error('未选择框架，请先返回选择框架')
-    return
+// 确认 Step 2 补充内容
+function handleStep2SupplementConfirm({ content, userFiles }) {
+  const supplementInfo = {}
+  if (content) supplementInfo.text = content
+  if (userFiles && userFiles.length > 0) supplementInfo.upload_files = userFiles
+  if (lastSupplementMeta.value) {
+    if (lastSupplementMeta.value.inference_note) supplementInfo.inference_note = lastSupplementMeta.value.inference_note
+    supplementInfo.supplement_type = lastSupplementMeta.value.supplement_type
+    supplementInfo.confidence = lastSupplementMeta.value.confidence
   }
-  
-  supplementLoading.value = true
-  try {
-    await supplementStep2(sessionId.value, selectedFramework.value.name, {})
-    supplementLoading.value = false
-    currentStep.value = 4
-    Message.info('已跳过补充，正在进行方向检测...')
-  } catch (e) {
-    supplementLoading.value = false
-    Message.error('操作失败: ' + e.message)
+  if (mcpFiles.value && mcpFiles.value.length > 0) {
+    supplementInfo.files = mcpFiles.value.slice(0, 10)
   }
+  supplement2Text.value = content || ''
+  pendingSupplementData.value = supplementInfo
+  supplementConfirmed.value = false
+  Message.success('补充已保存，请确认后继续')
+
+  // 方案 B：将匹配素材追加到素材池
+  const meta = lastSupplementMeta.value
+  if (meta?.matched_materials) {
+    const ts = Date.now()
+    if (content) {
+      materialPool.value.push({ type: 'inference', content, ts })
+    }
+    for (const f of (meta.matched_materials.kb_files || [])) {
+      materialPool.value.push({ type: 'kb_file', path: f.path, name: f.name, content: f.content, ts })
+    }
+    for (const a of (meta.matched_materials.ai_pulse_articles || [])) {
+      materialPool.value.push({ type: 'ai_pulse', title: a.title, source: a.source, summary: a.summary, url: a.url, ts })
+    }
+    console.log(' 素材池已更新:', materialPool.value.length, '条')
+  }
+
+  // 补充后：将所有现有 issues 标记为 recurring
+  if (preCheckResult.value?.issues?.length) {
+    preCheckResult.value = {
+      ...preCheckResult.value,
+      issues: preCheckResult.value.issues.map(i => ({ ...i, recurring: true, type: 'suggestion' })),
+      all_recurring: true,
+      score: Math.max(preCheckResult.value.score, 60),
+    }
+  }
+}
+
+// 打开单个问题补充对话框
+function openSupplementDialog(idx) {
+  const issue = preCheckResult.value?.issues?.[idx]
+  if (!issue) return
+  // 复用 Step 2 对话框
+  step2SupplementDialogVisible.value = true
 }
 
 function scrollToPreCheck() {
@@ -3194,8 +3856,16 @@ async function runDirectionCheck() {
       supplementData,
       mcpSummary.value,
     )
-    directionCheckResult.value = res.data.data.issues || res.data.data
-    Message.success('方向检测完成')
+    // 门卫模式：保存完整返回对象（包含 force_passed, ready_for_next 等）
+    directionCheckResult.value = res.data.data.issues || []
+    // 同时保存元数据到单独的ref
+    directionCheckMeta.value = {
+      force_passed: res.data.data.force_passed || false,
+      ready_for_next: res.data.data.ready_for_next !== false,
+      check_count: res.data.data.check_count || 0,
+      overall_score: res.data.data.overall_score || 0,
+    }
+    Message.success('审核完成')
   } catch (e) {
     Message.error('检测失败: ' + e.message)
   } finally {
@@ -3304,9 +3974,30 @@ function goBackToSupplement() {
   console.log('🔴 [DEBUG] goBackToSupplement 被调用')
   console.log('🔴 当前状态:', { currentStep: currentStep.value })
   console.log('========================================')
-  currentStep.value = 4
+  currentStep.value = 1
   directionCheckResult.value = null
   Message.info('已返回补充页面')
+}
+
+// 门卫模式：跳过建议，进入下一步（带风险提示）
+function skipSuggestionsAndContinue() {
+  const suggestCount = suggestIssues.value.length
+  if (suggestCount === 0) {
+    currentStep.value = 4
+    return
+  }
+  Message.warning(`⚠️ 有 ${suggestCount} 个优化建议未处理，可能影响文章质量`)
+  setTimeout(() => {
+    currentStep.value = 4
+  }, 1500)
+}
+
+// 结构性问题：回退到框架步骤重选
+function goBackToStep3() {
+  currentStep.value = 2
+  directionCheckResult.value = null
+  directionCheckMeta.value = { force_passed: false, ready_for_next: true, check_count: 0, overall_score: 0 }
+  Message.info('已返回框架选择页面，请重新选择')
 }
 
 async function goToStructures() {
@@ -3316,11 +4007,16 @@ async function goToStructures() {
   console.log('========================================')
   structuresLoading.value = true
   try {
+    // 合并 supplement2Form 和 supplement2Text，确保 AI 补充的内容也传给后端
+    const supplementData = { ...supplement2Form }
+    if (supplement2Text.value) {
+      supplementData.text = supplement2Text.value
+    }
     const res = await recommendStructures(
       sessionId.value,
       selectedDirection.value?.name || '',
       selectedFramework.value?.name || '',
-      supplement2Form,
+      supplementData,
       mcpSummary.value,
     )
     const data = res.data.data
@@ -3338,7 +4034,7 @@ async function goToStructures() {
   } finally {
     structuresLoading.value = false
     setTimeout(() => {
-      currentStep.value = 5
+      currentStep.value = 4
       Message.success('已切换到结构推荐页面')
     }, 100)
   }
@@ -3364,18 +4060,18 @@ async function selectStructure(s) {
   }
   
   // 保存成功后再生成提纲
-  currentStep.value = 6
+  currentStep.value = 5
   loadOutline()
   Message.info(`已选择「${s.name}」结构，正在生成提纲...`)
 }
 
 function goBackToStructures() {
-  currentStep.value = 5
+  currentStep.value = 4
   outlineResult.value = null
   Message.info('已返回结构推荐')
 }
 
-async function loadOutline() {
+async function loadOutline(switchToStep = 5) {
   loading.value = true
   try {
     const res = await generateWorkflowOutline(sessionId.value)
@@ -3386,15 +4082,28 @@ async function loadOutline() {
         try {
           outlineData = JSON.parse(outlineData)
         } catch (e) {
-          console.error('🔴 提纲JSON解析失败:', e)
+          console.error(' 提纲JSON解析失败:', e)
         }
       }
       outlineResult.value = outlineData
+      
+      // 初始化缺失项到全局补充区（供一键补充使用）
+      if (outlineData.missing_items?.length > 0) {
+        if (!outlineData.global_supplements) {
+          outlineData.global_supplements = {}
+        }
+        for (const item of outlineData.missing_items) {
+          outlineData.global_supplements[item.field] = ''
+        }
+      }
+      
       loading.value = false
-      setTimeout(() => {
-        currentStep.value = 6
-        Message.success('提纲生成完成')
-      }, 100)
+      if (switchToStep !== null) {
+        setTimeout(() => {
+          currentStep.value = switchToStep
+          Message.success('提纲生成完成')
+        }, 100)
+      }
     } else {
       loading.value = false
       Message.error('提纲生成失败: ' + (res.data.msg || '未知错误'))
@@ -3455,30 +4164,64 @@ async function aiSupplementSectionByKey(key) {
 
 async function outlineOneClickAiSupplement() {
   if (!outlineResult.value?.sections) return
+  
+  // 检查是否有全局缺失项需要补充
+  const missingItems = outlineResult.value.missing_items || []
+  
+  // 检查是否有段落级需要补充的素材
   const sectionsObj = outlineResult.value.sections
-  const sectionsArray = Object.values(sectionsObj).filter(s => s.materials?.needs?.length > 0)
-  if (sectionsArray.length === 0) {
+  const sectionsWithNeeds = Object.values(sectionsObj).filter(s => s.materials?.needs?.length > 0)
+  
+  // 如果两者都没有，才显示"暂无需要补充的素材"
+  if (missingItems.length === 0 && sectionsWithNeeds.length === 0) {
     Message.info('暂无需要补充的素材')
     return
   }
+  
   outlineOneClickLoading.value = true
   try {
-    for (const section of sectionsArray) {
-      const context = [
-        `段落标题：${section.title}`,
-        section.key_points?.length ? `核心要点：${section.key_points.join('；')}` : '',
-        `需补充素材：${section.materials.needs.join('；')}`,
-      ].join('\n')
-      const res = await apiInferSupplement(sessionId.value, section.title, {
-        mcp_summary: mcpSummary.value || '',
-        existing_content: context,
-      })
-      if (res.data.code === 0 && res.data.data?.content) {
-        if (!section.materials.has) section.materials.has = []
-        section.materials.has.push(res.data.data.content)
-      }
+    // 初始化全局补充区
+    if (!outlineResult.value.global_supplements) {
+      outlineResult.value.global_supplements = {}
     }
-    Message.success(`已为 ${sectionsArray.length} 个段落完成 AI 补充`)
+    
+    // 先处理全局缺失项
+    if (missingItems.length > 0) {
+      for (const item of missingItems) {
+        const context = [
+          `缺失字段：${item.field}`,
+          `补充建议：${item.fill_guidance}`,
+        ].join('\n')
+        const res = await apiInferSupplement(sessionId.value, `补充：${item.field}`, {
+          mcp_summary: mcpSummary.value || '',
+          existing_content: context,
+        })
+        if (res.data.code === 0 && res.data.data?.content) {
+          outlineResult.value.global_supplements[item.field] = res.data.data.content
+        }
+      }
+      Message.success(`已为 ${missingItems.length} 个全局缺失项完成 AI 补充`)
+    }
+    
+    // 再处理段落级需要补充的素材
+    if (sectionsWithNeeds.length > 0) {
+      for (const section of sectionsWithNeeds) {
+        const context = [
+          `段落标题：${section.title}`,
+          section.key_points?.length ? `核心要点：${section.key_points.join('；')}` : '',
+          `需补充素材：${section.materials.needs.join('；')}`,
+        ].join('\n')
+        const res = await apiInferSupplement(sessionId.value, section.title, {
+          mcp_summary: mcpSummary.value || '',
+          existing_content: context,
+        })
+        if (res.data.code === 0 && res.data.data?.content) {
+          if (!section.materials.has) section.materials.has = []
+          section.materials.has.push(res.data.data.content)
+        }
+      }
+      Message.success(`已为 ${sectionsWithNeeds.length} 个段落完成 AI 补充`)
+    }
   } catch (e) {
     Message.error('一键补充失败: ' + e.message)
   } finally {
@@ -3505,19 +4248,41 @@ function handleSectionAiUpload(fileList) {
 }
 
 function goToGenerateArticle() {
-  currentStep.value = 7
+  currentStep.value = 6
   generateArticle()
   Message.info('正在生成完整文章...')
 }
 
 async function generateArticle() {
   if (!outlineResult.value) {
-    await loadOutline()
+    await loadOutline(null)  // 作为工具函数调用，不切换步骤
   }
   loading.value = true
   try {
     const outlineSections = outlineResult.value?.sections || []
-    const res = await generateFullArticle(sessionId.value, outlineSections, { target_word_count: targetWordCount.value })
+    
+    // 收集 Step 5 检测页的补充内容
+    const step5Supplements = supplement2Text.value || ''
+    
+    // 收集 Step 6 提纲页各版块的补充素材
+    const step6Materials = []
+    if (outlineResult.value.sections && typeof outlineResult.value.sections === 'object') {
+      for (const [key, section] of Object.entries(outlineResult.value.sections)) {
+        if (section.materials?.has?.length > 0) {
+          step6Materials.push({
+            section_key: key,
+            title: section.title,
+            materials: section.materials.has,
+          })
+        }
+      }
+    }
+    
+    const res = await generateFullArticle(sessionId.value, outlineSections, {
+      target_word_count: targetWordCount.value,
+      step5_supplements: step5Supplements,
+      step6_materials: step6Materials,
+    })
     if (res.data.code === 0 && res.data.data) {
       let articleData = res.data.data
       if (typeof articleData === 'string') {
@@ -3530,16 +4295,18 @@ async function generateArticle() {
       articleResult.value = articleData
       loading.value = false
       setTimeout(() => {
-        currentStep.value = 7
+        currentStep.value = 6
         Message.success('完整文章生成完成')
       }, 100)
     } else {
+      console.error('文章生成失败 - 后端返回错误:', res.data)
       Message.error('生成失败: ' + (res.data.msg || '未知错误'))
       loading.value = false
     }
   } catch (e) {
+    console.error('文章生成异常:', e)
+    Message.error('生成失败: ' + (e.message || '未知错误'))
     loading.value = false
-    Message.error('生成失败: ' + e.message)
   }
 }
 
@@ -3652,7 +4419,7 @@ function exportArticle() {
 
 async function skipToOutline() {
   console.log(' skipToOutline 被点击调用, currentStep:', currentStep.value)
-  currentStep.value = 6
+  currentStep.value = 5
   await loadOutline()
 }
 
@@ -3806,10 +4573,14 @@ async function confirmBatchManual() {
   await reEvaluateCompleteness()
 }
 
-// 一键补充所有关键缺失项（使用AI-Pulse + 推断）
+// 一键补充所有关键缺失项（使用 smartSupplement + 实际检索）
 async function supplementAllCritical() {
   const missingItems = completenessResult.value.missing_critical || []
   const unSupplementedItems = missingItems.filter((_, idx) => !isSupplemented(idx))
+  
+  console.log('[一键补充调试] missingItems:', missingItems)
+  console.log('[一键补充调试] supplementContents:', supplementContents.value)
+  console.log('[一键补充调试] unSupplementedItems:', unSupplementedItems)
   
   if (unSupplementedItems.length === 0) {
     Message.warning('没有需要补充的缺失项')
@@ -3819,62 +4590,123 @@ async function supplementAllCritical() {
   supplementAllLoading.value = true
   
   try {
-    // 第一遍：生成所有补充内容
+    // 构建上下文
+    const context = `
+MCP 摘要：
+${mcpSummary.value || '无'}
+
+已选择方向：${selectedDirection.value?.name || '无'}
+已选择框架：${selectedFramework.value?.name || '无'}
+`
+    
+    // 第一步：对每个缺失项执行检索 + smartSupplement
     const supplementResults = []
+    const refusalResults = []
     
     for (const item of unSupplementedItems) {
       try {
-        // Step 1: API检索
-        const keyword = typeof item === 'string' ? item.substring(0, 10) : 'AI'
-        const apiRes = await apiAiPulseSupplement(sessionId.value, item, [keyword])
-        const cases = apiRes.data.code === 0 ? (apiRes.data.data?.cases || []) : []
-        const hasApiCases = cases.length > 0
+        // Step 1: 先调用 AI-Pulse 检索
+        const keyword = typeof item === 'string' ? item.substring(0, 10) : (item.label || item.dimension || 'AI')
+        let retrievalResults = []
+        try {
+          const apiRes = await apiAiPulseSupplement(sessionId.value, item, [keyword])
+          if (apiRes.data.code === 0) {
+            retrievalResults = apiRes.data.data?.cases || []
+          }
+        } catch (e) {
+          console.warn(`AI-Pulse 检索 "${item}" 失败:`, e)
+        }
         
-        // Step 2: AI推断
-        const inferRes = await apiInferSupplement(sessionId.value, item, {
-          cases: cases,
-          mcp_summary: mcpSummary.value,
-        })
+        // Step 2: 使用 smartSupplement（传入检索结果）
+        const topic = typeof item === 'string' ? item : (item.label || item.dimension || '')
+        const smartRes = await apiSmartSupplement(
+          sessionId.value,
+          topic,
+          context,
+          missingItems,
+          item,
+          null,  // forceLevel
+          retrievalResults,
+        )
         
-        if (inferRes.data.code === 0 && inferRes.data.data?.content) {
-          const supplementType = inferRes.data.data.supplement_type || 'infer'
-          const confidence = inferRes.data.data.confidence || 0.7
+        console.log(`[一键补充-debug] item=${topic}, code=${smartRes.data.code}, data=`, smartRes.data.data)
+        
+        if (smartRes.data.code === 0) {
+          const data = smartRes.data.data
           
-          // 判断补充类型
-          let sourceType = ''
-          if (hasApiCases) {
-            sourceType = 'API+AI推断'
-          } else {
-            sourceType = '纯AI推理'
+          // 拒补模式
+          if (data.mode === 'refuse') {
+            refusalResults.push({
+              item: item,
+              alertMessage: data.alert_message || '未检索到相关资料',
+              questions: data.questions || [],
+              index: missingItems.indexOf(item),
+            })
+            console.log(`[一键补充-debug] ${topic} -> 拒补模式`)
+            continue
           }
           
-          supplementResults.push({
-            item: item,
-            content: inferRes.data.data.content,
-            confidence: confidence,
-            sourceType: sourceType,
-            casesCount: cases.length,
-            inferenceNote: inferRes.data.data.inference_note || '',
-            supplementType: supplementType,
-            index: missingItems.indexOf(item),
-          })
+          // 根据不同知识级别提取内容
+          let content = ''
+          let sourceType = ''
+          let confidence = 0.7
+          
+          const levelInfo = {
+            L0: { tag: '知识充足', color: '#00b42a' },
+            L1: { tag: '通用模式推导', color: '#165dff' },
+            L2: { tag: '引导问题', color: '#ff7d00' },
+            L3: { tag: '类比推导', color: '#722ed1' },
+            L4: { tag: '逻辑框架', color: '#f53f3f' },
+          }
+          const info = levelInfo[data.knowledge_level] || { tag: data.knowledge_level, color: '#86909c' }
+          sourceType = info.tag
+          
+          if (data.content) {
+            content = data.content
+          } else if (data.questions?.length) {
+            content = data.questions.map((q, i) => `${i + 1}. ${q.question}${q.hint ? '（' + q.hint + '）' : ''}`).join('\n')
+          } else if (data.analogy) {
+            content = data.analogy
+          } else if (data.framework?.dimensions?.length) {
+            content = data.framework.dimensions.map((d, i) => `${i + 1}. ${d.name}: ${d.hint || ''}`).join('\n')
+          }
+          
+          console.log(`[一键补充-debug] ${topic} -> content长度=${content.length}, knowledge_level=${data.knowledge_level}`)
+          
+          if (content) {
+            supplementResults.push({
+              item: item,
+              content: content,
+              confidence: confidence,
+              sourceType: sourceType,
+              sourceColor: info.color,
+              knowledgeLevel: data.knowledge_level,
+              casesCount: retrievalResults.length,
+              inferenceNote: data.assessment_reason || '',
+              index: missingItems.indexOf(item),
+            })
+          }
+        } else {
+          console.warn(`[一键补充-debug] ${topic} -> API返回错误: code=${smartRes.data.code}, msg=${smartRes.data.msg}`)
         }
       } catch (e) {
-        console.warn(`生成 "${item}" 补充内容失败:`, e)
+        console.warn(`处理 "${item}" 补充失败:`, e)
       }
     }
     
     supplementAllLoading.value = false
     
-    if (supplementResults.length === 0) {
+    console.log(`[一键补充-debug] 最终结果: supplementResults=${supplementResults.length}, refusalResults=${refusalResults.length}`)
+    
+    if (supplementResults.length === 0 && refusalResults.length === 0) {
       Message.error('未能生成任何补充内容，请重试')
       return
     }
     
-    // 第二遍：弹窗确认
-    const confirmResult = await showSupplementAllConfirmDialog(supplementResults)
+    // 第二步：弹窗确认
+    const confirmResult = await showSupplementAllConfirmDialogV2(supplementResults, refusalResults)
     
-    // 第三遍：保存用户确认的补充内容
+    // 第三步：保存用户确认的补充内容
     if (confirmResult.accepted.length > 0) {
       let successCount = 0
       for (const result of confirmResult.accepted) {
@@ -3884,22 +4716,22 @@ async function supplementAllCritical() {
             'supplement',
             result.item,
             result.content,
-            result.sourceType === 'API+AI推断' ? 'ai-pulse+infer' : 'ai-infer',
+            result.sourceType || 'smart',
             { 
               inference_note: result.inferenceNote, 
               cases_count: result.casesCount,
               confidence: result.confidence,
-              supplement_type: result.supplementType,
+              knowledge_level: result.knowledgeLevel,
             },
             [],
           )
           const suppId = addRes.data.data.supplement_id
           await apiConfirmSupplement(sessionId.value, suppId)
           
-          // 更新补充内容状态
+          const contentStr = typeof result.content === 'string' ? result.content : JSON.stringify(result.content)
           supplementContents.value[result.index] = {
-            content: result.content.substring(0, 100) + (result.content.length > 100 ? '...' : ''),
-            method: result.sourceType === 'API+AI推断' ? 'ai-pulse+infer' : 'ai-infer',
+            content: contentStr.substring(0, 100) + (contentStr.length > 100 ? '...' : ''),
+            method: result.sourceType || 'smart',
             time: new Date().toLocaleString(),
           }
           successCount++
@@ -3961,10 +4793,16 @@ function showSupplementAllConfirmDialog(results) {
             `基于 ${result.casesCount} 个外部案例生成`) : null,
           // 内容预览
           h('div', { style: 'padding: 8px 12px; background: #fff; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #4e5969; max-height: 100px; overflow-y: auto; margin-bottom: 6px' }, 
-            result.content.slice(0, 200) + (result.content.length > 200 ? '...' : '')),
+            (() => {
+              const text = typeof result.content === 'string' ? result.content : JSON.stringify(result.content)
+              return text.slice(0, 200) + (text.length > 200 ? '...' : '')
+            })()),
           // 推断说明
           result.inferenceNote ? h('div', { style: 'font-size: 12px; color: #86909c; font-style: italic' }, 
-            `注：${result.inferenceNote.slice(0, 100)}${result.inferenceNote.length > 100 ? '...' : ''}`) : null,
+            (() => {
+              const note = typeof result.inferenceNote === 'string' ? result.inferenceNote : JSON.stringify(result.inferenceNote)
+              return `注：${note.slice(0, 100)}${note.length > 100 ? '...' : ''}`
+            })()) : null,
         ])),
       ]),
       okText: `采纳全部 (${results.length} 项)`,
@@ -3974,6 +4812,89 @@ function showSupplementAllConfirmDialog(results) {
       },
       onCancel: () => {
         resolve({ accepted: [], skipped: results })
+      },
+    })
+  })
+}
+
+// 新版一键补充确认弹窗（支持补充结果 + 拒补结果）
+function showSupplementAllConfirmDialogV2(supplementResults, refusalResults) {
+  return new Promise((resolve) => {
+    const allItems = []
+    const refusalMap = new Map()
+    
+    // 标记拒补项
+    for (const r of refusalResults) {
+      refusalMap.set(r.item, r)
+    }
+    
+    // 构建可补充项列表
+    for (const r of supplementResults) {
+      allItems.push({ ...r, status: 'supplement', key: r.index })
+    }
+    // 构建拒补项列表
+    for (const r of refusalResults) {
+      allItems.push({ ...r, status: 'refusal', key: 'refusal_' + r.index })
+    }
+    
+    const accepted = []
+    const skipped = []
+    
+    const modal = Modal.confirm({
+      title: `一键补充结果（${supplementResults.length} 项可补充，${refusalResults.length} 项需手动）`,
+      width: '900px',
+      content: () => h('div', { style: 'max-height: 500px; overflow-y: auto; padding-right: 12px' }, [
+        // 补充结果
+        supplementResults.length > 0 ? h('div', null, [
+          h('p', { style: 'margin-bottom: 12px; color: #00b42a; font-size: 13px; font-weight: 500' },
+            `✅ 以下 ${supplementResults.length} 项已生成补充内容，请确认是否采纳：`),
+          supplementResults.map((result, idx) => h('div', {
+            key: idx,
+            style: 'padding: 14px; margin-bottom: 10px; background: #f7f8fa; border-radius: 6px; border-left: 4px solid ' + (result.sourceColor || '#165dff')
+          }, [
+            h('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px' }, [
+              h('strong', { style: 'font-size: 14px; color: #1d2129' }, `【${result.item}】`),
+              h('span', {
+                style: 'padding: 2px 8px; border-radius: 12px; font-size: 11px; background: #e8f3ff; color: #165dff'
+              }, result.sourceType),
+            ]),
+            result.casesCount > 0 ? h('div', { style: 'font-size: 12px; color: #86909c; margin-bottom: 6px' },
+              `基于 ${result.casesCount} 个外部案例`) : null,
+            h('div', { style: 'padding: 8px 12px; background: #fff; border-radius: 4px; font-size: 13px; line-height: 1.6; color: #4e5969; max-height: 100px; overflow-y: auto; margin-bottom: 6px' },
+              (() => {
+                const text = typeof result.content === 'string' ? result.content : JSON.stringify(result.content)
+                return text.slice(0, 200) + (text.length > 200 ? '...' : '')
+              })()),
+            result.inferenceNote ? h('div', { style: 'font-size: 12px; color: #86909c; font-style: italic' },
+              (() => {
+                const note = typeof result.inferenceNote === 'string' ? result.inferenceNote : JSON.stringify(result.inferenceNote)
+                return `注：${note.slice(0, 100)}${note.length > 100 ? '...' : ''}`
+              })()) : null,
+          ])),
+        ]) : null,
+        
+        // 拒补结果
+        refusalResults.length > 0 ? h('div', { style: 'margin-top: 16px' }, [
+          h('p', { style: 'margin-bottom: 12px; color: #f53f3f; font-size: 13px; font-weight: 500' },
+            `❌ 以下 ${refusalResults.length} 项未检索到资料，无法自动补充：`),
+          refusalResults.map((r, idx) => h('div', {
+            key: idx,
+            style: 'padding: 12px; margin-bottom: 8px; background: #fff2f0; border-radius: 6px; border-left: 4px solid #f53f3f'
+          }, [
+            h('strong', { style: 'font-size: 14px; color: #1d2129' }, `【${r.item}】`),
+            h('div', { style: 'margin-top: 6px; font-size: 13px; color: #f53f3f' }, r.alertMessage),
+            r.questions?.length > 0 ? h('div', { style: 'margin-top: 8px; font-size: 12px; color: #86909c' },
+              '引导问题：' + r.questions.map(q => q.question).join('；')) : null,
+          ])),
+        ]) : null,
+      ]),
+      okText: supplementResults.length > 0 ? `采纳可补充的 ${supplementResults.length} 项` : '我知道了',
+      cancelText: '全部跳过',
+      onOk: () => {
+        resolve({ accepted: supplementResults, skipped: refusalResults })
+      },
+      onCancel: () => {
+        resolve({ accepted: [], skipped: allItems })
       },
     })
   })
@@ -4133,6 +5054,99 @@ function closeUnifiedModal() {
   unifiedApiSelected.value = []
   unifiedInferResult.value = null
 }
+
+// ===== 草稿模式函数（Step 3 起草用） =====
+
+// 打开草稿弹窗
+async function openDraftModal(index) {
+  const missingItems = completenessResult.value.missing_critical || []
+  if (!missingItems[index]) {
+    Message.warning('缺失项不存在')
+    return
+  }
+  
+  draftModalItemIndex.value = index
+  draftModalItem.value = missingItems[index]
+  draftContent.value = ''
+  draftModalVisible.value = true
+  draftLoading.value = true
+  
+  try {
+    const res = await apiSupplementDraft(
+      sessionId.value,
+      selectedDirection.value?.name || '',
+      selectedFramework.value?.name || '',
+      missingItems[index],
+      '',
+    )
+    if (res.data.code === 0) {
+      // 去除开头的警告语，因为弹窗已经有 alert 了
+      let text = res.data.data.text || ''
+      const warningPrefix = '️ 以下为AI基于通用模式的推导参考，请核实后使用。'
+      if (text.startsWith(warningPrefix)) {
+        text = text.substring(warningPrefix.length).trim()
+      }
+      draftContent.value = text
+    } else {
+      // 失败时不关闭弹窗，显示错误提示，用户可以手动编辑或取消
+      draftContent.value = `草稿生成失败：${res.data.msg || '未知错误'}\n\n你可以手动在下方输入框中补充内容，或点击取消。`
+    }
+  } catch (e) {
+    console.error('草稿生成异常:', e)
+    // 异常时也不关闭弹窗
+    draftContent.value = `草稿生成异常：${e.message}\n\n你可以手动在下方输入框中补充内容，或点击取消。`
+  } finally {
+    draftLoading.value = false
+  }
+}
+
+// 确认草稿补充
+async function confirmDraftSupplement() {
+  if (!draftContent.value) {
+    Message.warning('没有可保存的内容')
+    return
+  }
+  
+  draftSaving.value = true
+  try {
+    // 保存到知识库，标记为 ai-draft
+    const addRes = await apiAddSupplement(
+      sessionId.value,
+      'text',
+      draftModalItem.value,
+      draftContent.value,
+      'ai-draft',
+      {},
+      [],
+    )
+    const suppId = addRes.data.data.supplement_id
+    
+    // 标记为已补充
+    const confirmRes = await apiConfirmSupplement(sessionId.value, suppId, true)
+    if (confirmRes.data.code === 0) {
+      Message.success('已保存，标记为「用户确认草稿」')
+      closeDraftModal()
+      reEvaluateCompleteness()
+    } else {
+      Message.error('保存失败: ' + (confirmRes.data.msg || '未知错误'))
+    }
+  } catch (e) {
+    console.error('保存草稿异常:', e)
+    Message.error('保存失败: ' + e.message)
+  } finally {
+    draftSaving.value = false
+  }
+}
+
+// 关闭草稿弹窗
+function closeDraftModal() {
+  draftModalVisible.value = false
+  draftContent.value = ''
+  draftModalItem.value = ''
+  draftModalItemIndex.value = -1
+}
+
+// ===== 结束草稿模式函数 =====
 
 // 批量统一补充结果弹窗
 const batchResultModalVisible = ref(false)
@@ -4304,11 +5318,11 @@ async function applyFrameworkAiSuggestion(framework) {
     // Step 3: 重新评估完整度
     await reEvaluateCompleteness()
     
-    // Step 4: 设置选中的框架并保持在补充页面
+    // Step 1: 设置选中的框架并保持在补充页面
     selectedFramework.value = framework
     // 自动预检测缺失项
     setTimeout(() => {
-      currentStep.value = 3
+      currentStep.value = 1
       runPreCheck()
       Message.success(`「${framework.name}」AI 补充完成，已自动保存`)
     }, 100)
@@ -4482,6 +5496,121 @@ function skipExport() {
     },
   })
 }
+
+// ===== 生成配图 =====
+
+// 框架名称到 key 的映射表
+const FRAMEWORK_NAME_TO_KEY = {
+  'SWOT 分析': 'swot',
+  '商业模式画布': 'business_canvas',
+  'PESTEL 分析': 'pestel',
+  '用户旅程图': 'user_journey',
+  '时间矩阵': 'time_matrix',
+  '主张论证': 'claim',
+  '因果分析': 'causal',
+  '系统思考': 'system',
+  '对比分析': 'comparison',
+  '流程步骤': 'process',
+}
+
+// 从框架对象推导 key
+function deriveFrameworkKey(framework) {
+  console.log('[deriveFrameworkKey] 输入:', framework)
+  if (!framework) {
+    console.warn('[deriveFrameworkKey] 框架为空')
+    return null
+  }
+  // 优先使用已有的 key
+  if (framework.key) {
+    console.log('[deriveFrameworkKey] 使用已有 key:', framework.key)
+    return framework.key
+  }
+  // 从 name 精确匹配
+  if (framework.name) {
+    const key = FRAMEWORK_NAME_TO_KEY[framework.name]
+    if (key) {
+      console.log('[deriveFrameworkKey] 从 name 精确匹配:', framework.name, '->', key)
+      return key
+    }
+    // 模糊匹配：检查 name 是否包含映射表中的任何 key 名称
+    for (const [name, k] of Object.entries(FRAMEWORK_NAME_TO_KEY)) {
+      if (framework.name.includes(name) || name.includes(framework.name)) {
+        console.log('[deriveFrameworkKey] 从 name 模糊匹配:', framework.name, '->', k)
+        return k
+      }
+    }
+    console.warn('[deriveFrameworkKey] name 未匹配:', framework.name)
+  }
+  console.warn('[deriveFrameworkKey] 框架对象缺少 key 和 name 字段')
+  return null
+}
+
+function goToGenerateImage() {
+  if (!articleResult.value) {
+    Message.warning('请先生成完整文章')
+    return
+  }
+  generatedImageUrl.value = ''
+  currentStep.value = 7
+}
+
+async function handleGenerateImage() {
+  if (!articleResult.value) {
+    Message.error('没有可生成图片的文章内容')
+    return
+  }
+  
+  imageGenerating.value = true
+  
+  try {
+    // 将文章内容拼接为完整文本
+    const fullText = articleResult.value.paragraphs
+      .map(p => `## ${p.title}\n\n${p.content}`)
+      .join('\n\n')
+    
+    // 推导框架 key：优先从 selectedFramework，其次从文章元数据
+    let frameworkKey = deriveFrameworkKey(selectedFramework.value)
+    
+    // 如果推导失败，尝试从文章结果中获取
+    if (!frameworkKey && articleResult.value.framework_key) {
+      frameworkKey = articleResult.value.framework_key
+    }
+    
+    // 最终回退到 swot（仅作保底，实际应该能推导出来）
+    if (!frameworkKey) {
+      console.warn('[图片生成] 无法推导框架 key，使用默认 swot')
+      frameworkKey = 'swot'
+    }
+    
+    console.log(`[图片生成] 使用框架: ${frameworkKey}`)
+    
+    const response = await apiGenerateDiagram({
+      frameworkKey: frameworkKey,
+      text: fullText,
+      style: 'minimal',
+      size: 'default',
+    })
+    
+    const url = URL.createObjectURL(response.data)
+    generatedImageUrl.value = url
+    Message.success('配图生成成功！')
+  } catch (e) {
+    console.error('生成配图失败:', e)
+    Message.error('生成配图失败: ' + (e.message || '未知错误'))
+  } finally {
+    imageGenerating.value = false
+  }
+}
+
+function downloadGeneratedImage() {
+  if (!generatedImageUrl.value) return
+  
+  const a = document.createElement('a')
+  a.href = generatedImageUrl.value
+  a.download = `${articleResult.value?.title || 'article'}_配图.png`
+  a.click()
+  Message.success('下载成功！')
+}
 </script>
 
 <style scoped>
@@ -4497,6 +5626,88 @@ function skipExport() {
   padding: 16px;
   background: #fff;
   border-radius: 8px;
+}
+
+.step-summary-list {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+}
+
+.step-summary-item {
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  transition: all 0.3s;
+}
+
+.step-summary-item:last-child {
+  margin-bottom: 0;
+}
+
+.step-summary-item.is-completed {
+  background: #f0f9ff;
+  border-left: 3px solid #52c41a;
+}
+
+.step-summary-item.is-current {
+  background: #e6f7ff;
+  border-left: 3px solid #1890ff;
+}
+
+.step-summary-item.is-future {
+  background: #f5f5f5;
+  border-left: 3px solid #d9d9d9;
+  opacity: 0.6;
+}
+
+.step-summary-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.step-status-icon {
+  margin-right: 8px;
+  font-size: 16px;
+}
+
+.step-name {
+  font-weight: 500;
+  color: #262626;
+}
+
+.step-summary-text {
+  margin-left: 8px;
+  color: #595959;
+  font-size: 14px;
+}
+
+.step-collapse-icon {
+  margin-left: auto;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.step-summary-content {
+  margin-top: 12px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 4px;
+}
+
+/* 步骤展开详情 */
+.step-detail-content {
+  margin-top: 8px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #595959;
+  white-space: pre-wrap;
 }
 
 .content-area {
@@ -4577,24 +5788,257 @@ function skipExport() {
   padding: 8px 0;
 }
 
-.ai-pulse-cases {
-  .case-title {
-    font-weight: 500;
-    font-size: 14px;
-    margin-bottom: 4px;
-  }
-  
-  .case-summary {
-    font-size: 12px;
-    color: #86909c;
-    margin-bottom: 6px;
-    line-height: 1.5;
-  }
-  
-  .case-meta {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
+.ai-pulse-cases .case-title {
+  font-weight: 500;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.ai-pulse-cases .case-summary {
+  font-size: 12px;
+  color: #86909c;
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.ai-pulse-cases .case-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* 生成配图容器样式 */
+.generated-image-container {
+  text-align: center;
+  padding: 20px;
+  background: #f7f8fa;
+  border-radius: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.generated-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: inline-block;
+}
+
+/* 选题列表样式 */
+.topic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.topic-item {
+  border: 2px solid #e5e6eb;
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: #ffffff;
+}
+
+.topic-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* 不同等级选题的样式区分 */
+.topic-item.topic-excellent {
+  border-color: #00b42a;
+  background: linear-gradient(135deg, #f6ffed 0%, #ffffff 100%);
+}
+
+.topic-item.topic-excellent:hover {
+  box-shadow: 0 4px 16px rgba(0, 180, 42, 0.2);
+}
+
+.topic-item.topic-good {
+  border-color: #ff7d00;
+  background: linear-gradient(135deg, #fff7e6 0%, #ffffff 100%);
+}
+
+.topic-item.topic-good:hover {
+  box-shadow: 0 4px 16px rgba(255, 125, 0, 0.2);
+}
+
+.topic-item.topic-poor {
+  border-color: #f53f3f;
+  background: linear-gradient(135deg, #fff2f0 0%, #ffffff 100%);
+}
+
+.topic-item.topic-poor:hover {
+  box-shadow: 0 4px 16px rgba(245, 63, 63, 0.2);
+}
+
+.topic-item.selected {
+  border-color: #165dff !important;
+  background: linear-gradient(135deg, #e8f3ff 0%, #ffffff 100%) !important;
+  box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.1);
+}
+
+/* 选题标题 */
+.topic-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.topic-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1d2129;
+  flex: 1;
+}
+
+/* 选题描述 */
+.topic-desc {
+  font-size: 14px;
+  color: #4e5969;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+/* 选题元信息 */
+.topic-meta {
+  margin-bottom: 12px;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-label {
+  font-size: 13px;
+  color: #86909c;
+  white-space: nowrap;
+}
+
+.progress-track {
+  flex: 1;
+  height: 8px;
+  background: #e5e6eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #165dff, #4080ff);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.meta-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #165dff;
+  white-space: nowrap;
+}
+
+/* 选题原因 */
+.topic-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 13px;
+  color: #4e5969;
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+
+/* 需要补充 */
+.topic-needed {
+  font-size: 13px;
+  color: #f53f3f;
+  padding: 8px 12px;
+  background: #fff2f0;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.needed-label {
+  font-weight: 600;
+}
+
+/* 评分卡片统一样式 */
+.score-card {
+  text-align: center;
+  padding: 16px;
+  border-radius: 10px;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.3s ease;
+}
+
+.score-card.score-high {
+  background: #f6ffed;
+  border: 2px solid #b7eb8f;
+}
+
+.score-card.score-medium {
+  background: #fff7e6;
+  border: 2px solid #ffd591;
+}
+
+.score-card.score-low {
+  background: #fff2f0;
+  border: 2px solid #ffccc7;
+}
+
+.score-title {
+  font-size: 14px;
+  color: #1d2129;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.score-value {
+  font-size: 32px;
+  font-weight: 800;
+  margin-bottom: 8px;
+  line-height: 1;
+}
+
+.score-unit {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.score-desc {
+  font-size: 12px;
+  color: #4e5969;
+  line-height: 1.6;
+  text-align: left;
+  flex: 1;
+}
+
+.score-details {
+  flex: 1;
+  text-align: left;
+}
+
+.detail-item {
+  margin-bottom: 4px;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #4e5969;
+}
+
+.score-tag {
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
 }
 </style>
