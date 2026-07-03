@@ -372,7 +372,7 @@
               <icon-file style="font-size: 48px; color: #e5e6eb" />
               <p>开始撰写内容，预览将实时更新</p>
             </div>
-            <div v-else class="markdown-body" v-html="renderedPreview"></div>
+            <div v-else class="markdown-body" v-text="renderedPreview"></div>
           </div>
         </a-card>
 
@@ -391,7 +391,7 @@
               {{ originalCollapsed ? '展开' : '收起' }}
             </a-button>
           </template>
-          <div v-show="!originalCollapsed" class="original-content" v-html="renderedOriginal"></div>
+          <div v-show="!originalCollapsed" class="original-content" v-text="renderedOriginal"></div>
         </a-card>
       </div>
     </div>
@@ -607,7 +607,7 @@ const getSourceColor = (source) => {
 
 const renderedOriginal = computed(() => {
   if (!originalSummary.value) return ''
-  return marked.parse(originalSummary.value)
+  return marked.parse(originalSummary.value, { async: false })
 })
 
 const structure = ref({
@@ -648,7 +648,7 @@ const buildFullContent = () => {
 const renderedPreview = computed(() => {
   const content = buildFullContent()
   if (!content) return ''
-  return marked.parse(content)
+  return marked.parse(content, { async: false })
 })
 
 const loadStructure = async () => {

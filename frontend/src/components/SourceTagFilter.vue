@@ -22,7 +22,7 @@
         </div>
 
         <div class="block-content">
-          <div v-if="block.is_valid" v-html="renderBlockContent(block)"></div>
+          <div v-if="block.is_valid" v-text="renderBlockContent(block)"></div>
           <div v-else class="filtered-warning">
             ⚠️ 此段落无有效来源标签，已过滤
             <span v-if="block.warning">{{ block.warning }}</span>

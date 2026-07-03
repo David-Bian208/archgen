@@ -231,19 +231,51 @@ Q4: 不重要不紧急（减少做）
         self.retry_times = self.config.get("retry_times", 3)
         self.retry_delay = self.config.get("retry_delay", 2)
 
+    # 框架中文名/别名 → key 映射（前端可能传名称而非 key）
+    FRAMEWORK_NAME_MAP = {
+        # 通用映射
+        "主张型": "claim", "claim": "claim", "主张": "claim",
+        "因果型": "causal", "causal": "causal", "因果": "causal",
+        "系统型": "system", "system": "system", "系统": "system",
+        "对比型": "comparison", "comparison": "comparison", "对比": "comparison",
+        "流程型": "process", "process": "process", "流程": "process",
+        "swot": "swot", "SWOT": "swot", "SWOT分析": "swot",
+        "商业模式画布": "business_canvas", "business_canvas": "business_canvas", "画布": "business_canvas",
+        "PESTEL": "pestel", "pestel": "pestel",
+        "用户旅程": "user_journey", "user_journey": "user_journey", "旅程": "user_journey",
+        "时间矩阵": "time_matrix", "time_matrix": "time_matrix", "四象限": "time_matrix",
+        # 常见五步法/多步法 → process
+        "五步法": "process", "六步法": "process", "四步法": "process", "三步法": "process",
+        "步骤": "process", "流程步骤": "process",
+    }
+
+    def resolve_framework_key(self, framework_key: str) -> str:
+        """将框架中文名/别名解析为标准 key"""
+        resolved = self.FRAMEWORK_NAME_MAP.get(framework_key, "")
+        if not resolved:
+            for name, key in self.FRAMEWORK_NAME_MAP.items():
+                if name in framework_key or framework_key in name:
+                    resolved = key
+                    break
+        if not resolved:
+            resolved = framework_key
+        # 确保返回的 key 在 EXTRACT_PROMPTS 中，否则降级为 process
+        if resolved not in self.EXTRACT_PROMPTS:
+            logger.warning(f"未知框架 '{framework_key}'，降级为 process（流程型）")
+            resolved = "process"
+        return resolved
+
     def extract(self, text: str, framework_key: str, user_data: Optional[Dict] = None) -> Dict:
         """根据框架类型调用对应模板，提取结构化数据
 
         Args:
             text: 原文内容（MCP 总结或用户输入）
-            framework_key: 框架 key
+            framework_key: 框架 key（支持中文名，会自动映射）
             user_data: 用户已填写的数据（可选），如果提供则作为提取参考
         """
-        logger.info(f"开始提取 {framework_key} 框架数据...")
-        if framework_key not in self.EXTRACT_PROMPTS:
-            raise ValueError(f"不支持的框架: {framework_key}")
-
-        prompt_template = self.EXTRACT_PROMPTS[framework_key]
+        resolved_key = self.resolve_framework_key(framework_key)
+        logger.info(f"开始提取 {resolved_key} 框架数据 (原始输入: {framework_key})...")
+        prompt_template = self.EXTRACT_PROMPTS[resolved_key]
 
         # 如果有用户数据，优先基于用户数据构建结构化输出，LLM 只做整理/补全
         if user_data:

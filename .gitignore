@@ -37,3 +37,23 @@ Thumbs.db
 
 # 配置（包含敏感信息）
 config/config.local.yaml
+config/.env
+
+# 凭据备份（包含 API Key）
+backups/
+
+# 运行时数据
+data/supplements/
+data/sessions/
+data/assessment_cache/
+data/ab_test_config.json
+
+# 日志文件
+*.log
+archgen_*.log
+
+# 报告文件
+audit_report.json
+*评审报告*.md
+*实施完成*总结*.md
+*image_generation*analysis*.md

@@ -53,6 +53,42 @@ def _error(code=1, msg="error", data=None):
     return {"code": code, "msg": msg, "data": data}
 
 
+def _try_repair_json(raw: str) -> str:
+    """尝试修复截断的 JSON：找到最后一个完整对象/数组的闭合位置"""
+    import re
+    # 去掉尾部不完整内容，从后往前找最后一个 }
+    depth = 0
+    last_complete = len(raw)
+    for i in range(len(raw) - 1, -1, -1):
+        c = raw[i]
+        if c == '}':
+            depth += 1
+        elif c == '{':
+            depth -= 1
+        if depth == 0 and c in ('}', ']'):
+            # 找到最后一个完整的顶级闭合
+            # 但这里应该找最外层的闭合
+            pass
+    # 简单策略：修剪尾部，找到最后一个 } 或 ]，补齐
+    stripped = raw.rstrip()
+    # 如果以 ] 结尾且前面有 [，说明数组完整
+    if stripped.endswith(']'):
+        return stripped
+    # 尝试补一个 } 或 ] 
+    # 先看开头是 { 还是 [
+    first_char = raw.strip()[0] if raw.strip() else '{'
+    # 找最后一个完整 token 的位置
+    # 简单方法：从末尾找最后一个 }
+    last_brace = raw.rfind('}')
+    last_bracket = raw.rfind(']')
+    if last_brace > last_bracket:
+        return raw[:last_brace + 1]
+    elif last_bracket > -1:
+        return raw[:last_bracket + 1]
+    # 都没有，返回空对象
+    return '{}'
+
+
 # ===== 知识库接口（保留，兼容旧版） =====
 
 @router.get("/api/kb/categories")
@@ -3189,6 +3225,86 @@ async def save_persona(request: Dict = Body(...)):
 
 # ===== MCP 检索接口 =====
 
+async def llm_filter_by_titles(topic: str, file_list: List[Dict], llm_config: Dict, top_n: int = 15) -> List[int]:
+    """
+    用 LLM 从全量标题列表中筛选出与 topic 最相关的文件
+    
+    Args:
+        topic: 用户主题/关键词
+        file_list: [{relative_path, title, name}, ...]
+        llm_config: {base_url, api_key, model, timeout}
+        top_n: 返回最相关的 N 个
+        
+    Returns:
+        排序后的文件索引列表（最相关在前）
+    """
+    if not file_list:
+        return []
+    if not topic:
+        return list(range(min(len(file_list), top_n)))
+
+    # 构建标题列表文本
+    lines = []
+    for i, f in enumerate(file_list):
+        title = f.get("title", "") or f.get("name", "")
+        lines.append(f"{i+1}. {title}")
+    title_text = "\n".join(lines)
+
+    prompt = f"""你有以下 {len(file_list)} 篇文档的标题列表：
+
+{title_text}
+
+用户想找与「{topic}」相关的文档。
+请返回最相关的 {top_n} 篇的编号（按相关度从高到低排序）。
+只返回编号，每行一个，例如：
+3
+7
+12
+不需要任何解释。"""
+
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "deepseek-chat")
+    timeout = llm_config.get("timeout", 60)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 200,
+                    "temperature": 0.1,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(f"LLM 标题筛选请求失败: {resp.status_code} {resp.text[:200]}")
+                return list(range(min(len(file_list), top_n)))
+            
+            result = resp.json()
+            text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            
+            # 解析编号
+            indices = []
+            for line in text.split("\n"):
+                line = line.strip()
+                if line.isdigit():
+                    idx = int(line) - 1
+                    if 0 <= idx < len(file_list):
+                        indices.append(idx)
+            
+            if not indices:
+                # 解析失败，回退
+                return list(range(min(len(file_list), top_n)))
+            
+            return indices
+    except Exception as e:
+        logger.warning(f"LLM 标题筛选异常: {e}")
+        return list(range(min(len(file_list), top_n)))
+
+
 @router.post("/api/mcp/search")
 async def mcp_search(request: Dict = Body(...)):
     """
@@ -3208,52 +3324,80 @@ async def mcp_search(request: Dict = Body(...)):
         return _error(code=400, msg="缺少 folders 参数")
         
     try:
-        # Step 1: 扫描所有绑定的文件夹，检索匹配文件
-        all_matched_files = []
+        # Step 1: 扫描所有绑定的文件夹，获取全量标题列表
+        llm_config_for_filter = _get_config("llm")
+        all_title_files = []  # [{relative_path, title, name, folder_path}]
+        folder_readers = {}   # folder_path -> reader (复用)
+        
         for folder_path in folders:
             try:
                 reader = LocalFolderReader(folder_path)
-                files = reader.list_files(keyword=topic, limit=10)
-                for f in files:
-                    f["folder_path"] = folder_path
-                all_matched_files.extend(files)
+                folder_readers[folder_path] = reader
+                titles = reader.list_file_titles()
+                for t in titles:
+                    t["folder_path"] = folder_path
+                all_title_files.extend(titles)
             except Exception as e:
                 logger.warning(f"扫描文件夹失败 {folder_path}: {e}")
                 
-        if not all_matched_files:
+        if not all_title_files:
             return _success({
                 "summary": f"未找到与「{topic}」相关的内容。请尝试其他关键词或添加更多文件夹。",
                 "source_files": [],
                 "file_count": 0,
                 "summary_type": "no_result",
             })
-            
-        # 去重（按文件名）
-        seen_names = set()
-        unique_files = []
-        for f in all_matched_files:
-            if f["name"] not in seen_names:
-                seen_names.add(f["name"])
-                unique_files.append(f)
-                
-        source_files = [f["name"] for f in unique_files]
-        logger.info(f"MCP 检索到 {len(unique_files)} 个文件: {source_files}")
+
+        logger.info(f"MCP 检索: 全量标题 {len(all_title_files)} 个，使用 LLM 筛选与「{topic}」相关的文件")
         
-        # Step 2: 读取全文（最多 5 个文件，控制 token 使用）
+        # Step 2: LLM 筛选最相关的 15 篇
+        filtered_indices = await llm_filter_by_titles(topic, all_title_files, llm_config_for_filter, top_n=15)
+        target_title_files = [all_title_files[i] for i in filtered_indices if i < len(all_title_files)]
+        
+        if not target_title_files:
+            return _success({
+                "summary": f"未找到与「{topic}」相关的内容。请尝试其他关键词或添加更多文件夹。",
+                "source_files": [],
+                "file_count": 0,
+                "summary_type": "no_result",
+            })
+        
+        source_files = [f["name"] for f in target_title_files]
+        logger.info(f"MCP 检索: LLM 筛选到 {len(target_title_files)} 个文件: {source_files[:10]}{'...' if len(source_files) > 10 else ''}")
+        
+        # Step 3: 读取全文（最多 5 个文件，控制 token 使用）
         max_files = 5
-        target_files = unique_files[:max_files]
-        target_paths = [f["path"] for f in target_files]
+        target_files_with_content = []
+        for f in target_title_files[:max_files]:
+            fp = f["path"]
+            fpath = Path(fp)
+            reader_key = f["folder_path"]
+            try:
+                reader = folder_readers.get(reader_key) or LocalFolderReader(reader_key)
+                content_text = fpath.read_text(encoding="utf-8", errors="ignore")
+                target_files_with_content.append({
+                    "name": f["name"],
+                    "path": fp,
+                    "content": content_text,
+                })
+            except Exception as e:
+                logger.warning(f"读取文件失败 {f['name']}: {e}")
         
-        reader = LocalFolderReader(target_files[0]["folder_path"])
-        contents = reader.read_files(target_paths)
+        if not target_files_with_content:
+            return _success({
+                "summary": f"与「{topic}」相关的文件存在但读取失败。",
+                "source_files": source_files,
+                "file_count": len(target_title_files),
+                "summary_type": "no_result",
+            })
         
-        # Step 3: 拼接上下文
+        # Step 4: 拼接上下文
         context_parts = []
-        for c in contents:
+        for c in target_files_with_content:
             context_parts.append(f"## {c['name']}\n\n{c['content']}")
         context = "\n\n---\n\n".join(context_parts)
-        
-        # Step 4: 调用 LLM 总结
+
+        # Step 5: 调用 LLM 总结
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
@@ -3309,7 +3453,7 @@ async def mcp_search(request: Dict = Body(...)):
             "summary": summary,
             "topic_needed": topic_needed,
             "source_files": source_files,
-            "file_count": len(unique_files),
+            "file_count": len(target_title_files),
             "summary_type": "ok",
         })
         
@@ -3933,11 +4077,12 @@ def _get_session(session_id: str) -> Dict:
 
 @router.post("/api/workflow/session/create")
 async def create_session(request: Dict = Body(default={})):
-    """创建新会话"""
+    """创建新会话，可选传入 MCP 素材"""
     session_id = str(uuid.uuid4())[:8]
     _sessions[session_id] = {
-        "mcp_summary": "",
-        "mcp_files": [],
+        "mcp_summary": request.get("mcp_summary", ""),
+        "mcp_files": request.get("mcp_files", []),
+        "mcp_topic": request.get("mcp_topic", ""),
         "completeness": 0,
         "supplement_count": 0,
         "check_count": 0,
@@ -3950,6 +4095,7 @@ async def create_session(request: Dict = Body(default={})):
         "slot_materials": {},
         "slot_outlines": {},
     }
+    logger.info(f"Session {session_id} 创建，MCP 文件: {len(_sessions[session_id]['mcp_files'])}个")
     return _success({"session_id": session_id})
 
 
@@ -4114,8 +4260,14 @@ async def analyze_directions_v2(request: Dict = Body(...)):
     """推荐写作方向（带缺失项展示）"""
     session_id = request.get("session_id", "")
     mcp_summary = request.get("mcp_summary", "")
+    mcp_files = request.get("mcp_files", [])  # 前端传入的 MCP 文件列表
     
     session = _get_session(session_id)
+    
+    # 持久化到 session（兼容后续步骤）
+    if mcp_files and not session.get("mcp_files"):
+        session["mcp_files"] = mcp_files
+        logger.info(f"[Directions] 持久化 MCP 文件到 session: {len(mcp_files)}个")
     
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
@@ -4128,14 +4280,49 @@ async def analyze_directions_v2(request: Dict = Body(...)):
         persona_summary = _get_persona_summary()
     except:
         pass
-    
-    prompt = f"""你是一个内容策划专家。请基于以下素材，推荐2-3个写作方向。
+
+    # 收集 MCP 文件内容（优先用请求传入的，否则从 session 读）
+    mcp_files_block = ""
+    all_mcp_files = (mcp_files if mcp_files else session.get("mcp_files", []))
+    if isinstance(all_mcp_files, list) and all_mcp_files:
+        mcp_files_block = "\n【MCP 知识库文件】\n"
+        for f in all_mcp_files[:15]:
+            if isinstance(f, dict):
+                name = f.get("name", f.get("filename", f.get("path", "unknown")))
+                content = f.get("text", f.get("content", f.get("summary", "")))
+                if content:
+                    mcp_files_block += f"\n--- {name} ---\n{content[:500]}\n"
+            elif isinstance(f, str):
+                mcp_files_block += f"\n- {f[:300]}\n"
+
+    # 收集补充素材信息（step2）
+    step2_supplement = session.get("step2", {}).get("supplement_2", {})
+    supplement_text_block = ""
+    if isinstance(step2_supplement, dict):
+        files = step2_supplement.get("files", [])
+        if files:
+            supplement_text_block += "\n【用户补充文件】\n"
+            for f in files[:5]:
+                supplement_text_block += f"- {f.get('name','')}: {f.get('content','')[:300]}\n"
+        mats = step2_supplement.get("materials", [])
+        if mats:
+            supplement_text_block += "\n【AI推断素材】\n"
+            for m in mats[:5]:
+                supplement_text_block += f"- {m.get('title','')}: {m.get('content','')[:300]}\n"
+        text = step2_supplement.get("text", "")
+        if text:
+            supplement_text_block += f"\n【用户自述补充】\n{text[:500]}"
+
+    prompt = f"""你是一个内容策划专家。请基于以下素材，推荐4-5个写作方向。
 
 【MCP 素材摘要】
-{mcp_summary}
+{mcp_summary[:2000]}
+{mcp_files_block}
 
 【作者身份定位】
 {persona_summary}
+
+{supplement_text_block}
 
 ═══════════ 透明推理原则（必须严格执行）═══════════
 1. 每个方向必须有推荐理由（基于素材中的哪一点）
@@ -4143,7 +4330,7 @@ async def analyze_directions_v2(request: Dict = Body(...)):
    - user_content: 直接从素材推导
    - user_implied: 素材隐含但未明说
    - general_knowledge: 基于通用领域知识
-3. 提供2-3个选项，不替用户做决定
+3. 提供4-5个选项，不替用户做决定
 4. 标注置信度：high/medium/low（由你判断，基于素材充分度）
 
 ═══════════ 生成原则 ═══════════
@@ -4152,7 +4339,7 @@ async def analyze_directions_v2(request: Dict = Body(...)):
 - 每个方向必须具体可操作，不要泛泛而谈
 - evidence_quote 可选：如果能准确引用素材原文就加上，不能则留空字符串
 
-请推荐2-3个写作方向，返回 JSON 格式（不要 markdown 代码块）：
+请推荐4-5个写作方向，返回 JSON 格式（不要 markdown 代码块）：
 [
   {{
     "name": "主张型：论证 Vibe Coding 的优越性",
@@ -4201,7 +4388,7 @@ async def analyze_directions_v2(request: Dict = Body(...)):
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
+                    "max_tokens": 4096,
                     "temperature": 0,
                     "seed": 42,
                 },
@@ -4212,7 +4399,16 @@ async def analyze_directions_v2(request: Dict = Body(...)):
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
-        result_data = json_mod.loads(parsed_content)
+        try:
+            result_data = json_mod.loads(parsed_content)
+        except json_mod.JSONDecodeError as e:
+            logger.warning(f"方向推荐 JSON 解析失败: {e}, 尝试修复...")
+            # 尝试截断到最后一个完整的 } 后再拼一个 }
+            last_complete = _try_repair_json(parsed_content)
+            try:
+                result_data = json_mod.loads(last_complete)
+            except json_mod.JSONDecodeError:
+                return _error(msg=f"方向推荐返回格式异常: {str(e)[:100]}")
         
         # ═══════════════════════════════════════════════════════
         # 置信度优化：风险加权置信度（MEMORY.md 2026-06-21 决策）
@@ -4220,6 +4416,55 @@ async def analyze_directions_v2(request: Dict = Body(...)):
         # - anchored (user_content): 1.0 全额有效
         # - inferred (user_implied/general_knowledge): 0.3 打 3 折
         # ═══════════════════════════════════════════════════════
+        
+        # ══ 关键词匹配计算 coverage ══
+        import re
+        from collections import Counter
+        
+        all_materials_text = []
+        # MCP 文件内容
+        for f in session.get("mcp_files", []) or []:
+            if isinstance(f, dict):
+                name = f.get("name", f.get("filename", ""))
+                content = f.get("text", f.get("content", ""))
+                if name: all_materials_text.append(name)
+                if content: all_materials_text.append(content[:2000])
+        
+        # 补充素材
+        supplement = session.get("step2", {}).get("supplement_2", {})
+        if isinstance(supplement, dict):
+            for f in supplement.get("files", []) or []:
+                name = f.get("name", "")
+                content = f.get("content", "")
+                if name: all_materials_text.append(name)
+                if content: all_materials_text.append(content[:2000])
+            for m in supplement.get("materials", []) or []:
+                title = m.get("title", "")
+                content = m.get("content", "")
+                if title: all_materials_text.append(title)
+                if content: all_materials_text.append(content[:2000])
+        
+        def extract_keywords(text):
+            cn = re.findall(r'[\u4e00-\u9fa5]{2,}', str(text))
+            en = re.findall(r'[A-Za-z]{3,}', str(text))
+            return [w.lower() for w in cn + en]
+        
+        all_keywords = []
+        for text in all_materials_text:
+            all_keywords.extend(extract_keywords(text))
+        
+        keyword_counts = Counter(all_keywords)
+        significant_keywords = {w for w, c in keyword_counts.items() if c >= 2}
+        
+        def calc_coverage_by_keywords(direction):
+            if not significant_keywords:
+                return 0.4 if all_materials_text else 0.25
+            dir_text = str(direction.get("name", "")) + " " + str(direction.get("description", ""))
+            dir_keywords = set(extract_keywords(dir_text))
+            match_count = len(dir_keywords & significant_keywords)
+            total_count = len(dir_keywords) if len(dir_keywords) > 0 else 1
+            return round(min(match_count / total_count * 1.5, 0.95), 2)
+        
         SOURCE_RISK_MAP = {
             "user_content": 1.0,      # 锚定事实：全额有效
             "user_implied": 0.3,      # AI 推断：打 3 折
@@ -4290,6 +4535,11 @@ async def analyze_directions_v2(request: Dict = Body(...)):
                 d.setdefault("deficiency_details", [])
                 d.setdefault("overall_score", 0)
                 
+                # ══ 用关键词匹配计算 coverage ══
+                d["coverage"] = calc_coverage_by_keywords(d)
+                if d.get("overall_score", 0) <= 0 and d.get("coverage", 0) > 0:
+                    d["overall_score"] = min(int(d["coverage"] * 100), 85)
+                
                 # 校验字段值
                 if d.get("source") not in valid_sources:
                     d["source"] = "user_implied"
@@ -4321,12 +4571,16 @@ async def analyze_directions_v2(request: Dict = Body(...)):
                 d.setdefault("deficiency_details", [])
                 d.setdefault("overall_score", 0)
                 
+                # ══ 用关键词匹配计算 coverage ══
+                d["coverage"] = calc_coverage_by_keywords(d)
+                if d.get("overall_score", 0) <= 0 and d.get("coverage", 0) > 0:
+                    d["overall_score"] = min(int(d["coverage"] * 100), 85)
+                
                 if d.get("source") not in valid_sources:
                     d["source"] = "user_implied"
                 if d.get("confidence") not in valid_confidence:
                     d["confidence"] = "medium"
                 
-                # 应用置信度优化
                 calculate_effective_confidence(d)
             
             result_data = {
@@ -4339,6 +4593,198 @@ async def analyze_directions_v2(request: Dict = Body(...)):
     except Exception as e:
         logger.error(f"方向推荐失败: {e}")
         return _error(msg=str(e))
+
+
+@router.post("/api/workflow/directions/evaluate")
+async def evaluate_user_direction(request: Dict = Body(...)):
+    """评估用户自定义方向（根据 MCP 素材 + 补充素材打分）"""
+    session_id = request.get("session_id", "")
+    custom_direction = request.get("direction", "").strip()
+    
+    if not session_id or not custom_direction:
+        return _error(code=400, msg="缺少 session_id 或 direction")
+    
+    session = _get_session(session_id)
+    
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "deepseek-chat")
+    timeout = llm_config.get("timeout", 60)
+    
+    if not api_key:
+        return _error(msg="LLM 未配置")
+    
+    # 收集素材
+    mcp_summary = session.get("mcp_summary", "")
+    step2_supplement = session.get("step2", {}).get("supplement_2", {})
+    supplement_text_block = ""
+    if isinstance(step2_supplement, dict):
+        files = step2_supplement.get("files", [])
+        if files:
+            supplement_text_block += "\n【用户补充文件】\n"
+            for f in files[:5]:
+                supplement_text_block += f"- {f.get('name','')}: {f.get('content','')[:300]}\n"
+        mats = step2_supplement.get("materials", [])
+        if mats:
+            supplement_text_block += "\n【AI推断素材】\n"
+            for m in mats[:5]:
+                supplement_text_block += f"- {m.get('title','')}: {m.get('content','')[:300]}\n"
+        text = step2_supplement.get("text", "")
+        if text:
+            supplement_text_block += f"\n【用户自述补充】\n{text[:500]}"
+    
+    persona_summary = ""
+    try:
+        persona_summary = _get_persona_summary()
+    except:
+        pass
+    
+    prompt = f"""你是一个内容策划专家。请评估用户自定义的写作方向是否适合当前素材。
+
+【用户自定义方向】
+{custom_direction}
+
+【MCP 素材摘要】
+{mcp_summary}
+
+【用户补充素材】
+{supplement_text_block}
+
+【作者身份定位】
+{persona_summary}
+
+请评估这个方向，返回 JSON（不要 markdown 代码块）：
+{{
+  "direction_score": 0-100,
+  "direction_analysis": "评估理由（50-100字）",
+  "deficiency_score": 0-100,
+  "deficiency_details": [
+    {{"item": "缺失内容", "severity": "high/medium/low", "explanation": "说明"}}
+  ],
+  "overall_score": 0-100,
+  "suggestion": "改进建议（50字内）"
+}}"""
+    
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1024,
+                    "temperature": 0.1,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        
+        content = result["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        import json as jmod
+        data = jmod.loads(content)
+        data.setdefault("direction_score", 0)
+        data.setdefault("deficiency_score", 0)
+        data.setdefault("overall_score", 0)
+        data.setdefault("direction_analysis", "")
+        data.setdefault("deficiency_details", [])
+        data.setdefault("suggestion", "")
+        return _success(data)
+    except Exception as e:
+        logger.error(f"自定义方向评估失败: {e}")
+        return _error(msg=str(e))
+
+
+@router.post("/api/workflow/angle/recommend")
+async def recommend_angles(request: Dict = Body(...)):
+    """写作角度推荐（基于素材 + MCP 摘要）"""
+    session_id = request.get("session_id", "")
+    topic = request.get("topic", "")
+    
+    if not session_id:
+        return _error(code=400, msg="缺少 session_id")
+    
+    session = _get_session(session_id)
+    mcp_summary = session.get("mcp_summary", "")
+    
+    # 收集补充素材
+    step2_supplement = session.get("step2", {}).get("supplement_2", {})
+    supplement_text_block = ""
+    if isinstance(step2_supplement, dict):
+        text = step2_supplement.get("text", "")
+        if text:
+            supplement_text_block += f"\n【用户补充文本】\n{text[:500]}"
+        files = step2_supplement.get("files", [])
+        if files:
+            supplement_text_block += "\n【用户补充文件】\n" + ", ".join(f.get('name', '') for f in files[:10])
+    
+    llm_config = _get_config("llm")
+    api_key = llm_config.get("api_key", "")
+    
+    if not api_key:
+        # 降级：返回默认角度
+        return _success({
+            "angles": [
+                {"name": "案例研究型", "description": "深入拆解典型实践案例，提炼可复用经验", "coverage": 0.5},
+                {"name": "工具盘点型", "description": "系统梳理工具和方法，提供实用清单", "coverage": 0.5},
+                {"name": "方法论型", "description": "提炼系统化的方法框架，给出可操作步骤", "coverage": 0.5},
+            ]
+        })
+    
+    prompt = f"""你是一个内容策划专家。请基于以下素材推荐 3-5 个写作角度。
+        
+【创作主题】
+{topic or '根据素材推断'}
+
+【MCP 素材摘要】
+{mcp_summary[:1000]}
+{supplement_text_block}
+
+请返回 JSON（不要 markdown 代码块）：
+{{
+  "angles": [
+    {{ "name": "角度名称", "description": "角度描述（1-2句话）", "coverage": 0.85 }}
+  ]
+}}
+
+coverage 是 0-1 之间的浮点数，表示该角度对现有素材的覆盖程度：
+- 0.8-1.0：素材丰富，可直接展开
+- 0.5-0.8：素材基本足够，部分需要补充
+- 0.3-0.5：素材偏少，需要较多补充
+- 0.0-0.3：素材严重不足"""
+    
+    try:
+        import httpx
+        base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+        model = llm_config.get("model", "deepseek-chat")
+        timeout = llm_config.get("timeout", 60)
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1024,
+                    "temperature": 0.3,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        
+        content = result["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        import json as jmod
+        data = jmod.loads(content)
+        angles = data.get("angles", [])
+        return _success({"angles": angles})
+    except Exception as e:
+        logger.warning(f"角度推荐失败: {e}")
+        return _error(msg=str(e)[:100])
 
 
 @router.post("/api/workflow/supplement/1")
@@ -6377,7 +6823,7 @@ def _ensure_material_pool(session_id: str, mcp_summary: str = "", mcp_files: lis
                     "filename": "unknown",
                 })
 
-    # 3. 追加补充内容（supplement_storage）
+    # 3. 追加补充内容（supplement_storage 磁盘文件）
     try:
         supplements_dir = Path(__file__).parent / "data" / "supplements"
         supp_file = supplements_dir / f"{session_id}.json"
@@ -6393,7 +6839,43 @@ def _ensure_material_pool(session_id: str, mcp_summary: str = "", mcp_files: lis
     except Exception as e:
         logger.warning(f"[MaterialPool] 读取补充内容失败: {e}")
 
-    # 4. 去重（基于 text 前 200 字符）
+    # 4. 从 session["step2"]["supplement_2"] 读取前端 Step 1 补充的素材
+    try:
+        step2 = session.get("step2", {})
+        supp2 = step2.get("supplement_2", {})
+        if isinstance(supp2, dict):
+            # 4a. 知识库文件
+            files = supp2.get("files", [])
+            if isinstance(files, list):
+                for f in files:
+                    if isinstance(f, dict):
+                        pool.append({
+                            "text": f.get("content", f.get("text", "")),
+                            "source_type": "knowledge_base",
+                            "filename": f.get("name", f.get("filename", "unknown")),
+                        })
+            # 4b. AI 补充素材
+            mats = supp2.get("materials", [])
+            if isinstance(mats, list):
+                for m in mats:
+                    if isinstance(m, dict):
+                        pool.append({
+                            "text": m.get("content", m.get("text", m.get("summary", ""))),
+                            "source_type": "ai_inferred",
+                            "filename": m.get("title", m.get("name", "ai_supplement")),
+                        })
+            # 4c. 补充文本
+            text = supp2.get("text", "")
+            if text and text.strip():
+                pool.append({
+                    "text": text.strip(),
+                    "source_type": "user_input",
+                    "filename": "supplement_text",
+                })
+    except Exception as e:
+        logger.warning(f"[MaterialPool] 读取 session step2 素材失败: {e}")
+
+    # 5. 去重（基于 text 前 200 字符）
     seen = set()
     deduped = []
     for item in pool:
@@ -6409,8 +6891,8 @@ def _ensure_material_pool(session_id: str, mcp_summary: str = "", mcp_files: lis
 
 def _match_materials_internal(session_id: str, confirmed_slots: list) -> dict:
     """
-    关键词匹配分配素材到槽位（内部函数）
-    注意：已修复为 async 兼容（非 async 函数，直接返回）
+    V4.1 改进版素材匹配（基于中文特征：整词 + 双字词（bigram）+ 单字重叠度）
+    修复：原版仅做整词 in 匹配，中文变体（如"市场规模"vs"市场现状"）全部漏掉
     """
     import re as _re
     session = _get_session(session_id)
@@ -6421,30 +6903,55 @@ def _match_materials_internal(session_id: str, confirmed_slots: list) -> dict:
         slot_key = slot.get("slot_key", "")
         label = slot.get("label", "")
         desc = slot.get("description", "")
-        # 从槽位名称和描述提取关键词
+        combined = label + desc
+
+        # ---- 特征1: 完整分词（保留原逻辑） ----
         keywords = set()
-        # 拆词：按中文常见分隔符
-        for seg in _re.split(r'[，,、\s：:]+', label + " " + desc):
+        for seg in _re.split(r'[，,、\s：:]+', combined):
             seg = seg.strip()
             if len(seg) >= 2:
                 keywords.add(seg)
-        # 也加入单字词（但优先匹配长词）
-        for seg in _re.split(r'[，,、\s：:]+', label + " " + desc):
-            seg = seg.strip()
-            if len(seg) == 1:
-                keywords.add(seg)
+
+        # ---- 特征2: 中文双字词（bigram） ----
+        bigrams = set()
+        for i in range(len(combined) - 1):
+            pair = combined[i:i+2]
+            # 仅保留两个字都是中文的
+            if all('\u4e00' <= c <= '\u9fff' for c in pair):
+                bigrams.add(pair)
+
+        # ---- 特征3: 单汉字集合（用于重叠度计算） ----
+        label_chars = set(c for c in combined if '\u4e00' <= c <= '\u9fff')
 
         matched = []
         for item in pool:
             item_text = item.get("text", "")
-            # 计算匹配分
+            if not item_text:
+                continue
+
             score = 0
+
+            # a) 整词匹配（权重: 字数×3）
             for kw in keywords:
                 if kw in item_text:
-                    score += len(kw)  # 长词匹配权重更高
+                    score += len(kw) * 3
+
+            # b) 双字词匹配（权重: 每个匹配4分）
+            for bg in bigrams:
+                if bg in item_text:
+                    score += 4
+
+            # c) 单字重叠度
+            if label_chars:
+                text_chars = set(c for c in item_text if '\u4e00' <= c <= '\u9fff')
+                overlap = label_chars & text_chars
+                overlap_ratio = len(overlap) / len(label_chars)
+                if overlap_ratio >= 0.25:  # 25%以上字相同即加分
+                    score += int(overlap_ratio * 15)
+
             if score > 0:
                 matched.append({
-                    "text": item_text,
+                    "text": item_text[:300],
                     "source_type": item.get("source_type", "unknown"),
                     "filename": item.get("filename", ""),
                     "score": score,
@@ -6507,11 +7014,31 @@ async def generate_slots(request: Dict = Body(...)):
             if not api_key:
                 yield f"data: {json.dumps({'type': 'error', 'msg': 'LLM 配置缺失'})}\n\n"
                 return
+            
+            # 确保素材池已构建并获取统计
+            session = _get_session(session_id)
+            pool = _ensure_material_pool(
+                session_id,
+                mcp_summary=session.get("mcp_summary", ""),
+                mcp_files=session.get("mcp_files", [])
+            )
+            
+            # 从 session 获取补充内容统计
+            step2 = session.get("step2", {})
+            supplement_2 = step2.get("supplement_2", {})
+            supplement_files = supplement_2.get("files", [])
+            supplement_materials = supplement_2.get("materials", [])
+            material_count = len(pool)
+            file_count = len(supplement_files)
+            ai_material_count = len(supplement_materials)
 
             prompt = f"""你是一个内容架构师。请根据以下主题和素材信息，设计内容槽位。
 
 【创作主题】
 {topic}
+
+【素材统计】
+本次共读取到 {material_count} 条素材（其中包含 {file_count} 个文件，{ai_material_count} 条 AI 补充素材）
 
 【素材池概览】
 {material_pool_summary if material_pool_summary else '暂无额外素材'}
@@ -6523,7 +7050,7 @@ async def generate_slots(request: Dict = Body(...)):
 
 返回 JSON 格式（不要 markdown 代码块）：
 {{
-  "thinking": "你的分析思考过程（100-200字）",
+  "thinking": "你的分析思考过程（100-200字），请明确提及读取到的素材数量",
   "slots": [
     {{"slot_key": "slot_1", "label": "槽位名称", "description": "简短描述"}}
   ]
@@ -6696,13 +7223,13 @@ async def pre_check_materials(request: Dict = Body(...)):
         return _error(code=400, msg="缺少 session_id")
 
     try:
-        # 确保素材池已构建
+        # 强制重建素材池（确保包含最新的 step2 补充素材）
         session = _get_session(session_id)
+        _ensure_material_pool(session_id,
+            mcp_summary=session.get("mcp_summary", ""),
+            mcp_files=session.get("mcp_files", []))
         pool = session.get("material_pool", [])
-        if not pool:
-            _ensure_material_pool(session_id,
-                mcp_summary=session.get("mcp_summary", ""),
-                mcp_files=session.get("mcp_files", []))
+        logger.info(f"[PreCheck] session={session_id} 素材池大小: {len(pool)}条")
 
         # 先匹配
         slot_mats = _match_materials_internal(session_id, confirmed_slots)
@@ -6725,6 +7252,7 @@ async def pre_check_materials(request: Dict = Body(...)):
                 "level": level,
                 "alternatives": [],
                 "matched_texts": [m["text"][:100] for m in matches[:3]],
+                "matched_files": [{"filename": m.get("filename", ""), "source_type": m.get("source_type", "")} for m in matches[:5]],
             }
 
         # AI 为 empty/partial 槽位建议替代方案
@@ -6790,11 +7318,97 @@ async def pre_check_materials(request: Dict = Body(...)):
                     f"full={sum(1 for v in results.values() if v['level']=='full')}, "
                     f"partial={sum(1 for v in results.values() if v['level']=='partial')}, "
                     f"empty={sum(1 for v in results.values() if v['level']=='empty')}")
-        return _success(results)
+        return _success({"check_results": results, "material_pool_size": len(pool)})
 
     except Exception as e:
         logger.error(f"[PreCheck] 失败: {e}")
         return _error(msg=str(e))
+
+
+@router.post("/api/workflow/slot/content_preview")
+async def slot_content_preview(request: Dict = Body(...)):
+    """槽位内容预览：基于素材+方向+主题，展示该槽位预计写成的样子
+    
+    请求体: { session_id, slot_key, slot_label, slot_description, topic, direction }
+    """
+    session_id = request.get("session_id", "")
+    slot_key = request.get("slot_key", "")
+    slot_label = request.get("slot_label", "")
+    slot_desc = request.get("slot_description", "")
+    topic = request.get("topic", "")
+    direction = request.get("direction", "")
+
+    if not session_id or not slot_key:
+        return _error(code=400, msg="缺少必要参数")
+
+    session = _get_session(session_id)
+    mcp_summary = session.get("mcp_summary", "")
+
+    # 收集匹配素材
+    _ensure_material_pool(session_id,
+        mcp_summary=mcp_summary,
+        mcp_files=session.get("mcp_files", []))
+    pool = session.get("material_pool", [])
+
+    # 为这个槽位匹配素材
+    slots_for_match = [{"slot_key": slot_key, "label": slot_label, "description": slot_desc}]
+    slot_mats = _match_materials_internal(session_id, slots_for_match)
+    matches = slot_mats.get(slot_key, [])
+
+    if not matches:
+        return _success({"preview": f"【{slot_label}】暂无素材匹配，请先补充相关素材后预览。"})
+
+    mat_texts = "\n".join(
+        f"- [{m.get('source_type', '')}] {m.get('text', '')[:300]}"
+        for m in matches[:5]
+    )
+
+    llm_config = _get_config("llm")
+    api_key = llm_config.get("api_key", "")
+    if not api_key:
+        return _success({
+            "preview": f"【{slot_label}】已匹配 {len(matches)} 条素材（含：{', '.join(m.get('filename', '') for m in matches[:3])}），请手动编辑完成此槽位。"
+        })
+
+    prompt = f"""你是一个专业内容写手。请基于以下素材，为槽位「{slot_label}」写一段内容预览。
+
+【写作主题】
+{topic}
+
+【写作方向】
+{direction}
+
+【槽位说明】
+{slot_label}: {slot_desc}
+
+【可用素材】
+{mat_texts[:2000]}
+
+要求：写 2-4 句内容预览，说明该槽位将涵盖哪些要点、基于哪些素材，用自然的中文段落表达。不要写成大纲列表，要像真正的段落预览一样流畅。
+
+直接返回预览文字，不要JSON、不要markdown代码块。"""
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
+            response = await client.post(
+                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": llm_config.get("model", "deepseek-chat"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 300,
+                    "temperature": 0.5,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+            preview = result["choices"][0]["message"]["content"].strip()
+        return _success({"preview": preview})
+    except Exception as e:
+        logger.warning(f"槽位预览失败: {e}")
+        return _success({
+            "preview": f"【{slot_label}】已匹配 {len(matches)} 条素材。预览生成失败，请稍后重试。"
+        })
 
 
 @router.post("/api/workflow/slot/batch_fill_v4")

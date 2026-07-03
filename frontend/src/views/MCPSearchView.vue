@@ -164,7 +164,7 @@ const handleSearch = async () => {
     const params = new URLSearchParams({
       folders: JSON.stringify(folders),
     })
-    router.push(`/topic-suggest?${params.toString()}`)
+    router.push(`/workflow?${params.toString()}`)
     return
   }
 
@@ -177,7 +177,7 @@ const handleSearch = async () => {
       categories: JSON.stringify(categoryFilters.value),
       timeRange: timeFilters.value[0] || 'all',
     })
-    router.push(`/topic-suggest?${params.toString()}`)
+    router.push(`/workflow?${params.toString()}`)
   } catch (error) {
     Message.error('搜索失败: ' + error.message)
   } finally {

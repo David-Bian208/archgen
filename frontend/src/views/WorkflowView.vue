@@ -48,11 +48,6 @@
                 <a-tag v-if="scannedFolders.length" color="arcoblue" size="small">{{ scannedFolders.length }} 个知识库</a-tag>
               </a-space>
             </template>
-            <template #extra>
-              <a-button type="text" size="small" @click="refreshTopics" :loading="topicsLoading">
-                <IconRefresh style="margin-right: 4px" /> 换一批
-              </a-button>
-            </template>
 
             <!-- 加载中状态 -->
             <div v-if="topicsLoading" style="text-align: center; padding: 40px">
@@ -61,6 +56,7 @@
 
             <!-- 话题列表 -->
             <div v-else-if="topics.length" class="topic-list">
+
               <div
                 v-for="(t, i) in topics"
                 :key="i"
@@ -142,13 +138,20 @@
                         </div>
                       </div>
                     </a-col>
-                  </a-row>
-                </div>
+                </a-row>
+              </div>  <!-- closes 3-score div -->
+            </div>  <!-- closes topic-item -->
+
+              <!-- 换一批按钮（列表下方） -->
+              <div style="text-align: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #f0f0f0">
+                <a-button size="small" @click="refreshTopics" :loading="topicsLoading">
+                  <IconRefresh style="margin-right: 4px" /> 换一批方向
+                </a-button>
               </div>
             </div>
 
-            <!-- 空状态 -->
-            <div v-else style="text-align: center; padding: 40px; color: #86909c">
+          <!-- 空状态 -->
+          <div v-else style="text-align: center; padding: 40px; color: #86909c">
               <a-empty description="暂无推荐选题，请返回知识库检索页重新搜索" />
               <a-button type="primary" style="margin-top: 16px" @click="$router.push('/mcp-search')">
                 返回检索
@@ -718,6 +721,11 @@
 
         <!-- Step 2: 三列分析工作台 -->
         <div v-if="currentStep === 2" class="step-content">
+          <div class="step-nav-bar">
+            <a-button type="text" size="small" @click="goBack">
+              ← 返回上一步
+            </a-button>
+          </div>
           <ThreeColumnWorkbench
             :phase="phase"
             :streaming-thinking="streamingThinking"
@@ -725,6 +733,7 @@
             :confirmed-slots="confirmedSlots"
             :slot-materials="slotMaterials"
             :slot-outlines="slotOutlines"
+            :slot-confirmed="slotConfirmed"
             :writing-plans="writingPlans"
             :slot-relations-data="slotRelations"
             :editing-slot="editingSlot"
@@ -733,6 +742,12 @@
             :all-slots-confirmed="allSlotsConfirmed"
             :pre-check-results="preCheckResults"
             :pre-check-running="preCheckRunning"
+            :available-angles="availableAngles"
+            :angle-loading="angleLoading"
+            :session-id="sessionId"
+            :topic="mcpTopic"
+            :selected-direction="selectedDirection"
+            :slot-suggestions="slotSuggestions"
             @update-slot="(k, u) => updateSlot(k, u)"
             @remove-slot="removeSlot"
             @add-slot="addSlot"
@@ -740,23 +755,33 @@
             @stop-stream="stopStream"
             @open-edit-panel="openEditPanel"
             @close-edit-panel="closeEditPanel"
+            @confirm-slot="confirmSlot"
             @save-plan="saveWritingPlan"
             @add-material="addMaterialToSlot"
             @ask-followup="askFollowupQuestion"
             @run-pre-check="runSlotPreCheck"
             @adopt-alternative="adoptAlternative"
-            @proceed-to-article="currentStep = 3"
+            @proceed-to-article="generateArticleV4"
+            @select-angle="selectAngle"
+            @refresh-angles="loadAngles"
+            @evaluate-angle="handleEvaluateAngle"
+            @use-custom-angle="handleUseCustomAngle"
+            @update-outline="handleUpdateOutline"
           />
         </div>
 
         <!-- Step 1: 补充 - 完善分析内容 -->
         <div v-if="currentStep === 1" class="step-content">
+          <div class="step-nav-bar">
+            <a-button type="text" size="small" @click="goBack">
+              ← 返回上一步
+            </a-button>
+          </div>
           <StepSupplement
             ref="step2SupplementDialogRef"
             :mcp-summary="mcpSummary"
             :mcp-files="mcpFiles"
             :selected-direction="selectedDirection"
-            :selected-framework="selectedFramework"
             :pre-check-loading="preCheckLoading"
             :pre-check-result="preCheckResult"
             :supplement2-text="supplement2Text"
@@ -776,11 +801,12 @@
             :open-supplement-dialog="openSupplementDialog"
             :toggle-issue-expand="toggleIssueExpand"
             @update:step2-supplement-dialog-visible="step2SupplementDialogVisible = $event"
+            @remove-material="handleRemoveMaterial"
           />
         </div>
 
-        <!-- Step 3: 检测 - 方向/结构一致性检测 -->
-        <div v-if="currentStep === 3" class="step-content">
+        <!--  旧 Step 3: 检测 - 已禁用 -->
+        <div v-if="false" class="step-content">
           <a-card title="交付审核（门卫模式）">
             <a-alert type="info" style="margin-bottom: 16px">
               <template #title>抓大放小：只拦方向错误/内容为空/事实冲突</template>
@@ -918,8 +944,8 @@
           </a-card>
         </div>
 
-        <!-- Step 4: 结构推荐 -->
-        <div v-if="currentStep === 4" class="step-content">
+        <!--  旧 Step 4: 结构推荐 - 已禁用 -->
+        <div v-if="false" class="step-content">
           <a-card title="推荐内容结构">
             <a-alert type="info" style="margin-bottom: 16px">
               <template #title>AI 推荐的文章结构</template>
@@ -986,8 +1012,8 @@
           </a-card>
         </div>
 
-        <!-- Step 5: 提纲生成 -->
-        <div v-if="currentStep === 5" class="step-content">
+        <!--  旧 Step 5: 提纲 - 已禁用 -->
+        <div v-if="false" class="step-content">
           <a-card title="写作提纲">
             <div v-if="outlineResult" class="outline-result">
               <!-- v2 格式：具名 section (对象) + source_tag + missing_items -->
@@ -1216,8 +1242,13 @@
           </a-card>
         </div>
 
-        <!-- Step 6: 文章生成 -->
-        <div v-if="currentStep === 6" class="step-content">
+        <!--  Step 3: 文章生成 -->
+        <div v-if="currentStep === 3" class="step-content">
+          <div class="step-nav-bar">
+            <a-button type="text" size="small" @click="goBack">
+              ← 返回上一步
+            </a-button>
+          </div>
           <a-card title="完整文章">
             <div v-if="articleResult">
               <div style="margin-bottom: 24px">
@@ -1239,8 +1270,8 @@
                     <a-button type="primary" status="warning" @click="goToGenerateImage">
                       🖼️ 生成配图
                     </a-button>
-                    <a-button @click="currentStep = 6">
-                      ← 返回提纲
+                    <a-button @click="goBack">
+                      ← 返回工作台
                     </a-button>
                   </a-space>
                 </div>
@@ -1328,8 +1359,13 @@
           </a-card>
         </div>
 
-        <!-- Step 7: 配图生成 -->
-        <div v-if="currentStep === 7" class="step-content">
+        <!--  Step 4: 配图生成 -->
+        <div v-if="currentStep === 4" class="step-content">
+          <div class="step-nav-bar">
+            <a-button type="text" size="small" @click="goBack">
+              ← 返回上一步
+            </a-button>
+          </div>
           <a-card title="生成配图">
             <div v-if="generatedImageUrl">
               <div style="text-align: center; margin-bottom: 24px">
@@ -1337,7 +1373,7 @@
                   <a-button type="primary" @click="downloadGeneratedImage">
                      下载图片
                   </a-button>
-                  <a-button @click="currentStep = 7">
+                  <a-button @click="goBack">
                     ← 返回文章
                   </a-button>
                 </a-space>
@@ -1363,7 +1399,7 @@
                 <a-button type="primary" size="large" :loading="imageGenerating" @click="handleGenerateImage">
                   🖼️ 生成配图
                 </a-button>
-                <a-button size="large" @click="currentStep = 7">
+                <a-button size="large" @click="goBack">
                   ← 返回文章
                 </a-button>
               </a-space>
@@ -1401,7 +1437,6 @@ import { Message, Modal } from '@arco-design/web-vue'
 import { useAppStore } from '../stores/app'
 import { marked } from 'marked'
 import {
-  IconSearch,
   IconExclamationCircleFill,
   IconCloseCircleFill,
   IconCheckCircleFill,
@@ -1422,6 +1457,7 @@ import {
   getWorkflowSessionStatus,
   evaluateCompleteness,
   analyzeDirectionsV2,
+  evaluateCustomDirection,
   supplementStep1,
   matchFrameworksV2,
   supplementStep2,
@@ -1447,6 +1483,7 @@ import {
   mcpSuggest as apiMcpSuggest,
   mcpMatchFiles as apiMcpMatchFiles,
   mcpSearch as apiMcpSearch,
+  recommendAngles as apiRecommendAngles,
 } from '../utils/api'
 
 const route = useRoute()
@@ -1470,7 +1507,16 @@ const {
   startStreamSlots, stopStream, updateSlot, removeSlot, addSlot,
   confirmAndFill, openEditPanel, closeEditPanel, saveWritingPlan,
   addMaterialToSlot, askFollowupQuestion, runPreCheck: runSlotPreCheck, adoptAlternative,
+  confirmSlot, isSlotConfirmed, slotConfirmed,
 } = useStep3Workbench()
+
+// 写作角度推荐
+const availableAngles = ref([])
+const selectedAngle = ref(null)
+const angleLoading = ref(false)
+
+// AI 补充建议 { slotKey: text }
+const slotSuggestions = ref({})
 
 // 话题推荐
 const topics = ref([])
@@ -1671,25 +1717,24 @@ const stepSummaries = computed(() => {
     summaries[3] = problemCount > 0 ? `${problemCount}个问题` : '通过'
   }
   
-  // Step 4: 结构
-  if (selectedStructure.value?.name) {
-    summaries[4] = selectedStructure.value.name
+  // Step 2: V4 三列工作台
+  if (confirmedSlots.value?.length) {
+    const confirmed = confirmedSlots.value.filter(s => slotConfirmed[s.slot_key]).length
+    const outlineCount = Object.values(slotOutlines).filter(v => v?.length).length
+    const parts = [`已确认 ${confirmed}/${confirmedSlots.value.length} 个槽位`]
+    if (outlineCount > 0) parts.push(`${outlineCount} 个提纲就绪`)
+    summaries[2] = parts.join('，')
   }
   
-  // Step 5: 提纲
-  if (outlineResult.value?.sections) {
-    summaries[5] = `${outlineResult.value.sections.length} 个章节`
-  }
-  
-  // Step 6: 文章
+  // Step 3: 文章
   if (articleResult.value?.paragraphs) {
     const wordCount = articleResult.value.paragraphs.reduce((sum, p) => sum + (p.word_count || 0), 0)
-    summaries[6] = wordCount > 0 ? `${wordCount} 字` : ''
+    summaries[3] = wordCount > 0 ? `${wordCount} 字` : ''
   }
   
-  // Step 7: 配图
+  // Step 4: 配图
   if (generatedImageUrl.value) {
-    summaries[7] = '已生成'
+    summaries[4] = '已生成'
   }
   
   return summaries
@@ -1737,39 +1782,29 @@ const stepDetails = computed(() => {
     }
   }
   
-  // Step 4: 结构
-  if (selectedStructure.value?.name) {
-    details[4] = `已选结构：「${selectedStructure.value.name}」`
-    if (selectedStructure.value.description) {
-      details[4] += `\n说明：${selectedStructure.value.description}`
+  // Step 2: V4 槽位
+  if (confirmedSlots.value?.length) {
+    const names = confirmedSlots.value.map(s => s.label).join('、')
+    const outlineSlots = Object.entries(slotOutlines).filter(([, v]) => v?.length).map(([k]) => confirmedSlots.value?.find(s => s.slot_key === k)?.label || k)
+    details[2] = `槽位：${names}`
+    if (outlineSlots.length > 0) {
+      details[2] += `\n提纲已就绪：${outlineSlots.join('、')}`
     }
   }
   
-  // Step 5: 提纲
-  if (outlineResult.value?.sections) {
-    const sections = outlineResult.value.sections
-    details[5] = `共 ${sections.length} 个章节`
-    sections.forEach((s, i) => {
-      details[5] += `\n  ${i + 1}. ${s.title || s.name || ''}`
-    })
-  }
-  
-  // Step 6: 文章
+  // Step 3: 文章
   if (articleResult.value) {
     const title = articleResult.value.title || ''
     const paragraphs = articleResult.value.paragraphs || []
     const wordCount = paragraphs.reduce((sum, p) => sum + (p.word_count || 0), 0)
-    details[6] = `标题：${title}`
-    details[6] += `\n段落数：${paragraphs.length} 个`
-    details[6] += `\n总字数：${wordCount} 字`
+    details[3] = `标题：${title}`
+    details[3] += `\n段落数：${paragraphs.length} 个`
+    details[3] += `\n总字数：${wordCount} 字`
   }
   
-  // Step 7: 配图
+  // Step 4: 配图
   if (generatedImageUrl.value) {
-    details[7] = '配图已生成'
-    if (selectedFramework.value?.name) {
-      details[7] += `\n框架：${selectedFramework.value.name}`
-    }
+    details[4] = '配图已生成'
   }
   
   return details
@@ -1777,6 +1812,29 @@ const stepDetails = computed(() => {
 
 // 步骤名称（V4 三列工作台：5 步）
 const stepNames = ['选题', '补充', '分析工作台', '文章', '配图']
+
+// 导航历史栈：记录用户实际访问过的步骤顺序
+const stepHistory = ref([])
+const lastVisitedStep = ref(-1)
+
+function pushHistory(step) {
+  const prev = lastVisitedStep.value
+  if (prev !== -1 && prev !== step) {
+    stepHistory.value.push(prev)
+  }
+  lastVisitedStep.value = step
+}
+
+function goBack() {
+  if (stepHistory.value.length === 0) return
+  const prev = stepHistory.value.pop()
+  lastVisitedStep.value = prev
+  currentStep.value = prev
+}
+
+watch(currentStep, (val) => {
+  pushHistory(val)
+}, { immediate: true })
 
 // 切换步骤折叠状态
 function toggleStepCollapse(stepIndex) {
@@ -2133,8 +2191,11 @@ const supplement2Form = reactive({
 // 补充2 衍生状态
 const supplement2Html = computed(() => {
   if (!supplement2Text.value) return ''
-  try { return marked.parse(supplement2Text.value, { breaks: true, async: false }) }
-  catch (e) { return supplement2Text.value }
+  const text = supplement2Text.value
+  // 如果内容没有换行，自动在句尾添加段落分隔，避免一行到底
+  const formatted = text.includes('\n') ? text : text.replace(/([。！？.!?])\s*/g, '$1\n\n')
+  try { return marked.parse(formatted, { breaks: true, async: false }) }
+  catch (e) { return text }
 })
 const supplementConfirmed = ref(false)
 const materialPool = ref([])
@@ -2495,17 +2556,124 @@ onUnmounted(() => {
   // 清理：防止异步操作在组件卸载后执行
 })
 
-// 监听步骤变化，进入步骤2时自动触发槽位流式推理
+// 监听步骤变化
 watch(currentStep, (newStep) => {
-  // V4.0: 进入三列分析工作台时自动启动流式推理
+  // V4.0: 进入步骤2 → 先加载写作角度推荐
   if (newStep === 2) {
-    phase.value = 'init'
-    const topic = selectedDirection.value?.name || mcpTopic.value || 'AI 写作'
-    const summary = mcpSummary.value || ''
-    console.log('🚀 开始调用 startStreamSlots:', { topic, summary, sessionId: sessionId.value })
-    startStreamSlots(topic, summary)
+    phase.value = 'selecting_angle'
+    availableAngles.value = []
+    selectedAngle.value = null
+    // 自动加载推荐角度
+    loadAngles()
   }
 })
+
+// 预检完成后自动生成 AI 补充建议
+watch(() => preCheckResults.value, (results) => {
+  if (!results || Object.keys(results).length === 0) return
+  for (const [slotKey, result] of Object.entries(results)) {
+    // 已有建议就跳过
+    if (slotSuggestions.value[slotKey]) continue
+    const files = result.matched_files?.length || 0
+    const count = result.count || 0
+    if (result.level === 'full') {
+      slotSuggestions.value[slotKey] = `素材充足（${count}条来自${files}个文件），可以直接展开写作`
+    } else if (result.level === 'partial') {
+      slotSuggestions.value[slotKey] = `素材偏少（仅${count}条），建议补充具体案例或数据后再生成提纲`
+    } else {
+      slotSuggestions.value[slotKey] = `暂无匹配素材，建议在补充素材区搜索相关文件后再生成提纲`
+    }
+  }
+}, { deep: true })
+
+// 加载推荐写作角度
+async function loadAngles() {
+  const topic = selectedDirection.value?.name || mcpTopic.value || 'AI 写作'
+  if (!topic) return
+  angleLoading.value = true
+  try {
+    // 构建素材摘要
+    const parts = [mcpSummary.value || '']
+    if (mcpFiles.value.length > 0) {
+      parts.push('\n## 已选素材文件')
+      mcpFiles.value.slice(0, 15).forEach((f, i) => {
+        const name = typeof f === 'string' ? f : f.name || ''
+        const content = (typeof f === 'string' ? '' : f.content || '').slice(0, 800)
+        if (name) parts.push(`\n${i + 1}. ${name}`)
+        if (content) parts.push(`\n${content}`)
+      })
+    }
+    if (materialPool.value.length > 0) {
+      parts.push('\n## AI 补充')
+      materialPool.value.forEach((item, i) => {
+        const c = (item.content || item.summary || '').slice(0, 800)
+        if (c) parts.push(`\n补充 ${i + 1}: ${c}`)
+      })
+    }
+    const materialSummary = parts.filter(p => p.trim()).join('\n')
+    
+    const res = await apiRecommendAngles({
+      sessionId: sessionId.value,
+      topic,
+      mcpSummary: mcpSummary.value,
+      materialSummary,
+    })
+    if (res.data?.code === 0 && res.data.data?.angles) {
+      availableAngles.value = res.data.data.angles
+      console.log('📐 写作角度推荐已加载:', availableAngles.value.length, '个角度')
+    } else {
+      // 降级：显示默认角度
+      availableAngles.value = [
+        { name: '案例研究型', description: '深入拆解典型实践案例，提炼可复用经验', coverage: 0.5, gaps: [] },
+        { name: '工具盘点型', description: '系统梳理工具和方法，提供实用清单', coverage: 0.5, gaps: [] },
+        { name: '方法论型', description: '提炼系统化的方法框架，给出可操作步骤', coverage: 0.5, gaps: [] },
+      ]
+      console.warn('📐 角度推荐失败，使用默认角度')
+    }
+  } catch (e) {
+    console.warn('📐 加载角度失败:', e)
+    availableAngles.value = [
+      { name: '案例研究型', description: '深入拆解典型实践案例，提炼可复用经验', coverage: 0.5, gaps: [] },
+      { name: '工具盘点型', description: '系统梳理工具和方法，提供实用清单', coverage: 0.5, gaps: [] },
+      { name: '方法论型', description: '提炼系统化的方法框架，给出可操作步骤', coverage: 0.5, gaps: [] },
+    ]
+  } finally {
+    angleLoading.value = false
+  }
+}
+
+// 选择写作角度，启动流式槽位推理
+function selectAngle(angle) {
+  if (!angle || angleLoading.value) return
+  selectedAngle.value = angle
+  const topic = selectedDirection.value?.name || mcpTopic.value || 'AI 写作'
+  // 在 topic 后附加角度信息
+  const angleTopic = `${topic}（写作角度：${angle.name} — ${angle.description}）`
+  
+  // 构建素材池摘要
+  const parts = [mcpSummary.value || '']
+  if (mcpFiles.value.length > 0) {
+    parts.push('\n\n## 已选素材文件')
+    mcpFiles.value.slice(0, 30).forEach((f, i) => {
+      const name = typeof f === 'string' ? f : f.name || ''
+      const content = (typeof f === 'string' ? '' : f.content || '').slice(0, 800)
+      if (name) parts.push(`\n### ${i + 1}. ${name}`)
+      if (content) parts.push(`\n${content}`)
+    })
+  }
+  if (materialPool.value.length > 0) {
+    parts.push('\n\n## AI 补充素材')
+    materialPool.value.forEach((item, i) => {
+      const label = item.title || item.name || `补充 ${i + 1}`
+      const content = (item.content || item.summary || '').slice(0, 800)
+      parts.push(`\n### ${label}`)
+      if (content) parts.push(`\n${content}`)
+    })
+  }
+  const summary = parts.filter(p => p.trim()).join('\n')
+  console.log('🚀 选择角度后启动 startStreamSlots:', { angleTopic, summary: summary.slice(0, 200) + '...' })
+  startStreamSlots(angleTopic, summary)
+}
 
 function convertToTreeData(items) {
   return (items || []).map(item => ({
@@ -2520,6 +2688,29 @@ function getCompletenessColor(score) {
   if (score >= 80) return '#00b42a'
   if (score >= 60) return '#f7ba1e'
   return '#f53f3f'
+}
+
+// 处理自定义角度评估（由 ThreeColumnWorkbench 触发）
+async function handleEvaluateAngle(directionText, callback) {
+  if (!directionText.trim()) return
+  try {
+    const res = await evaluateCustomDirection(sessionId.value, directionText, mcpSummary.value)
+    const result = res.data?.code === 0 ? res.data.data : null
+    callback(result)
+  } catch (e) {
+    console.warn('评估自定义角度失败:', e)
+    callback(null)
+  }
+}
+
+// 使用自定义角度
+function handleUseCustomAngle(angle) {
+  selectAngle(angle)
+}
+
+// 更新槽位提纲
+function handleUpdateOutline(slotKey, outlineList) {
+  slotOutlines[slotKey] = outlineList
 }
 
 function getScoreColor(score) {
@@ -2770,7 +2961,7 @@ async function goToCompletenessEval() {
   }
 }
 
-// 内部加载方向（与 goToDirections 相同逻辑，但不从外部入口调用）
+// 内部加载方向（自动重试3次）
 async function loadDirectionsInternal() {
   if (!sessionId.value) {
     loading.value = false
@@ -2781,29 +2972,46 @@ async function loadDirectionsInternal() {
   directions.value = []
   directionsLoading.value = true
   
-  try {
-    const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value)
-    if (res.data.code === 0) {
-      const data = res.data.data
-      if (data.directions && data.directions.length > 0) {
-        directions.value = data.directions
-        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
-      } else if (Array.isArray(data) && data.length > 0) {
-        directions.value = data
-        Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+  const MAX_RETRIES = 3
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value, mcpFiles.value)
+      if (res.data.code === 0) {
+        const data = res.data.data
+        if (data.directions && data.directions.length > 0) {
+          directions.value = data.directions
+          if (attempt > 1) Message.success(`方向推荐完成（第${attempt}次尝试成功）`)
+          else Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+          break // 成功则跳出重试
+        } else if (Array.isArray(data) && data.length > 0) {
+          directions.value = data
+          Message.success(`方向推荐完成，共 ${directions.value.length} 个方向`)
+          break
+        } else if (attempt < MAX_RETRIES) {
+          console.warn(`方向推荐结果为空，第${attempt}次重试...`)
+          await new Promise(r => setTimeout(r, attempt * 1000))
+        } else {
+          Message.warning('暂无推荐方向，请补充更多信息后重试')
+        }
+      } else if (attempt < MAX_RETRIES) {
+        console.warn(`方向推荐失败(${res.data.msg})，第${attempt}次重试...`)
+        await new Promise(r => setTimeout(r, attempt * 1000))
       } else {
-        Message.warning('暂无推荐方向，请补充更多信息后重试')
+        Message.error('方向推荐失败: ' + (res.data.msg || '未知错误'))
       }
-    } else {
-      Message.error('方向推荐失败: ' + (res.data.msg || '未知错误'))
+    } catch (e) {
+      if (attempt < MAX_RETRIES) {
+        console.warn(`方向推荐异常(${e.message})，第${attempt}次重试...`)
+        await new Promise(r => setTimeout(r, attempt * 1000))
+      } else {
+        console.error('方向推荐异常:', e)
+        Message.error('方向推荐失败: ' + e.message)
+      }
     }
-  } catch (e) {
-    console.error('方向推荐异常:', e)
-    Message.error('方向推荐失败: ' + e.message)
-  } finally {
-    loading.value = false
-    directionsLoading.value = false
   }
+  
+  loading.value = false
+  directionsLoading.value = false
 }
 
 // 重新评估完整度（补充后调用）
@@ -2886,7 +3094,7 @@ async function refreshDirection() {
   const timestamp = new Date().getTime()
   
   try {
-    const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value, { timestamp })
+    const res = await analyzeDirectionsV2(sessionId.value, mcpSummary.value, mcpFiles.value)
     if (res.data.code === 0) {
       directions.value = res.data.data || []
       if (directions.value.length === 0) {
@@ -3682,24 +3890,73 @@ async function submitSupplement2() {
   await loadFrameworks()
 }
 
-// 跳过补充，直接进入框架选择
+// 跳过补充，直接进入
 async function skipSupplement2() {
   pendingSupplementData.value = {}
   supplementLoading.value = false
   supplementConfirmed.value = true
   Message.info('已跳过补充，正在启动分析工作台...')
+  
+  // 将已有素材保存到后端 session
+  await saveMaterialsToSession()
+  
   currentStep.value = 2
 }
 
 // 确认补充完毕，进入下一步
-function confirmSupplementAndProceed() {
-  if (!supplement2Text.value) {
-    Message.warning('请先补充内容')
-    return
-  }
+async function confirmSupplementAndProceed() {
   supplementConfirmed.value = true
   Message.success('补充已确认，正在启动分析工作台...')
+  
+  // 将素材保存到后端 session，供 Step 2 槽位填充使用
+  await saveMaterialsToSession()
+  
   currentStep.value = 2
+}
+
+// 将 Step 1 的素材保存到后端 session
+async function saveMaterialsToSession() {
+  if (!sessionId.value) return
+  try {
+    const files = (mcpFiles.value || []).slice(0, 20).map(f => ({
+      name: typeof f === 'string' ? f : f.name || '',
+      content: typeof f === 'string' ? '' : (f.content || '').slice(0, 2000),
+    }))
+    const materials = (materialPool.value || []).slice(0, 10).map(m => ({
+      type: m.type || 'inference',
+      content: (m.content || m.summary || '').slice(0, 2000),
+      title: m.title || m.name || '',
+    }))
+    
+    await supplementStep2(sessionId.value, '', {
+      text: supplement2Text.value || '',
+      files,
+      materials,
+      direction: selectedDirection.value?.name || mcpTopic.value || '',
+    })
+    console.log('📦 素材已保存到 session:', { files: files.length, materials: materials.length })
+  } catch (e) {
+    console.warn('保存素材到 session 失败:', e)
+  }
+}
+
+// 处理素材删除（从 StepSupplement 子组件传来）
+function handleRemoveMaterial({ type, idx }) {
+  if (type === 'kb' && mcpFiles.value.length > idx) {
+    mcpFiles.value.splice(idx, 1)
+  } else if (type === 'inference' || type === 'ai_pulse') {
+    let counter = 0
+    for (let i = 0; i < materialPool.value.length; i++) {
+      const t = materialPool.value[i].type === 'kb_file' ? 'kb' : materialPool.value[i].type
+      if (t === type) {
+        if (counter === idx) {
+          materialPool.value.splice(i, 1)
+          break
+        }
+        counter++
+      }
+    }
+  }
 }
 
 // 打开 Step 2 补充对话框
@@ -4245,6 +4502,52 @@ function acceptSectionAiSuggestionByKey(key) {
 
 function handleSectionAiUpload(fileList) {
   sectionAiUploadFiles.value = fileList || []
+}
+
+// V4 文章生成：直接使用三列工作台的槽位数据
+async function generateArticleV4() {
+  if (confirmedSlots.value.length === 0) {
+    Message.warning('请先确认槽位并填充内容')
+    return
+  }
+  loading.value = true
+  currentStep.value = 3
+  try {
+    // 从 V4 槽位数据构建 outline_sections
+    const sections = confirmedSlots.value.map(slot => {
+      const sk = slot.slot_key
+      const outlines = slotOutlines[sk] || []
+      const materials = slotMaterials[sk] || []
+      return {
+        key: sk,
+        title: slot.label,
+        label: slot.label,
+        description: slot.description || '',
+        key_points: outlines.map(o => o.point || o.text || o.content || '').filter(Boolean),
+        materials: { has: materials.map(m => m.text || m.content || '').slice(0, 10) },
+      }
+    })
+
+    const res = await generateFullArticle(sessionId.value, sections, {
+      target_word_count: targetWordCount.value,
+    })
+    if (res.data.code === 0 && res.data.data) {
+      let articleData = res.data.data
+      if (typeof articleData === 'string') {
+        try { articleData = JSON.parse(articleData) } catch {
+          articleData = { title: '完整文章', paragraphs: [{ title: '正文', content: articleData, word_count: 0 }] }
+        }
+      }
+      articleResult.value = articleData
+      Message.success('文章生成完成')
+    } else {
+      Message.error('生成失败: ' + (res.data.msg || '未知错误'))
+    }
+  } catch (e) {
+    Message.error('生成失败: ' + (e.message || '未知错误'))
+  } finally {
+    loading.value = false
+  }
 }
 
 function goToGenerateArticle() {
@@ -5551,7 +5854,7 @@ function goToGenerateImage() {
     return
   }
   generatedImageUrl.value = ''
-  currentStep.value = 7
+  currentStep.value = 4
 }
 
 async function handleGenerateImage() {
@@ -5568,18 +5871,38 @@ async function handleGenerateImage() {
       .map(p => `## ${p.title}\n\n${p.content}`)
       .join('\n\n')
     
-    // 推导框架 key：优先从 selectedFramework，其次从文章元数据
-    let frameworkKey = deriveFrameworkKey(selectedFramework.value)
+    // 推导框架 key：V4 优先从槽位结构，其次从 selectedFramework，再次文章元数据
+    let frameworkKey = null
     
-    // 如果推导失败，尝试从文章结果中获取
-    if (!frameworkKey && articleResult.value.framework_key) {
+    // V4: 从槽位结构推导框架
+    if (confirmedSlots.value?.length) {
+      const slotLabels = confirmedSlots.value.map(s => s.label.toLowerCase())
+      const slotText = slotLabels.join(' ')
+      if (slotText.includes('优势') || slotText.includes('劣势') || slotText.includes('机会') || slotText.includes('威胁') || slotText.includes('swot')) frameworkKey = 'swot'
+      else if (slotText.includes('时间') || slotText.includes('阶段') || slotText.includes('流程') || slotText.includes('步骤')) frameworkKey = 'timeline'
+      else if (slotText.includes('对比') || slotText.includes('vs') || slotText.includes('比较')) frameworkKey = 'comparison'
+      else if (slotText.includes('原因') || slotText.includes('影响') || slotText.includes('因果')) frameworkKey = 'causal'
+      else if (slotText.includes('方案') || slotText.includes('解决') || slotText.includes('建议')) frameworkKey = 'solution'
+      else if (slotText.includes('背景') || slotText.includes('现状') || slotText.includes('困境')) frameworkKey = 'analysis'
+      else if (confirmedSlots.value.length >= 5) frameworkKey = 'analysis'
+      else if (confirmedSlots.value.length === 4) frameworkKey = 'swot'
+      else if (confirmedSlots.value.length === 3) frameworkKey = 'sequence'
+      else frameworkKey = 'analysis'
+    }
+    
+    // 其次从旧 selectedFramework 推导
+    if (!frameworkKey) {
+      frameworkKey = deriveFrameworkKey(selectedFramework.value)
+    }
+    
+    // 再次尝试从文章结果中获取
+    if (!frameworkKey && articleResult.value?.framework_key) {
       frameworkKey = articleResult.value.framework_key
     }
     
-    // 最终回退到 swot（仅作保底，实际应该能推导出来）
+    // 最终保底
     if (!frameworkKey) {
-      console.warn('[图片生成] 无法推导框架 key，使用默认 swot')
-      frameworkKey = 'swot'
+      frameworkKey = 'analysis'
     }
     
     console.log(`[图片生成] 使用框架: ${frameworkKey}`)
@@ -5723,6 +6046,12 @@ function downloadGeneratedImage() {
   max-width: 100%;
 }
 
+.step-nav-bar {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
 .step-content :deep(.arco-card) {
   width: 100%;
   max-width: 100%;
@@ -5826,6 +6155,15 @@ function downloadGeneratedImage() {
   display: inline-block;
 }
 
+/* 顶部自定义方向卡片 */
+.custom-direction-top-card {
+  background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%);
+  border: 1px solid #b3d8ff;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+
 /* 选题列表样式 */
 .topic-list {
   display: flex;
@@ -5887,6 +6225,27 @@ function downloadGeneratedImage() {
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+/* 自定义方向输入区 */
+.custom-direction-section {
+  margin-top: 20px;
+  padding: 16px;
+  background: #fafafa;
+  border-radius: 8px;
+  border: 1px dashed #d9d9d9;
+}
+.custom-direction-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.custom-dir-result {
+  margin-top: 14px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #e8e8e8;
 }
 
 .topic-name {

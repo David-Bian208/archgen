@@ -68,7 +68,7 @@
           <span class="persona-value">{{ parsedPersona.style || '-' }}</span>
         </div>
       </div>
-      <div v-else class="persona-content" v-html="renderedPersona"></div>
+      <div v-else class="persona-content" v-text="renderedPersona"></div>
     </a-card>
 
     <!-- 方向建议列表 -->
@@ -190,7 +190,7 @@ const parsedPersona = ref(null)
 
 const renderedPersona = computed(() => {
   if (!personaInfo.value) return ''
-  return marked.parse(personaInfo.value)
+  return marked.parse(personaInfo.value, { async: false })
 })
 
 const getCoverageColor = (coverage) => {

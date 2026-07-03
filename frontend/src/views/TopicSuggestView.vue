@@ -83,6 +83,52 @@
               <span class="needed-label">需要补充：</span>
               <span>{{ t.needed }}</span>
             </div>
+            
+            <!-- 每个方向的 3 分制评估 -->
+            <div v-if="t.direction_score || t.deficiency_score || t.overall_score" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e6eb">
+              <a-row :gutter="12">
+                <a-col :span="8">
+                  <div style="text-align: center; padding: 8px; background: #f8f9ff; border-radius: 6px">
+                    <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">方向适合度</div>
+                    <div style="font-size: 20px; font-weight: 600" :style="{ color: t.direction_score >= 80 ? '#00b42a' : t.direction_score >= 60 ? '#f7ba1e' : '#f53f3f' }">
+                      {{ t.direction_score || 0 }}<span style="font-size: 12px; font-weight: 400">分</span>
+                    </div>
+                    <div style="font-size: 11px; color: #86909c; margin-top: 4px; line-height: 1.4; text-align: left">
+                      {{ t.direction_analysis || '暂无分析' }}
+                    </div>
+                  </div>
+                </a-col>
+                <a-col :span="8">
+                  <div style="text-align: center; padding: 8px; background: #f8f9ff; border-radius: 6px">
+                    <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">内容完整度</div>
+                    <div style="font-size: 20px; font-weight: 600" :style="{ color: t.deficiency_score >= 80 ? '#00b42a' : t.deficiency_score >= 50 ? '#f7ba1e' : '#f53f3f' }">
+                      {{ t.deficiency_score || 0 }}<span style="font-size: 12px; font-weight: 400">分</span>
+                    </div>
+                    <div style="font-size: 11px; color: #86909c; margin-top: 4px; text-align: left">
+                      <div v-for="(detail, di) in (t.deficiency_details || []).slice(0, 2)" :key="di" style="margin-bottom: 2px; line-height: 1.3">
+                        <a-tag v-if="detail.severity === 'high'" size="mini" color="red">高</a-tag>
+                        <a-tag v-else-if="detail.severity === 'medium'" size="mini" color="orange">中</a-tag>
+                        <a-tag v-else size="mini" color="arcoblue">低</a-tag>
+                        <span style="font-size: 11px">{{ detail.item }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </a-col>
+                <a-col :span="8">
+                  <div style="text-align: center; padding: 8px; background: #f8f9ff; border-radius: 6px">
+                    <div style="font-size: 12px; color: #86909c; margin-bottom: 4px">综合评分</div>
+                    <div style="font-size: 20px; font-weight: 600" :style="{ color: t.overall_score >= 80 ? '#00b42a' : t.overall_score >= 60 ? '#f7ba1e' : '#f53f3f' }">
+                      {{ t.overall_score || 0 }}<span style="font-size: 12px; font-weight: 400">分</span>
+                    </div>
+                    <div style="margin-top: 4px">
+                      <a-tag v-if="(t.overall_score || 0) >= 80" color="green" size="mini">可直接生成</a-tag>
+                      <a-tag v-else-if="(t.overall_score || 0) >= 60" color="orange" size="mini">建议补充</a-tag>
+                      <a-tag v-else color="red" size="mini">素材不足</a-tag>
+                    </div>
+                  </div>
+                </a-col>
+              </a-row>
+            </div>
           </div>
         </div>
         <a-empty v-else description="暂无推荐方向" />
@@ -107,7 +153,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { IconFile, IconBulb, IconArrowRight } from '@arco-design/web-vue/es/icon'
 import { useAppStore } from '../stores/app'
-import { mcpSuggest } from '../utils/api'
+import { mcpSuggest, evaluateCompleteness, createWorkflowSession } from '../utils/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -120,6 +166,9 @@ const suggestionSummary = ref('')
 const sourceFiles = ref([])
 const scannedFolders = ref([])
 const fileCount = ref(0)
+const completenessResult = ref(null)
+const evalLoading = ref(false)
+const sessionId = ref('')
 
 onMounted(async () => {
   loading.value = true
@@ -152,6 +201,23 @@ onMounted(async () => {
       sourceFiles.value = res.data.data.source_files || []
       scannedFolders.value = folders
       fileCount.value = res.data.data.file_count || 0
+
+      // 自动跑完整度评估
+      try {
+        const sessionRes = await createWorkflowSession()
+        sessionId.value = sessionRes.data.data.session_id
+        const evalRes = await evaluateCompleteness(sessionId.value, suggestionSummary.value)
+        if (evalRes.data.code === 0) {
+          const rawData = evalRes.data.data
+          let completeness = rawData.completeness || 0
+          if (completeness > 0 && completeness <= 1) {
+            completeness = Math.round(completeness * 100)
+          }
+          completenessResult.value = { ...rawData, completeness }
+        }
+      } catch (e) {
+        console.warn('自动评估失败:', e)
+      }
     } else {
       Message.error(res.data.msg || '分析失败')
       router.push('/mcp-search')
@@ -181,12 +247,15 @@ const handleNext = async () => {
   }
 
   Message.success(`已选择「${topic.name}」，进入多段式工作流...`)
-  // 跳转到新的多段式工作流页面，传递 MCP 摘要
+  // 跳转到新的多段式工作流页面，传递 MCP 摘要和 sessionId
   const params = new URLSearchParams({
     summary: suggestionSummary.value,
     files: JSON.stringify(sourceFiles.value),
     topic: topic.name,
   })
+  if (sessionId.value) {
+    params.set('sessionId', sessionId.value)
+  }
   router.push(`/workflow?${params.toString()}`)
 }
 

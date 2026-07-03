@@ -59,6 +59,114 @@ class LocalFolderReader:
 
         return False
 
+    def _keyword_relevance(self, file_info: Dict, keyword: str) -> float:
+        """计算文件与关键词的相关度分数（0-1）
+        
+        拆词匹配：中文按常见分隔符拆词，英文按空格拆词
+        文件名匹配权重 > 内容匹配权重
+        """
+        if not keyword:
+            return 1.0
+        
+        # 拆词：中文按词组切分（2-4字），英文按空格
+        tokens = []
+        # 中文词组：2-4 字窗口
+        kw_clean = re.sub(r'[^\w\u4e00-\u9fff]', ' ', keyword)
+        for part in kw_clean.split():
+            if re.search(r'[\u4e00-\u9fff]', part):
+                # 中文：按 2 字窗口切分
+                for i in range(len(part) - 1):
+                    tokens.append(part[i:i+2])
+                tokens.append(part)  # 完整词也加入
+            else:
+                tokens.append(part.lower())
+        tokens = list(set(tokens))  # 去重
+        if not tokens:
+            tokens = [keyword.lower()]
+        
+        fname = file_info.get("name", "").lower()
+        content = file_info.get("_full_content", "").lower()
+        path = file_info.get("relative_path", "").lower()
+        tags = [str(t).lower() for t in file_info.get("tags", [])]
+        
+        # 计算命中率
+        name_hits = sum(1 for t in tokens if t in fname)
+        content_hits = sum(1 for t in tokens if t in content)
+        path_hits = sum(1 for t in tokens if t in path)
+        tag_hits = sum(1 for t in tokens if any(t in tag for tag in tags))
+        
+        total_tokens = len(tokens)
+        # 加权：文件名命中权重 3，内容命中权重 1
+        score = (name_hits * 3 + content_hits + path_hits * 2 + tag_hits * 2) / (total_tokens * 7)
+        return min(score, 1.0)
+
+    def list_all_file_names(self, limit: int = 50) -> List[str]:
+        """返回所有文件的名称清单（用于降级时给 LLM 判断相关性）"""
+        names = []
+        for md_file in self.folder_path.rglob("*.md"):
+            if md_file.is_file():
+                names.append(md_file.name)
+                if limit and len(names) >= limit:
+                    break
+        return names
+
+    def list_file_titles(self, limit: Optional[int] = None) -> List[Dict]:
+        """
+        轻量扫描：只获取文件名 + Front Matter 元数据（title, tags, category）
+        不读取全文，速度比 list_files 快数倍
+        用于全量标题列表，供 LLM 筛选
+        
+        Args:
+            limit: 最多返回文件数（默认不限制）
+            
+        Returns:
+            [{name, path, relative_path, title, tags, category, mtime}]
+        """
+        results = []
+        pattern = "**/*"
+
+        for file_path in self.folder_path.glob(pattern):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in self.ALLOWED_EXTENSIONS:
+                continue
+
+            # 只读 Front Matter，不读全文
+            try:
+                content_sample = file_path.read_text(encoding="utf-8", errors="ignore")[:2000]
+            except Exception:
+                continue
+
+            meta = {}
+            if frontmatter:
+                try:
+                    import io
+                    post = frontmatter.loads(content_sample)
+                    meta = dict(post.metadata)
+                except Exception:
+                    pass
+            else:
+                meta = self._manual_parse_frontmatter(content_sample)
+
+            stat = file_path.stat()
+            rel_path = str(file_path.relative_to(self.folder_path))
+
+            results.append({
+                "name": file_path.name,
+                "path": str(file_path),
+                "relative_path": rel_path,
+                "title": meta.get("title", file_path.stem),
+                "tags": meta.get("tags", []),
+                "category": meta.get("category", ""),
+                "mtime": stat.st_mtime,
+            })
+
+            if limit and len(results) >= limit:
+                break
+
+        logger.info(f"标题扫描: 在 {self.folder_path} 找到 {len(results)} 个文件")
+        return results
+
     def list_files_fast(self, limit: Optional[int] = None) -> List[Dict]:
         """
         快速扫描：只获取文件名、路径、修改时间、大小
@@ -101,16 +209,16 @@ class LocalFolderReader:
         limit: int = 20,
     ) -> List[Dict]:
         """
-        MCP 逻辑：扫描文件夹 → 按文件名/Front Matter 过滤
+        MCP 检索：扫描文件夹 → 全文拆词匹配 → 按相关度排序
 
         Args:
-            keyword: 关键词（匹配文件名、路径、Front Matter 字段）
+            keyword: 关键词（拆词后匹配文件名、路径、全文内容）
             tag: 标签（匹配 Front Matter 中的 tags 字段）
             recursive: 是否递归扫描子目录
             limit: 最多返回文件数
 
         Returns:
-            文件列表，包含元数据和预览
+            文件列表，包含元数据、预览和 relevance 分数
         """
         pattern = "**/*" if recursive else "*"
         results = []
@@ -125,9 +233,14 @@ class LocalFolderReader:
             if not file_info:
                 continue
 
-            # 过滤：关键词匹配
-            if keyword and not self._matches_keyword(file_info, keyword):
-                continue
+            # 计算相关度分数
+            if keyword:
+                relevance = self._keyword_relevance(file_info, keyword)
+                if relevance <= 0:
+                    continue  # 无匹配的跳过
+                file_info["relevance"] = relevance
+            else:
+                file_info["relevance"] = 0
 
             # 过滤：标签匹配
             if tag:
@@ -137,16 +250,17 @@ class LocalFolderReader:
 
             results.append(file_info)
 
-            if len(results) >= limit:
-                break
+        # 按相关度降序排列
+        results.sort(key=lambda x: x.get("relevance", 0), reverse=True)
 
-        results.sort(key=lambda x: x.get("name", ""))
+        if limit and len(results) > limit:
+            results = results[:limit]
 
         # 清理内部字段
         for r in results:
             r.pop("_full_content", None)
 
-        logger.info(f"MCP 扫描: 在 {self.folder_path} 找到 {len(results)} 个匹配文件 (关键词: {keyword})")
+        logger.info(f"MCP 检索: 在 {self.folder_path} 找到 {len(results)} 个匹配文件 (关键词: {keyword}, 最高相关度: {results[0].get('relevance', 0) if results else 0:.2f})")
         return results
 
     def _parse_file_meta(self, file_path: Path) -> Optional[Dict]:

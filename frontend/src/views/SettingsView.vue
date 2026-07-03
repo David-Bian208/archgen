@@ -389,11 +389,17 @@ onMounted(async () => {
   loadSettings()
   loadKbFiles()
   
-  // 恢复身份定位路径
+  // 恢复身份定位路径，并同步到后端（防止后端重启后丢失）
   const cachedPersonaPath = localStorage.getItem('archgen_persona_path')
   if (cachedPersonaPath) {
     personaPath.value = cachedPersonaPath
     personaSaved.value = true
+    // 自动同步到后端（静默执行，不弹提示）
+    try {
+      setPersonaPath(cachedPersonaPath)
+    } catch (e) {
+      console.warn('自动同步身份路径到后端失败:', e)
+    }
   }
 
   // 每次打开设置页面，从后端重新获取最新解析结果
@@ -448,6 +454,17 @@ const addFolder = () => {
   }
 
   const path = newFolderPath.value.trim()
+  // 路径格式校验：只接受绝对路径或 ~/ 开头的路径
+  if (!path.startsWith('/') && !path.startsWith('~/') && !path.match(/^[A-Z]:\\/)) {
+    Message.warning('请输入有效的绝对路径（如 /home/user/docs 或 ~/Documents）')
+    return
+  }
+  // 基本安全检查：禁止根目录和系统目录
+  const blockedPaths = ['/', '/etc', '/proc', '/sys', '/dev', '/root']
+  if (blockedPaths.includes(path) || path.startsWith('/etc/') || path.startsWith('/proc/') || path.startsWith('/sys/')) {
+    Message.warning('不允许使用系统目录，请选择用户目录下的文件夹')
+    return
+  }
   const exists = settings.value.knowledgeFolders.some(f => f.path === path)
   if (exists) {
     Message.warning('该文件夹已添加')

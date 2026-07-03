@@ -238,3 +238,101 @@ class SourceTagProcessor:
 def get_source_tag_processor() -> SourceTagProcessor:
     """获取 source_tag 处理器实例"""
     return SourceTagProcessor()
+
+
+# ============================================================
+# 双栏 v0.1 新增：SourceItem + _enrich_sources
+# ============================================================
+
+@dataclass
+class SourceItem:
+    """结构化来源项"""
+    type: str                       # knowledge_base / user_input / ai_search / ai_inferred
+    name: str                       # 文件名 / 描述 / 来源名称
+    confidence: float = 0.5         # 置信度 0.0~1.0
+    tag: str = ""                   # 展示标签（含图标），如 "📄 知识库·报告-2025.pdf"
+
+    def __post_init__(self):
+        if not self.tag:
+            self.tag = self._default_tag()
+
+    def _default_tag(self) -> str:
+        icon_map = {
+            "knowledge_base": "📄",
+            "user_input": "✏️",
+            "ai_search": "🌐",
+            "ai_inferred": "🤖",
+        }
+        icon = icon_map.get(self.type, "📄")
+        label_map = {
+            "knowledge_base": f"知识库·{self.name}",
+            "user_input": "用户确认",
+            "ai_search": f"AI搜索",
+            "ai_inferred": "AI推断",
+        }
+        label = label_map.get(self.type, self.name)
+        return f"{icon} {label}"
+
+
+# 来源类型 → 置信度映射
+SOURCE_CONFIDENCE_MAP = {
+    "knowledge_base": 1.0,
+    "user_input": 1.0,
+    "ai_search": 0.5,
+    "ai_inferred": 0.3,
+}
+
+
+def _normalize_source_type(raw: str) -> str:
+    """把 LLM 输出的各种来源字符串归一化为 type"""
+    r = raw.lower().strip()
+    if any(k in r for k in ["知识库", "local:", "file", "文档", "报告", "pdf"]):
+        return "knowledge_base"
+    if any(k in r for k in ["用户", "user_input", "手动", "补充"]):
+        return "user_input"
+    if any(k in r for k in ["ai_pulse", "搜索", "网络", "web", "ai_search"]):
+        return "ai_search"
+    if any(k in r for k in ["AI 推断", "ai_inferred", "推断", "推理"]):
+        return "ai_inferred"
+    return "ai_inferred"  # 默认
+
+
+def _enrich_sources(raw_sources: list) -> list:
+    """
+    slot_fill 后处理：把 string[] 转成 SourceItem[]
+
+    Args:
+        raw_sources: LLM 返回的原始 sources 数组（string[]）
+
+    Returns:
+        list[dict]: 结构化 sources（带 type/name/confidence/tag）
+    """
+    if not raw_sources:
+        return []
+
+    seen_types = set()
+    results = []
+
+    for s in raw_sources:
+        if not s or not isinstance(s, str):
+            continue
+        s = s.strip()
+        if not s:
+            continue
+
+        stype = _normalize_source_type(s)
+        # 同类型去重（只保留第一个）
+        if stype in seen_types:
+            continue
+        seen_types.add(stype)
+
+        confidence = SOURCE_CONFIDENCE_MAP.get(stype, 0.3)
+        item = SourceItem(type=stype, name=s, confidence=confidence)
+        results.append({
+            "type": item.type,
+            "name": item.name,
+            "confidence": item.confidence,
+            "tag": item.tag,
+        })
+
+    return results

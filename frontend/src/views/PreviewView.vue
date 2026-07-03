@@ -27,6 +27,7 @@
     </a-space>
 
     <a-card class="preview-card">
+      <!-- LLM 生成的 HTML 信息图预览，保持 v-html -->
       <div class="preview-container" v-html="appStore.previewHtml"></div>
     </a-card>
   </div>
@@ -44,12 +45,12 @@ const router = useRouter()
 
 const handleGenerate = async () => {
   try {
-    const response = await generateDiagram(
-      appStore.selectedFramework.key,
-      appStore.inputText,
-      appStore.style,
-      appStore.size
-    )
+    const response = await generateDiagram({
+      frameworkKey: appStore.selectedFramework.key,
+      text: appStore.inputText,
+      style: appStore.style,
+      size: appStore.size,
+    })
     const url = URL.createObjectURL(response.data)
     const a = document.createElement('a')
     a.href = url

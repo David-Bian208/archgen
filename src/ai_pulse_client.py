@@ -15,11 +15,15 @@ API 端点（v1.6 公开 API）：
 """
 
 import logging
+import os
 import httpx
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+# AI-Pulse 主机地址（可通过环境变量覆盖）
+_AI_PULSE_HOST = os.environ.get("AI_PULSE_HOST", "8.130.148.166")
 
 
 class AIPulseClient:
@@ -67,6 +71,20 @@ class AIPulseClient:
                 items = data.get("items", [])
                 if not items and data.get("code") == 0:
                     items = data.get("data", {}).get("items", [])
+                
+                # 降级策略：关键词搜索 0 结果时，去掉 q 参数重试获取热门内容
+                if not items and q:
+                    logger.info(f"关键词搜索 0 结果，降级为热门列表（去掉 q 参数）")
+                    fallback_params = {
+                        "time_filter": "week",
+                        "take": take,
+                    }
+                    response2 = await client.get(url, params=fallback_params)
+                    response2.raise_for_status()
+                    data2 = response2.json()
+                    items = data2.get("items", [])
+                    if not items and data2.get("code") == 0:
+                        items = data2.get("data", {}).get("items", [])
                 
                 logger.info(f"成功获取 {len(items)} 条案例")
                 return [
@@ -201,6 +219,6 @@ def get_ai_pulse_client(config: Optional[Dict] = None) -> AIPulseClient:
     """
     if config is None:
         config = {}
-    base_url = config.get("base_url", "http://8.130.148.166:8887")
+    base_url = config.get("base_url", f"http://{_AI_PULSE_HOST}:8887")
     timeout = config.get("timeout", 10)
     return AIPulseClient(base_url=base_url, timeout=timeout)

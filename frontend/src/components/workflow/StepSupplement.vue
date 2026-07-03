@@ -21,10 +21,17 @@
       </div>
 
       <a-card :bordered="true" style="margin-bottom: 20px; background: #fafbfc">
-        <!-- MCP 摘要 -->
+        <!-- MCP 摘要（可折叠） -->
         <div v-if="props.mcpSummary" style="margin-bottom: 16px">
-          <a-typography-text type="secondary" style="font-size: 12px">MCP 素材摘要</a-typography-text>
-          <div class="mcp-summary-box">
+          <a-space style="margin-bottom: 4px">
+            <a-typography-text type="secondary" style="font-size: 12px">MCP 素材摘要</a-typography-text>
+            <a-tag v-if="summaryExpanded" size="mini" color="arcoblue" @click="summaryExpanded = !summaryExpanded" style="cursor: pointer">收起</a-tag>
+            <a-tag v-else size="mini" @click="summaryExpanded = !summaryExpanded" style="cursor: pointer">展开</a-tag>
+          </a-space>
+          <div
+            class="mcp-summary-box"
+            :class="{ 'summary-collapsed': !summaryExpanded }"
+          >
             {{ props.mcpSummary }}
           </div>
         </div>
@@ -180,7 +187,7 @@
             type="primary"
             size="large"
             status="success"
-            :disabled="!props.supplement2Text"
+            :disabled="totalItemCount === 0"
             @click="props.confirmSupplementAndProceed"
           >
             ✅ 确认补充完毕，进入槽位工作台
@@ -192,8 +199,8 @@
             ⏭ 跳过，直接进入
           </a-button>
         </a-space>
-        <div v-if="!props.supplement2Text" style="margin-top: 8px; font-size: 12px; color: #c9cdd4">
-          请先进行 AI 补充或点击跳过
+        <div v-if="totalItemCount === 0" style="margin-top: 8px; font-size: 12px; color: #c9cdd4">
+          请先添加素材或点击跳过
         </div>
         <div v-if="props.supplementConfirmed" style="margin-top: 8px; font-size: 12px; color: #00b42a">
           ✅ 补充已确认
@@ -223,7 +230,6 @@ const props = defineProps({
   mcpSummary: { type: String, default: '' },
   mcpFiles: { type: Array, default: () => [] },
   selectedDirection: { type: Object, default: null },
-  selectedFramework: { type: Object, default: null },
   preCheckLoading: { type: Boolean, default: false },
   preCheckResult: { type: Object, default: null },
   supplement2Text: { type: String, default: '' },
@@ -246,12 +252,14 @@ const props = defineProps({
 
 const emit = defineEmits([
   'update:step2-supplement-dialog-visible',
+  'remove-material',  // { type: 'kb'|'inference'|'ai_pulse', idx: number }
 ])
 
 const step2SupplementDialogRef = ref(null)
 const previewModalVisible = ref(false)
 const previewTitle = ref('')
 const previewContent = ref('')
+const summaryExpanded = ref(false)
 
 // 本地状态：可管理的素材池（合并 mcpFiles + materialPool）
 const localMaterials = ref([])
@@ -327,6 +335,7 @@ function removeItem(type, idx) {
     if (localMaterials.value[i].type === type) {
       if (counter === idx) {
         localMaterials.value.splice(i, 1)
+        emit('remove-material', { type, idx })
         return
       }
       counter++
@@ -359,10 +368,10 @@ function previewPoolMaterial(idx) {
 
 // 进入页面后，延迟自动检测（等 props 稳定）
 onMounted(() => {
-  if (props.mcpSummary && !props.preCheckResult && !props.preCheckLoading) {
+  if (props.mcpSummary && !props.preCheckResult && !props.preCheckLoading && typeof props.runPreCheck === 'function') {
     // 延迟执行，避免在组件挂载过程中触发异步导致状态异常
     setTimeout(() => {
-      props.runPreCheck()
+      try { props.runPreCheck() } catch (e) { console.warn('自动检测失败:', e) }
     }, 500)
   }
 })
@@ -400,7 +409,7 @@ onMounted(() => {
 
 /* MCP 摘要 */
 .mcp-summary-box {
-  max-height: 100px;
+  max-height: 300px;
   overflow-y: auto;
   font-size: 13px;
   line-height: 1.6;
@@ -411,6 +420,12 @@ onMounted(() => {
   border-radius: 6px;
   border: 1px solid #e5e6eb;
   margin-top: 6px;
+  transition: max-height 0.25s ease;
+}
+
+.mcp-summary-box.summary-collapsed {
+  max-height: 72px;
+  overflow-y: hidden;
 }
 
 /* 文件网格列表 */

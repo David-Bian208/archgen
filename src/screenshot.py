@@ -57,10 +57,10 @@ class ScreenshotService:
             # 等待字体加载和渲染完成
             await page.wait_for_timeout(1000)
 
-            # 截图
+            # 截图（截取整个页面内容，不只是 viewport）
             await page.screenshot(
                 path=str(output_path),
-                full_page=False,
+                full_page=True,
             )
 
             await browser.close()

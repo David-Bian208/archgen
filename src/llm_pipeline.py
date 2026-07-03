@@ -1,5 +1,5 @@
 """
-LLM Pipeline 模块 - P2 拆分 4 个独立 LLM 调用
+LLM Pipeline 模块
 
 功能：
 - Router：方向推荐（注入能力边界 Edge）
@@ -7,8 +7,8 @@ LLM Pipeline 模块 - P2 拆分 4 个独立 LLM 调用
 - Extractor：内容萃取（注入 Who+Value）
 - Generator：内容生成（注入 Voice+Who）
 
-P0 阶段：保持单体 LLM 调用，通过 stage 参数区分不同 prompt
-P2 阶段：拆分为 4 个独立 LLM 调用
+当前阶段：单体 LLM 调用，通过 stage 参数区分不同 prompt
+（P2 目标拆分为 4 个独立 LLM 调用，当前未实施）
 """
 
 import logging

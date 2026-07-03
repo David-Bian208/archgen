@@ -99,7 +99,6 @@ async def _sandboxexec():
                 "settle": context["settle"],
                 "logger": context["logger"],
                 "__builtins__": {
-                    "__import__": __import__,
                     "print": print,
                     "len": len,
                     "str": str,

@@ -74,7 +74,7 @@
       width="700px"
       :footer="false"
     >
-      <div class="preview-body" v-html="renderedContent"></div>
+      <div class="preview-body" v-text="renderedContent"></div>
     </a-modal>
   </div>
 </template>
@@ -97,7 +97,7 @@ const showPreview = ref(false)
 
 const renderedContent = computed(() => {
   if (!content.value) return ''
-  return marked.parse(content.value)
+  return marked.parse(content.value, { async: false })
 })
 
 const loadInfo = async () => {

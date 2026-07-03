@@ -318,10 +318,18 @@ export function evaluateCompleteness(sessionId, mcpSummary) {
   })
 }
 
-export function analyzeDirectionsV2(sessionId, mcpSummary) {
+export function analyzeDirectionsV2(sessionId, mcpSummary, mcpFiles = []) {
   return api.post('/workflow/directions/analyze', {
     session_id: sessionId,
     mcp_summary: mcpSummary,
+    mcp_files: mcpFiles,
+  })
+}
+
+export function evaluateCustomDirection(sessionId, direction) {
+  return api.post('/workflow/directions/evaluate', {
+    session_id: sessionId,
+    direction,
   })
 }
 
@@ -344,10 +352,19 @@ export function matchFrameworksV2(sessionId, direction, supplement1, mcpSummary)
 
 export function supplementStep2(sessionId, framework, supplementInfo) {
   return api.post('/workflow/supplement/2', {
-
     session_id: sessionId,
     framework,
     supplement_info: supplementInfo,
+  })
+}
+
+// 推荐写作角度
+export function recommendAngles({ sessionId, topic, mcpSummary, materialSummary }) {
+  return api.post('/workflow/angle/recommend', {
+    session_id: sessionId,
+    topic,
+    mcp_summary: mcpSummary || '',
+    material_summary: materialSummary || '',
   })
 }
 
@@ -360,6 +377,18 @@ export function fillFramework(sessionId, frameworkKey, frameworkName, direction,
     direction,
     supplement_2: supplement2,
     mcp_summary: mcpSummary,
+  })
+}
+
+// 槽位内容预览
+export function slotContentPreview(sessionId, slotKey, slotLabel, slotDescription, topic, direction) {
+  return api.post('/workflow/slot/content_preview', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    slot_label: slotLabel,
+    slot_description: slotDescription || '',
+    topic: topic || '',
+    direction: direction || '',
   })
 }
 

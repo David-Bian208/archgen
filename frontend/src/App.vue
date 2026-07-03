@@ -33,7 +33,7 @@ onMounted(async () => {
     await getHealth()
     console.log('ArchGen API 连接正常')
   } catch (error) {
-    console.warn('ArchGen API 未连接，请确保后端服务运行在 :8919')
+    console.warn('ArchGen API 未连接，请确保后端服务运行在 :8920')
   }
 })
 </script>
