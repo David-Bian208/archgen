@@ -116,6 +116,11 @@ export function checkDataCompleteness(data, frameworkKey) {
 // Alias for backward compatibility
 export const getDataCheck = checkDataCompleteness
 
+// V4: 从槽位结构 AI 推荐配图框架
+export function suggestFramework(slots) {
+  return api.post('/framework/suggest-from-slots', { slots })
+}
+
 export function generateDiagram(formData) {
   const fd = new FormData()
   fd.append('framework_key', formData.frameworkKey)

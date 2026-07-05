@@ -1480,6 +1480,7 @@ import {
   confirmSupplement as apiConfirmSupplement,
   listSupplements as apiListSupplements,
   generateDiagram as apiGenerateDiagram,
+  suggestFramework as apiSuggestFramework,
   mcpSuggest as apiMcpSuggest,
   mcpMatchFiles as apiMcpMatchFiles,
   mcpSearch as apiMcpSearch,
@@ -5871,19 +5872,36 @@ async function handleGenerateImage() {
       .map(p => `## ${p.title}\n\n${p.content}`)
       .join('\n\n')
     
-    // 推导框架 key：V4 优先从槽位结构，其次从 selectedFramework，再次文章元数据
+    // 推导框架 key：V4 优先从槽位结构 AI 推荐，其次从 selectedFramework，再次文章元数据
     let frameworkKey = null
     
-    // V4: 从槽位结构推导框架
+    // V4: AI 从槽位结构推导框架（替代旧关键词规则）
     if (confirmedSlots.value?.length) {
+      try {
+        const slotData = confirmedSlots.value.map(s => ({
+          label: s.label,
+          outlines: (slotOutlines.value?.[s.label] || []).map(o => o.point || o.content || o),
+        }))
+        const resp = await apiSuggestFramework(slotData)
+        if (resp.data?.code === 0 && resp.data?.data?.framework_key) {
+          frameworkKey = resp.data.data.framework_key
+          console.log(`[图片生成] LLM 推荐框架: ${frameworkKey} (${resp.data.data.reason})`)
+        }
+      } catch (e) {
+        console.warn('[图片生成] LLM 推荐失败，回退规则:', e)
+      }
+    }
+    
+    // 回退：用关键词规则（只有当 LLM 推荐失败时）
+    if (!frameworkKey && confirmedSlots.value?.length) {
       const slotLabels = confirmedSlots.value.map(s => s.label.toLowerCase())
       const slotText = slotLabels.join(' ')
-      if (slotText.includes('优势') || slotText.includes('劣势') || slotText.includes('机会') || slotText.includes('威胁') || slotText.includes('swot')) frameworkKey = 'swot'
-      else if (slotText.includes('时间') || slotText.includes('阶段') || slotText.includes('流程') || slotText.includes('步骤')) frameworkKey = 'timeline'
+      if (slotText.includes('优势') || slotText.includes('劣势')) frameworkKey = 'swot'
+      else if (slotText.includes('时间') || slotText.includes('阶段')) frameworkKey = 'timeline'
       else if (slotText.includes('对比') || slotText.includes('vs') || slotText.includes('比较')) frameworkKey = 'comparison'
       else if (slotText.includes('原因') || slotText.includes('影响') || slotText.includes('因果')) frameworkKey = 'causal'
-      else if (slotText.includes('方案') || slotText.includes('解决') || slotText.includes('建议')) frameworkKey = 'solution'
-      else if (slotText.includes('背景') || slotText.includes('现状') || slotText.includes('困境')) frameworkKey = 'analysis'
+      else if (slotText.includes('方案') || slotText.includes('解决')) frameworkKey = 'solution'
+      else if (slotText.includes('背景') || slotText.includes('现状')) frameworkKey = 'analysis'
       else if (confirmedSlots.value.length >= 5) frameworkKey = 'analysis'
       else if (confirmedSlots.value.length === 4) frameworkKey = 'swot'
       else if (confirmedSlots.value.length === 3) frameworkKey = 'sequence'

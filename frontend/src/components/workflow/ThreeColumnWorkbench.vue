@@ -315,7 +315,7 @@ function coverageClass(coverage) {
 }
 
 function sourceIcon(type) {
-  const map = { knowledge_base: '📄', user_input: '✏️', web_search: '🌐', ai_inferred: '🤖' }
+  const map = { knowledge_base: '📄', user_input: '✏️', web_search: '🌐', ai_inferred: '🤖', aipulse: '📡' }
   return map[type] || '📎'
 }
 
@@ -534,6 +534,7 @@ tr.empty .col-slot { border-left: 3px solid #ef4444; }
 .src-user_input { background: #dcfce7; color: #15803d; }
 .src-web_search { background: #fef3c7; color: #a16207; }
 .src-ai_inferred { background: #f3e8ff; color: #7c3aed; }
+.src-aipulse { background: #ccfbf1; color: #0d9488; }
 .material-text { color: var(--color-text-2); }
 .material-file {
   color: var(--color-primary, #165dff);

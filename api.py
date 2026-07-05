@@ -4,6 +4,7 @@ import uuid
 import json
 import logging
 import re
+import asyncio
 import httpx
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -1229,6 +1230,97 @@ async def check_data_completeness(request: Dict = Body(...)):
 
 
 # ===== 生成接口 =====
+
+@router.post("/api/framework/suggest-from-slots")
+async def suggest_framework_from_slots(request: Dict = Body(...)):
+    """
+    V4: 从槽位结构 + 提纲内容 AI 推荐最合适的配图框架类型
+    请求体：
+    {
+        "slots": [
+            {"label": "优势分析", "outlines": ["内部资源优势", "技术壁垒"]},
+            {"label": "劣势分析", "outlines": ["资金不足", "人才短缺"]}
+        ]
+    }
+    返回：
+    {
+        "framework_key": "swot",
+        "reason": "检测到优势/劣势维度，建议使用SWOT分析框架"
+    }
+    """
+    slots = request.get("slots", [])
+    if not slots:
+        return _success({"framework_key": "analysis", "reason": "无槽位数据，使用默认分析框架"})
+
+    slot_desc = []
+    for s in slots:
+        label = s.get("label", "")
+        outlines = s.get("outlines", [])
+        outline_text = "、".join(outlines[:3]) if outlines else ""
+        slot_desc.append(f"- {label}" + (f": {outline_text}" if outline_text else ""))
+    slot_text = "\n".join(slot_desc)
+
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "deepseek-chat")
+    timeout = llm_config.get("timeout", 30)
+
+    framework_options = [
+        "swot（优势/劣势/机会/威胁四象限）",
+        "comparison（对比/比较多个维度）",
+        "causal（因果/原因-影响链）",
+        "timeline（时间线/阶段/流程演进）",
+        "analysis（背景/现状/问题分析）",
+        "sequence（步骤序列/阶段划分）",
+        "process（业务流程/工作流）",
+    ]
+    options_text = "\n".join(framework_options)
+
+    prompt = f"""你是一个信息图表类型推荐专家。以下是用户写作的槽位结构（维度）和提纲要点：
+
+{slot_text}
+
+请从以下图表类型中选择最匹配的一个（只返回代号，不要解释）：
+{options_text}
+
+只需返回类型代号，例如：swot"""
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 50,
+                    "temperature": 0.1,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(f"框架推荐失败: {resp.status_code}")
+                return _success({"framework_key": "analysis", "reason": "LLM 请求失败，使用默认"})
+
+            text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip().lower()
+            valid_keys = ["swot", "comparison", "causal", "timeline", "analysis", "sequence", "process"]
+            for k in valid_keys:
+                if k in text:
+                    reason_map = {
+                        "swot": "检测到多维度结构化分析",
+                        "comparison": "检测到对比/比较关系",
+                        "causal": "检测到因果逻辑链",
+                        "timeline": "检测到时间/阶段演进",
+                        "analysis": "检测到分析型结构",
+                        "sequence": "检测到步骤序列",
+                        "process": "检测到流程结构",
+                    }
+                    return _success({"framework_key": k, "reason": reason_map.get(k, "AI 自动匹配")})
+            return _success({"framework_key": "analysis", "reason": f"LLM 返回未知类型 {text}，使用默认"})
+    except Exception as e:
+        logger.warning(f"框架推荐异常: {e}")
+        return _success({"framework_key": "analysis", "reason": "AI 推荐异常，使用默认"})
+
 
 @router.post("/api/generate")
 async def generate_diagram(
@@ -4789,7 +4881,7 @@ coverage 是 0-1 之间的浮点数，表示该角度对现有素材的覆盖程
 
 @router.post("/api/workflow/supplement/1")
 async def supplement_1(request: Dict = Body(...)):
-    """第1次补充：方向相关信息（粗粒度）"""
+    """第1次补充：方向相关信息（粗粒度）+ 后台预拉 AIPULSE 结果"""
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
     supplement_info = request.get("supplement_info", {})
@@ -4799,7 +4891,44 @@ async def supplement_1(request: Dict = Body(...)):
         "selected_direction": direction,
         "supplement_1": supplement_info,
     }
-    
+
+    # P3: 后台异步预拉 AIPULSE 结果（不阻塞响应，失败不影响主流程）
+    async def _prefetch_aipulse():
+        try:
+            from src.ai_pulse_client import get_ai_pulse_client
+            ai_config = _get_config("ai_pulse")
+            if not ai_config.get("enabled", False):
+                logger.info("[AIPulse-Prefetch] AI-Pulse 未启用，跳过预拉取")
+                return
+            client = get_ai_pulse_client(ai_config)
+            # days=30 → time_filter=month，生产端有 98 条
+            cases = await client.fetch_latest_cases(
+                keywords=[direction[:50]],
+                days=30,
+                take=20,
+            )
+            if cases:
+                s = _get_session(session_id)
+                s["aipulse_items"] = [
+                    {
+                        "text": c.get("summary", c.get("title", ""))[:500],
+                        "source_type": "aipulse",
+                        "filename": c.get("title", f"aipulse_{c.get('id', '')}"),
+                        "source_name": c.get("source", "AI-Pulse"),
+                        "url": c.get("url", ""),
+                        "score": c.get("score", 0),
+                        "published_at": c.get("published_at", ""),
+                    }
+                    for c in cases
+                ]
+                logger.info(f"[AIPulse-Prefetch] 预拉取成功: {len(cases)}条 → session")
+            else:
+                logger.info("[AIPulse-Prefetch] 预拉取返回 0 条（关键词可能不匹配）")
+        except Exception as e:
+            logger.warning(f"[AIPulse-Prefetch] 预拉取失败（不影响主流程）: {e}")
+
+    asyncio.create_task(_prefetch_aipulse())
+
     return _success({"status": "ok", "message": "第1次补充已保存"})
 
 
@@ -6010,75 +6139,229 @@ async def generate_full_article(request: Dict = Body(...)):
     }}
   ]
 }}
+"""
+
+    import httpx
+
+    # ===== P2: 长素材摘要压缩 =====
+    # 对每个提纲段落对应的素材做压缩，避免素材过长稀释注意力
+    async def _summarize_long_material(text: str, client: httpx.AsyncClient, llm_cfg: Dict) -> str:
+        if len(text) <= 500:
+            return text
+        summary_prompt = f"""请压缩以下素材内容为 100-150 字的摘要，保留核心事实、数据和结论：
+
+{text[:3000]}
+
+摘要："""
+        try:
+            resp = await client.post(
+                f"{llm_cfg['base_url']}/chat/completions",
+                headers={"Authorization": f"Bearer {llm_cfg['api_key']}"},
+                json={
+                    "model": llm_cfg["model"],
+                    "messages": [{"role": "user", "content": summary_prompt}],
+                    "max_tokens": 300,
+                    "temperature": 0.1,
+                },
+            )
+            if resp.status_code == 200:
+                summary = resp.json()["choices"][0]["message"]["content"].strip()
+                return summary[:500]
+        except Exception:
+            pass
+        return text[:500] + "（...截断）"
+
+    # ===== P1 Stage 1: 逐段独立展开成段落草稿 =====
+    async def _generate_paragraph_draft(
+        section: Dict,
+        context: Dict,
+        client: httpx.AsyncClient,
+        llm_cfg: Dict,
+        all_materials_text: str,
+    ) -> Dict:
+        title = section.get("title", section.get("label", ""))
+        key_points = section.get("key_points", [])
+        points_text = "\n".join([f"- {p}" for p in key_points]) if key_points else "（无具体要点，请根据标题展开）"
+
+        # 提取该段专属素材
+        mats = section.get("materials", {})
+        raw_texts = mats if isinstance(mats, list) else mats.get("has", []) if isinstance(mats, dict) else []
+        mat_blocks = []
+        for i, mt in enumerate(raw_texts[:5]):
+            mt_str = str(mt) if not isinstance(mt, str) else mt
+            compressed = await _summarize_long_material(mt_str, client, llm_cfg)
+            mat_blocks.append(f"【素材{i+1}】{compressed}")
+        mat_section = "\n".join(mat_blocks) if mat_blocks else "（无具体素材，请基于知识展开）"
+
+        prompt = f"""你是一位专业内容写手。请根据以下信息，撰写一个完整的文章段落。
+
+【段落主题】{title}
+【段落要点】
+{points_text}
+
+【该段落可用素材】
+{mat_section}
+
+【整体上下文】
+- 写作方向：{context['direction']}
+- 分析框架：{context['framework']}
+- 作者身份：{context['persona_summary']}
+{context['supplement_info']}
+
+要求：
+1. 专注于本段主题，充分展开论证
+2. 必须引用素材中的具体内容（案例、数据、观点），不要自说自话
+3. 语言风格：专业、实战导向、有洞察力
+4. 理论≤20%，实战≥80%
+5. 长度：500-1200 字
+6. 段落末尾自然留口，方便下一段衔接
+7. 直接输出段落正文，不要标题
+
+正文：
+"""
+        resp = await client.post(
+            f"{llm_cfg['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {llm_cfg['api_key']}"},
+            json={
+                "model": llm_cfg["model"],
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2048,
+                "temperature": 0.3,
+                "seed": 42,
+            },
+        )
+        content_text = resp.json()["choices"][0]["message"]["content"].strip()
+        # 统计字数
+        import re as _re
+        chinese_chars = len(_re.findall(r'[\u4e00-\u9fff]', content_text))
+        return {"title": title, "content": content_text, "word_count": chinese_chars}
+
+    # ===== P1 Stage 2: 拼接 + 润色成完整文章 =====
+    async def _polish_article(
+        drafts: List[Dict],
+        context: Dict,
+        client: httpx.AsyncClient,
+        llm_cfg: Dict,
+        target_words: int,
+        full_materials_context: str,
+    ) -> Dict:
+        drafts_text = "\n\n".join([f"### {d['title']}\n\n{d['content']}" for d in drafts])
+
+        prompt = f"""你是一位资深编辑。以下是 AI 按提纲各段落独立生成的草稿，请将它们拼接为一篇完整的、流畅的文章。
+
+【写作方向】{context['direction']}
+【分析框架】{context['framework']}
+【作者身份】{context['persona_summary']}
+【总目标字数】{target_words} 字（±10%）
+
+【各段落草稿】
+{drafts_text}
+
+要求：
+1. 按现有段落顺序排列
+2. 在段落之间添加自然的过渡句或过渡段
+3. 为整篇文章添加一个吸引人的标题
+4. 在开头添加一段简短的引言（2-3 句），说明文章要解决的问题或价值
+5. 在结尾添加一段总结（2-3 句），升华主题
+6. 保持各段落的核心内容和素材引用不变，不要删减具体案例和数据
+7. 总字数控制在 {target_words} 字左右
+8. 语言风格统一：专业、实战导向、有洞察力
+
+返回 JSON 格式（不要 markdown 代码块）：
+{{
+  "title": "文章标题",
+  "paragraphs": [
+    {{
+      "title": "段落标题",
+      "content": "段落正文内容",
+      "word_count": 字数
+    }}
+  ]
+}}
 
 请直接返回 JSON：
 """
-    
+        resp = await client.post(
+            f"{llm_cfg['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {llm_cfg['api_key']}"},
+            json={
+                "model": llm_cfg["model"],
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 8192,
+                "temperature": 0.3,
+                "seed": 42,
+            },
+        )
+        content_raw = resp.json()["choices"][0]["message"]["content"].strip()
+        content_raw = content_raw.strip()
+        if content_raw.startswith("```"):
+            content_raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', content_raw, flags=re.MULTILINE).strip()
+        article = json.loads(content_raw)
+        return article
+
+    # ===== 执行流水线 =====
     try:
-        import httpx
+        llm_config = _get_config("llm")
+        llm_cfg = {
+            "base_url": llm_config.get("base_url", "https://api.deepseek.com/v1"),
+            "api_key": llm_config.get("api_key", ""),
+            "model": llm_config.get("model", "deepseek-chat"),
+        }
+        timeout = llm_config.get("timeout", 120)
+
+        context = {
+            "direction": direction,
+            "framework": framework,
+            "persona_summary": persona_summary,
+            "supplement_info": f"{supplement_2_display}{step5_display}{step6_display}",
+            "mcp_summary": mcp_summary,
+        }
+
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 8192,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
+            # Stage 1: 并行生成各段落草稿
+            logger.info(f"文章生成 P1 - 开始逐段展开，共 {len(sections_list)} 段")
+            tasks = []
+            for s in sections_list:
+                tasks.append(_generate_paragraph_draft(s, context, client, llm_cfg, ""))
+            drafts = await asyncio.gather(*tasks)
+            logger.info(f"文章生成 P1 - 各段落草稿生成完成: {[d['title'] for d in drafts]}")
+
+            # Stage 2: 拼接润色
+            logger.info("文章生成 P1 - 开始拼接润色")
+            article = await _polish_article(
+                drafts, context, client, llm_cfg,
+                target_word_count, context["mcp_summary"]
             )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            
-            content = content.strip()
-            if content.startswith("```"):
-                content = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.MULTILINE).strip()
-            
-            try:
-                article = json.loads(content)
-            except json.JSONDecodeError as je:
-                logger.error(f"文章生成 JSON 解析失败, LLM返回内容前500字: {content[:500]}")
-                return _error(msg=f"文章生成失败，LLM返回格式错误: {str(je)[:200]}")
-            
-            # 添加框架 key 到返回结果（用于图片生成）
-            framework_key = None
-            if framework:
-                # 优先从 session 对象中直接取 key
-                if isinstance(framework_raw, dict) and framework_raw.get("key"):
-                    framework_key = framework_raw["key"]
-                else:
-                    # 从 framework name 反查 key
-                    matcher = FrameworkMatcher()
-                    all_frameworks = matcher.get_all_frameworks()
-                    # 精确匹配 name
+
+        # 添加框架 key
+        framework_key = None
+        if framework:
+            if isinstance(framework_raw, dict) and framework_raw.get("key"):
+                framework_key = framework_raw["key"]
+            else:
+                matcher = FrameworkMatcher()
+                all_frameworks = matcher.get_all_frameworks()
+                for key, fw in all_frameworks.items():
+                    if fw.get("name") == framework:
+                        framework_key = key
+                        break
+                if not framework_key:
                     for key, fw in all_frameworks.items():
-                        if fw.get("name") == framework:
+                        fw_name = fw.get("name", "")
+                        if framework in fw_name or fw_name in framework:
                             framework_key = key
                             break
-                    # 模糊匹配 name
-                    if not framework_key:
-                        for key, fw in all_frameworks.items():
-                            fw_name = fw.get("name", "")
-                            if framework in fw_name or fw_name in framework:
-                                framework_key = key
-                                logger.info(f"文章生成 - 模糊匹配框架: {framework} -> {fw_name} ({key})")
-                                break
-                    # 最后兜底：从 framework 名称生成 key（小写+下划线）
-                    if not framework_key:
-                        framework_key = framework.lower().replace(" ", "_").replace(" ", "_")[:30]
-                        logger.info(f"文章生成 - 自定义框架 key: {framework_key}")
-            
-            if framework_key:
-                article["framework_key"] = framework_key
-                logger.info(f"文章生成 - 添加 framework_key: {framework_key}")
-            
-            return _success(article)
+                if not framework_key:
+                    framework_key = framework.lower().replace(" ", "_").replace(" ", "_")[:30]
+
+        if framework_key:
+            article["framework_key"] = framework_key
+
+        return _success(article)
+
     except json.JSONDecodeError as e:
         logger.error(f"文章生成 JSON 解析失败: {e}")
-        logger.error(f"LLM返回内容前500字: {content[:500] if 'content' in dir() else 'N/A'}")
-        return _error(msg=f"文章生成失败，LLM返回格式错误，请重试")
+        return _error(msg="文章生成失败，LLM返回格式错误，请重试")
     except httpx.TimeoutException as e:
         logger.error(f"文章生成 LLM 调用超时 (timeout={timeout}s): {e}")
         return _error(msg=f"文章生成超时（LLM 响应超过{timeout}秒），请重试")
@@ -6087,8 +6370,7 @@ async def generate_full_article(request: Dict = Body(...)):
         return _error(msg=f"文章生成失败，LLM 服务返回错误 (HTTP {e.response.status_code})")
     except Exception as e:
         logger.error(f"文章生成失败: {e}", exc_info=True)
-        error_msg = str(e) or "未知错误，请查看后端日志"
-        return _error(msg=error_msg)
+        return _error(msg=str(e) or "未知错误")
 
 
 # ===== P2: source_tag 硬约束 & 4 阶段 LLM Pipeline =====
@@ -6788,7 +7070,7 @@ async def calculate_significance(request: Dict = Body(...)):
 
 # === 内部辅助函数 ===
 
-def _ensure_material_pool(session_id: str, mcp_summary: str = "", mcp_files: list = None) -> list:
+def _ensure_material_pool(session_id: str, mcp_summary: str = "", mcp_files: list = None, aipulse_items: list = None) -> list:
     """
     V4 素材池统一构建函数（已修复 early-return bug + mcp_summary 支持）
     合并 mcp_summary(文本块)、mcp_files(file列表)、supplements 到统一 material_pool
@@ -6875,21 +7157,53 @@ def _ensure_material_pool(session_id: str, mcp_summary: str = "", mcp_files: lis
     except Exception as e:
         logger.warning(f"[MaterialPool] 读取 session step2 素材失败: {e}")
 
-    # 5. 去重（基于 text 前 200 字符）
-    seen = set()
+    # 5. P3: 追加 AIPULSE 预拉取结果
+    if aipulse_items:
+        for ai in aipulse_items:
+            if isinstance(ai, dict) and ai.get("text"):
+                pool.append({
+                    "text": ai.get("text", ""),
+                    "source_type": "aipulse",
+                    "filename": ai.get("filename", "aipulse_item"),
+                    "source_name": ai.get("source_name", "AI-Pulse"),
+                })
+        logger.info(f"[MaterialPool] 追加 AIPULSE 素材: {len(aipulse_items)}条")
+
+    # 6. 去重（text 前 200 字符 + 标题接近度）
+    from difflib import SequenceMatcher
+
+    def _titles_similar(t1: str, t2: str, threshold: float = 0.6) -> bool:
+        """判断两个标题是否高度相似（避免 AIPULSE 和本地 KB 重复）"""
+        if not t1 or not t2:
+            return False
+        return SequenceMatcher(None, t1.lower(), t2.lower()).ratio() > threshold
+
+    seen_texts = set()
     deduped = []
     for item in pool:
-        key = item.get("text", "")[:200]
-        if key not in seen:
-            seen.add(key)
-            deduped.append(item)
+        text = item.get("text", "")
+        key = text[:200]
+        if key in seen_texts:
+            continue
+        # 标题去重：检查是否与已加入的项标题高度相似
+        fn = item.get("filename", "")
+        is_dup = False
+        for existing in deduped:
+            ef = existing.get("filename", "")
+            if _titles_similar(fn, ef):
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        seen_texts.add(key)
+        deduped.append(item)
 
     session["material_pool"] = deduped
     logger.info(f"[MaterialPool] session={session_id} 构建完成: {len(deduped)}条素材")
     return deduped
 
 
-def _match_materials_internal(session_id: str, confirmed_slots: list) -> dict:
+def _match_materials_internal(session_id: str, confirmed_slots: list, search_keywords: dict = None) -> dict:
     """
     V4.1 改进版素材匹配（基于中文特征：整词 + 双字词（bigram）+ 单字重叠度）
     修复：原版仅做整词 in 匹配，中文变体（如"市场规模"vs"市场现状"）全部漏掉
@@ -6904,6 +7218,12 @@ def _match_materials_internal(session_id: str, confirmed_slots: list) -> dict:
         label = slot.get("label", "")
         desc = slot.get("description", "")
         combined = label + desc
+
+        # P3: 拼接 LLM 输出的搜索关键词（提高命中率）
+        if search_keywords and slot_key in search_keywords:
+            extra_kw = search_keywords[slot_key]
+            if extra_kw:
+                combined += " " + " ".join(extra_kw)
 
         # ---- 特征1: 完整分词（保留原逻辑） ----
         keywords = set()
@@ -7429,21 +7749,23 @@ async def batch_fill_v4(request: Dict = Body(...)):
         session = _get_session(session_id)
         mcp_summary = session.get("mcp_summary", "")
 
-        # 确保素材池
+        # P3: 确保素材池（含 AIPULSE 预拉取结果）
         pool = session.get("material_pool", [])
         if not pool:
-            _ensure_material_pool(session_id, mcp_summary=mcp_summary)
+            aipulse_items = session.get("aipulse_items")
+            _ensure_material_pool(session_id, mcp_summary=mcp_summary, aipulse_items=aipulse_items)
 
-        # 匹配素材
+        # 第一轮匹配（用 label+desc 做素材匹配，给提纲生成提供上下文）
         slot_mats = _match_materials_internal(session_id, confirmed_slots)
 
-        # 为每个槽位生成提纲
+        # 为每个槽位生成提纲 + 搜索关键词
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
         model = llm_config.get("model", "deepseek-chat")
 
         slot_outlines = {}
+        slot_search_kw = {}  # P3: 存储每槽位的搜索关键词
 
         if api_key:
             for slot in confirmed_slots:
@@ -7464,12 +7786,14 @@ async def batch_fill_v4(request: Dict = Body(...)):
 {mat_texts}
 
 请生成 3-5 个提纲要点，每个要点是一句话。
+同时生成 3-5 个搜索关键词，用于在知识库中检索更多相关素材（关键词需体现该槽位的核心概念）。
 
 返回 JSON（不要 markdown）：
 {{
   "outline": [
     {{"order": 1, "point": "要点内容"}}
-  ]
+  ],
+  "search_keywords": ["关键词1", "关键词2", "关键词3"]
 }}"""
 
                 async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
@@ -7490,6 +7814,11 @@ async def batch_fill_v4(request: Dict = Body(...)):
                         parsed = parsed.replace("```json", "").replace("```", "").strip()
                         outline_data = json.loads(parsed)
                         slot_outlines[slot_key] = outline_data.get("outline", [])
+                        slot_search_kw[slot_key] = outline_data.get("search_keywords", [])
+
+        # P3: 第二轮匹配（用 label+desc+search_keywords，匹配更准）
+        if slot_search_kw:
+            slot_mats = _match_materials_internal(session_id, confirmed_slots, search_keywords=slot_search_kw)
 
         session["slot_outlines"] = slot_outlines
         session["slot_materials"] = slot_mats

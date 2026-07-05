@@ -76,7 +76,7 @@ class AIPulseClient:
                 if not items and q:
                     logger.info(f"关键词搜索 0 结果，降级为热门列表（去掉 q 参数）")
                     fallback_params = {
-                        "time_filter": "week",
+                        "time_filter": "month",
                         "take": take,
                     }
                     response2 = await client.get(url, params=fallback_params)

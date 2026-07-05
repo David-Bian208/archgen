@@ -13,7 +13,7 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:8941',
+        target: 'http://localhost:8946',
         changeOrigin: true,
         // SSE 端点不做任何响应处理，直接透传
         configure: (proxy) => {
