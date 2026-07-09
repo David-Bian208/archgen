@@ -876,6 +876,7 @@ export function useWorkflowState() {
       }
 
       const res = await apiMcpSuggest({
+        session_id: sessionId.value,
         topic: route.query.topic || '',
         folders,
         categories: route.query.categories ? JSON.parse(route.query.categories) : [],

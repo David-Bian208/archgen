@@ -112,16 +112,18 @@
       :pre-check-results="preCheckResults"
       :pre-check-running="preCheckRunning"
       :slot-outlines="slotOutlines"
+      :slot-materials="slotMaterials"
       :session-id="sessionId"
       :topic="topic"
       :selected-direction="selectedDirection"
       :slot-suggestions="slotSuggestions"
+      :target-word-count="targetWordCount"
       @update-slot="onUpdateSlot"
       @remove-slot="onRemoveSlot"
       @add-slot="onAddSlot"
       @confirm-slots="onConfirmSlots"
       @stop-stream="onStopStream"
-      @ask-followup="onAskFollowup('slot_confirmation', '', $event)"
+      @add-material-to-slot="(slotKey, text, name, sourceType) => $emit('add-material', slotKey, text, name, sourceType)"
       @run-pre-check="onRunPreCheck"
       @adopt-alternative="onAdoptAlternative"
       @update-outline="(sk, ol) => $emit('update-outline', sk, ol)"
@@ -131,83 +133,159 @@
     <div v-if="phase === 'filling' || phase === 'done'" class="slot-table">
       <a-spin v-if="phase === 'filling'" tip="正在填充三列内容..." class="table-loading" />
 
+      <!-- L3 联网兜底开关 -->
+      <div v-if="phase === 'done'" class="web-search-bar">
+        <a-switch :model-value="webSearchEnabled" size="small" @update:model-value="$emit('update-web-search', $event)" />
+        <span class="web-search-label">联网兜底</span>
+        <a-tooltip content="开启后，通过 DuckDuckGo 联网搜索补充素材，适合时效性话题">
+          <icon-question-circle style="color: #86909c; cursor: help" />
+        </a-tooltip>
+      </div>
+
+      <!-- H1: 素材来源统计条 -->
+      <div v-if="phase === 'done'" class="source-stats-bar">
+        <span class="source-item kb">📄 本地 KB {{ sourceStats.knowledge_base }} 条</span>
+        <span class="source-item aipulse" v-if="sourceStats.aipulse > 0">📡 AI-Pulse {{ sourceStats.aipulse }} 条</span>
+        <span class="source-item web" v-if="sourceStats.web_search > 0">🌐 联网搜索 {{ sourceStats.web_search }} 条</span>
+      </div>
+
+      <!-- 槽位状态汇总条 -->
+      <div v-if="phase === 'done'" class="slot-summary-bar">
+        <span class="summary-item full">🟢 {{ fullCount }} 个充足</span>
+        <span class="summary-item partial" v-if="partialCount > 0">🟡 {{ partialCount }} 个偏少</span>
+        <span class="summary-item empty" v-if="emptyCount > 0">🔴 {{ emptyCount }} 个为空</span>
+      </div>
+
       <table class="three-col-table" v-if="confirmedSlots.length">
         <thead>
           <tr>
             <th class="col-status">状态</th>
             <th class="col-slot">槽位</th>
-            <th class="col-materials">已有素材</th>
             <th class="col-outline">提纲内容</th>
             <th class="col-actions">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(slot, idx) in confirmedSlots" :key="slot.slot_key" :class="rowClass(slot.slot_key)">
-            <!-- 状态灯 -->
-            <td class="col-status">
-              <span class="status-dot" :class="statusClass(slot.slot_key)"></span>
-              <span v-if="isSlotConfirmed(slot.slot_key)" class="status-check">√</span>
-            </td>
-            <!-- 槽位名 -->
-            <td class="col-slot">
-              <div class="slot-name">{{ slot.label }}</div>
-              <div class="slot-desc" v-if="slot.description">{{ slot.description }}</div>
-            </td>
-            <!-- 素材列 -->
-            <td class="col-materials">
-              <div v-if="getSlotMats(slot.slot_key).length === 0 && phase === 'done'" class="empty-hint">
-                暂无匹配素材
-                <a-button type="text" size="mini" @click="onOpenEdit(slot.slot_key)">手动补充</a-button>
-              </div>
-              <div v-for="(mat, mi) in getSlotMats(slot.slot_key).slice(0, 6)" :key="mi" class="material-item">
-                <span class="source-tag" :class="'src-' + (mat.source_type || 'unknown')">
-                  {{ sourceIcon(mat.source_type) }}
-                </span>
-                <span class="material-file" @click="toggleMaterialPreview(slot.slot_key, mi)">
-                  {{ mat.source_name || mat.filename || '未知文件' }}
-                </span>
-                <div v-if="expandedMaterials[`${slot.slot_key}-${mi}`]" class="material-preview">
-                  <pre class="material-full-text">{{ mat.text }}</pre>
+          <template v-for="(slot, idx) in confirmedSlots" :key="slot.slot_key">
+            <!-- 行1：状态 + 槽位名 + 提纲 + 操作 -->
+            <tr :class="rowClass(slot.slot_key)">
+              <td class="col-status">
+                <span class="status-dot" :class="statusClass(slot.slot_key)"></span>
+                <span v-if="isSlotConfirmed(slot.slot_key)" class="status-check">√</span>
+              </td>
+              <td class="col-slot">
+                <div class="slot-name">{{ slot.label }}</div>
+                <div class="slot-desc" v-if="slot.description">{{ slot.description }}</div>
+              </td>
+              <td class="col-outline">
+                <div v-if="getSlotOutline(slot.slot_key).length === 0 && phase === 'done'" class="empty-hint">
+                  待生成提纲
                 </div>
-              </div>
-              <div v-if="getSlotMats(slot.slot_key).length > 6" class="more-hint">
-                ...共 {{ getSlotMats(slot.slot_key).length }} 条素材
-              </div>
-            </td>
-            <!-- 提纲列 -->
-            <td class="col-outline">
-              <div v-if="getSlotOutline(slot.slot_key).length === 0 && phase === 'done'" class="empty-hint">
-                待生成提纲
-              </div>
-              <div v-for="(ol, oi) in getSlotOutline(slot.slot_key).slice(0, 3)" :key="oi" class="outline-item">
-                <span class="outline-order">{{ ol.order || oi + 1 }}.</span>
-                <span class="outline-point">{{ ol.point }}</span>
-              </div>
-            </td>
-            <!-- 操作 -->
-            <td class="col-actions">
-              <a-space direction="vertical" size="mini">
-                <a-button type="text" size="mini" @click="onOpenEdit(slot.slot_key)">✏️ 编辑</a-button>
-                <a-button
-                  type="text"
-                  size="mini"
-                  :status="isSlotConfirmed(slot.slot_key) ? 'success' : 'normal'"
-                  @click="onConfirmSlot(slot.slot_key)"
-                >
-                  {{ isSlotConfirmed(slot.slot_key) ? '✅ 已确认' : '确认' }}
-                </a-button>
-              </a-space>
-            </td>
-          </tr>
+                <div v-for="(ol, oi) in getSlotOutline(slot.slot_key)" :key="oi" class="outline-item">
+                  <span class="outline-order">{{ ol.order || oi + 1 }}.</span>
+                  <span class="outline-point">{{ ol.point }}</span>
+                </div>
+              </td>
+              <td class="col-actions">
+                <a-space direction="vertical" size="mini">
+                  <a-button type="text" size="mini" @click="onOpenEdit(slot.slot_key)">✏️ 编辑</a-button>
+                </a-space>
+              </td>
+            </tr>
+            <!-- 行2：素材（可展开/收起） -->
+            <tr v-if="phase === 'done'" :class="['materials-row', rowClass(slot.slot_key)]">
+              <td colspan="4" class="col-materials-cell">
+                <div class="materials-header" @click="expandedSlots[slot.slot_key] = !expandedSlots[slot.slot_key]">
+                  <span class="materials-toggle">{{ expandedSlots[slot.slot_key] ? '▾' : '▸' }}</span>
+                  <span class="materials-count">素材 {{ getSlotMats(slot.slot_key).length }} 条</span>
+                  <span v-if="!expandedSlots[slot.slot_key]" class="materials-preview">
+                    <template v-for="(mat, mi) in getSlotMats(slot.slot_key).slice(0, 3)" :key="mi">
+                      <span class="source-tag mini" :class="'src-' + (mat.source_type || 'unknown')">{{ sourceIcon(mat.source_type) }}</span>
+                      <span class="mat-filename-mini">{{ mat.source_name || mat.filename || '未知' }}； </span>
+                    </template>
+                  </span>
+                </div>
+                <div v-if="expandedSlots[slot.slot_key]" class="materials-body">
+                  <div v-if="getSlotMats(slot.slot_key).length === 0" class="empty-hint">
+                    暂无匹配素材
+                    <a-button type="text" size="mini" @click="onOpenEdit(slot.slot_key)">手动补充</a-button>
+                    <a-button
+                      v-if="!webSearchEnabled"
+                      type="text"
+                      size="mini"
+                      style="color: #f59e0b"
+                      @click="$emit('update-web-search', true)"
+                    >
+                      💡 开启联网兜底
+                    </a-button>
+                  </div>
+                  <div v-for="(mat, mi) in getSlotMats(slot.slot_key)" :key="mi" class="material-item">
+                    <div class="material-line">
+                      <span class="source-tag" :class="'src-' + (mat.source_type || 'unknown')">
+                        {{ sourceIcon(mat.source_type) }}
+                      </span>
+                      <span class="material-file" @click="toggleMaterialPreview(slot.slot_key, mi)">
+                        {{ mat.source_name || mat.filename || '未知文件' }}
+                      </span>
+                      <!-- 匹配得分 -->
+                      <span class="match-score" :class="scoreClass(mat.score)">
+                        {{ mat.score || 0 }}分
+                      </span>
+                      <!-- 去重提示 -->
+                      <span v-if="mat.is_duplicate" class="dup-tag">⏺️ 相似</span>
+                    </div>
+                    <!-- 素材正文全文展示 -->
+                    <div class="material-full-text">{{ mat.text || mat.match_snippet || '暂无文本' }}</div>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </template>
         </tbody>
       </table>
 
       <!-- 生成全文按钮 -->
       <div v-if="phase === 'done'" class="workbench-footer">
-        <a-button type="primary" size="large" :disabled="!allSlotsConfirmed" @click="$emit('proceed-to-article')">
-          📝 生成全文
-        </a-button>
-        <span v-if="!allSlotsConfirmed" class="footer-hint">请先确认所有槽位</span>
+        <div class="footer-left">
+          <span style="font-size: 13px; color: var(--color-text-2); margin-right: 8px">目标字数：</span>
+          <a-select
+            :model-value="isCustomMode ? 'custom' : targetWordCount"
+            size="small"
+            style="width: 120px"
+            @update:model-value="onWordCountSelect"
+          >
+            <a-option :value="2000">2000 字</a-option>
+            <a-option :value="3000">3000 字</a-option>
+            <a-option :value="5000">5000 字</a-option>
+            <a-option value="custom">自定义</a-option>
+          </a-select>
+          <a-input-number
+            v-if="isCustomMode"
+            :model-value="customWordCount"
+            size="small"
+            :min="500"
+            :max="20000"
+            :step="500"
+            style="width: 120px; margin-left: 8px"
+            @update:model-value="onCustomInput"
+          />
+          <span class="time-estimate">
+            预计 {{ estimatedMinutes }} 分钟
+          </span>
+        </div>
+        <div class="footer-right">
+          <a-button
+            v-if="!allSlotsConfirmed"
+            type="outline"
+            size="large"
+            @click="$emit('confirm-all-slots')"
+          >
+            ✅ 确认所有槽位内容
+          </a-button>
+          <a-button type="primary" size="large" :disabled="!allSlotsConfirmed" @click="$emit('proceed-to-article')">
+            📝 生成全文
+          </a-button>
+        </div>
       </div>
     </div>
 
@@ -219,19 +297,25 @@
       :materials="getSlotMats(editingSlot)"
       :outline="getSlotOutline(editingSlot)"
       :writing-plan="writingPlans[editingSlot] || ''"
-      :followup-history="followupHistory"
-      @close="closeEditPanel"
-      @save-plan="(plan) => saveWritingPlan(editingSlot, plan)"
-      @add-material="(text, filename) => addMaterialToSlot(editingSlot, text, filename)"
-      @update-outline="(ol) => slotOutlines[editingSlot] = ol"
-      @ask-followup="(q) => onAskFollowup('edit_panel', editingSlot, q)"
+      :analyze-result="analyzeResult"
+      :analyze-loading="analyzeLoading"
+      :analyze-error="analyzeError"
+      :analyze-type-label="analyzeTypeLabel"
+      @close="$emit('close-edit-panel')"
+      @save-plan="(plan) => $emit('save-plan', props.editingSlot, plan)"
+      @add-material="(text, filename) => $emit('add-material', props.editingSlot, text, filename)"
+      @update-outline="(ol) => $emit('update-outline', props.editingSlot, ol)"
+      @analyze-slot="(type) => onAnalyzeSlot(type)"
+      @integrate-outline="(data) => onIntegrateOutline(data)"
+      @web-search-slot="(data) => onWebSearchSlot(data)"
+      ref="editPanelRef"
     />
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { IconEdit, IconRefresh, IconSearch } from '@arco-design/web-vue/es/icon'
+import { ref, computed } from 'vue'
+import { IconEdit, IconRefresh, IconSearch, IconQuestionCircle } from '@arco-design/web-vue/es/icon'
 import StreamSlotsPanel from './StreamSlotsPanel.vue'
 import EditPanel from './EditPanel.vue'
 
@@ -257,6 +341,13 @@ const props = defineProps({
   topic: { type: String, default: '' },
   selectedDirection: { type: Object, default: null },
   slotSuggestions: { type: Object, default: () => ({}) },
+  webSearchEnabled: { type: Boolean, default: false },
+  targetWordCount: { type: Number, default: 2000 },
+  // H3: 快速分析（由父组件传入）
+  analyzeResult: { type: String, default: '' },
+  analyzeLoading: { type: String, default: '' },
+  analyzeError: { type: Boolean, default: false },
+  analyzeTypeLabel: { type: String, default: '' },
 })
 
 const emit = defineEmits([
@@ -266,14 +357,99 @@ const emit = defineEmits([
   'ask-followup', 'confirm-slot', 'proceed-to-article',
   'run-pre-check', 'adopt-alternative',
   'select-angle', 'refresh-angles', 'evaluate-angle', 'use-custom-angle',
+  'update-outline', 'update-web-search', 'update-target-word-count',
+  'analyze-slot', 'apply-analyze',
+  'integrate-outline', 'web-search-slot',
+  'confirm-all-slots',
 ])
 
-const showRelations = ref(true)
+const customWordCount = ref(3000)
+const isCustomMode = ref(false)
+
+function onWordCountSelect(val) {
+  if (val === 'custom') {
+    isCustomMode.value = true
+    emit('update-target-word-count', customWordCount.value)
+  } else {
+    isCustomMode.value = false
+    emit('update-target-word-count', val)
+  }
+}
+
+function onCustomInput(val) {
+  const num = parseInt(val, 10)
+  if (num && num > 0) {
+    customWordCount.value = num
+    emit('update-target-word-count', num)
+  }
+}
+
+// 预计耗时：每 1000 字约 1 分钟
+const estimatedMinutes = computed(() => {
+  const w = isCustomMode.value ? customWordCount.value : props.targetWordCount
+  return Math.max(1, Math.round(w / 1000))
+})
+
+// 槽位素材覆盖统计
+const fullCount = computed(() => props.confirmedSlots.filter(s => {
+  const mats = getSlotMats(s.slot_key)
+  return mats.length >= 3
+}).length)
+
+const partialCount = computed(() => props.confirmedSlots.filter(s => {
+  const mats = getSlotMats(s.slot_key)
+  return mats.length > 0 && mats.length < 3
+}).length)
+
+const emptyCount = computed(() => props.confirmedSlots.filter(s => {
+  return getSlotMats(s.slot_key).length === 0
+}).length)
+
+// H1: 素材来源统计
+const sourceStats = computed(() => {
+  const counts = { knowledge_base: 0, aipulse: 0, web_search: 0, other: 0 }
+  for (const slot of props.confirmedSlots) {
+    const mats = slot.matched_materials || []
+    for (const m of mats) {
+      const st = m.source_type || 'other'
+      if (st === 'aipulse') counts.aipulse++
+      else if (st === 'web_search') counts.web_search++
+      else if (st === 'knowledge_base' || st === 'mcp_summary') counts.knowledge_base++
+      else counts.other++
+    }
+  }
+  return counts
+})
+
 const selectedAngle = ref(null)
 const customAngleText = ref('')
 const customAngleLoading = ref(false)
 const customAngleResult = ref(null)
 const expandedMaterials = ref({})  // 展开的素材 { `${slot_key}-${index}`: true }
+const expandedSlots = ref({})      // 展开的槽位素材列表 { slot_key: true }
+
+function onAnalyzeSlot(type) {
+  emit('analyze-slot', props.editingSlot, type)
+}
+
+const editPanelRef = ref(null)
+
+function onIntegrateOutline(data) {
+  emit('integrate-outline', data)
+}
+
+function onWebSearchSlot(data) {
+  emit('web-search-slot', data)
+}
+
+// 暴露方法供父组件调用
+function setEditPanelIntegratedOutline(result) {
+  editPanelRef.value?.setIntegratedOutline(result)
+}
+function setEditPanelWebResults(results) {
+  editPanelRef.value?.setWebResults(results)
+}
+defineExpose({ setEditPanelIntegratedOutline, setEditPanelWebResults })
 
 function selectAngle(angle) {
   selectedAngle.value = angle
@@ -315,13 +491,18 @@ function coverageClass(coverage) {
 }
 
 function sourceIcon(type) {
-  const map = { knowledge_base: '📄', user_input: '✏️', web_search: '🌐', ai_inferred: '🤖', aipulse: '📡' }
+  const map = {
+    knowledge_base: '📄', mcp_summary: '📋', mcp_file: '📄',
+    aipulse: '📡', ai_inferred: '🤖', web_search: '🌐',
+    user_input: '✏️', unknown: '📎',
+  }
   return map[type] || '📎'
 }
 
-function truncateText(text, maxLen) {
-  if (!text) return ''
-  return text.length > maxLen ? text.slice(0, maxLen) + '...' : text
+function scoreClass(score) {
+  if (!score || score < 5) return 'score-low'
+  if (score < 15) return 'score-mid'
+  return 'score-high'
 }
 
 function getSlotMats(sk) { return props.slotMaterials[sk] || [] }
@@ -356,6 +537,7 @@ function onUpdateSlot(key, updates) { emit('update-slot', key, updates) }
 function onRemoveSlot(key) { emit('remove-slot', key) }
 function onAddSlot(label, desc) { emit('add-slot', label, desc) }
 function onConfirmSlots() { emit('confirm-slots') }
+
 function onStopStream() { emit('stop-stream') }
 function onOpenEdit(sk) { emit('open-edit-panel', sk) }
 function onConfirmSlot(sk) { emit('confirm-slot', sk) }
@@ -486,6 +668,35 @@ function onAdoptAlternative(slotKey, alt) { emit('adopt-alternative', slotKey, a
 
 /* ===== 三列表格 ===== */
 .slot-table { position: relative; min-height: 200px; }
+.slot-summary-bar {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--color-border-2);
+  margin-bottom: 4px;
+}
+.summary-item { font-weight: 500; }
+.summary-item.full { color: #22c55e; }
+.summary-item.partial { color: #f59e0b; }
+.summary-item.empty { color: #ef4444; }
+
+/* H1: 素材来源统计条 */
+.source-stats-bar {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0 8px;
+  font-size: 12px;
+}
+.source-item {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.source-item.kb { background: #f0f6ff; color: #165dff; }
+.source-item.aipulse { background: #f0fdf4; color: #15803d; }
+.source-item.web { background: #fefce8; color: #a16207; }
+
 .table-loading { display: flex; justify-content: center; padding: 60px 0; }
 .three-col-table {
   width: 100%;
@@ -501,8 +712,7 @@ function onAdoptAlternative(slotKey, alt) { emit('adopt-alternative', slotKey, a
 .three-col-table th { font-weight: 600; background: var(--color-bg-2); font-size: 13px; }
 .col-status { width: 60px; text-align: center; }
 .col-slot { width: 15%; min-width: 120px; }
-.col-materials { width: 35%; }
-.col-outline { width: 35%; }
+.col-outline { width: 55%; }
 .col-actions { width: 100px; text-align: center; }
 .status-dot {
   display: inline-block;
@@ -519,10 +729,49 @@ tr.empty .col-slot { border-left: 3px solid #ef4444; }
 .slot-name { font-weight: 600; }
 .slot-desc { font-size: 12px; color: var(--color-text-3); margin-top: 2px; }
 .material-item {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   font-size: 13px;
   line-height: 1.4;
 }
+.material-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.match-score {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+.score-low { background: #fef3c7; color: #a16207; }
+.score-mid { background: #dbeafe; color: #1d4ed8; }
+.score-high { background: #dcfce7; color: #15803d; }
+.dup-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+.material-snippet {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin: 3px 0 2px 24px;
+  padding: 4px 8px;
+  background: var(--color-bg-2);
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.5;
+  border-left: 2px solid var(--color-border-2);
+  max-height: 60px;
+  overflow: hidden;
+}
+.material-snippet:hover { background: var(--color-bg-3); }
+.material-snippet.hint { color: var(--color-text-4); font-style: italic; border-left-color: transparent; }
 .source-tag {
   display: inline-block;
   padding: 1px 4px;
@@ -532,9 +781,62 @@ tr.empty .col-slot { border-left: 3px solid #ef4444; }
 }
 .src-knowledge_base { background: #dbeafe; color: #1d4ed8; }
 .src-user_input { background: #dcfce7; color: #15803d; }
-.src-web_search { background: #fef3c7; color: #a16207; }
+.src-web_search { background: #e0f2fe; color: #0284c7; }
 .src-ai_inferred { background: #f3e8ff; color: #7c3aed; }
 .src-aipulse { background: #ccfbf1; color: #0d9488; }
+
+/* 素材行（行2） */
+.materials-row .col-materials-cell {
+  padding: 0 12px 8px 60px;
+  border-bottom: 1px solid var(--color-border-2);
+}
+.materials-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+.materials-header:hover { color: var(--color-primary); }
+.materials-toggle { font-size: 11px; width: 14px; flex-shrink: 0; }
+.materials-count { font-weight: 600; font-size: 12px; white-space: nowrap; }
+.materials-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+.source-tag.mini {
+  font-size: 10px;
+  padding: 0 3px;
+  margin-right: 2px;
+}
+.mat-filename-mini {
+  margin-right: 6px;
+}
+.materials-body {
+  padding: 4px 0 8px 20px;
+}
+
+/* L3 联网兜底开关 */
+.web-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+.web-search-label {
+  margin-left: 2px;
+  user-select: none;
+}
+
 .material-text { color: var(--color-text-2); }
 .material-file {
   color: var(--color-primary, #165dff);
@@ -567,12 +869,27 @@ tr.empty .col-slot { border-left: 3px solid #ef4444; }
 .outline-point { color: var(--color-text-1); }
 .empty-hint { font-size: 13px; color: var(--color-text-3); font-style: italic; }
 .workbench-footer {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.time-estimate {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin-left: 12px;
+}
+.footer-right {
   display: flex;
   align-items: center;
   gap: 12px;
-  justify-content: center;
-  padding: 20px;
-  border-top: 1px solid var(--color-border-2);
 }
 .footer-hint { font-size: 13px; color: var(--color-text-3); }
 </style>

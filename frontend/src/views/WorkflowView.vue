@@ -110,10 +110,10 @@
                       </div>
                     </a-col>
                     <a-col :span="8">
-                      <div class="score-card" :class="{ 'score-high': t.deficiency_score >= 80, 'score-medium': t.deficiency_score >= 50 && t.deficiency_score < 80, 'score-low': t.deficiency_score < 50 }">
+                      <div class="score-card" :class="{ 'score-high': t.material_score >= 80, 'score-medium': t.material_score >= 50 && t.material_score < 80, 'score-low': t.material_score < 50 }">
                         <div class="score-title">内容完整度</div>
-                        <div class="score-value" :style="{ color: t.deficiency_score >= 80 ? '#00b42a' : t.deficiency_score >= 50 ? '#f7ba1e' : '#f53f3f' }">
-                          {{ t.deficiency_score || 0 }}<span class="score-unit">分</span>
+                        <div class="score-value" :style="{ color: t.material_score >= 80 ? '#00b42a' : t.material_score >= 50 ? '#f7ba1e' : '#f53f3f' }">
+                          {{ t.material_score || 0 }}<span class="score-unit">分</span>
                         </div>
                         <div class="score-details">
                           <div v-for="(detail, di) in (t.deficiency_details || []).slice(0, 2)" :key="di" class="detail-item">
@@ -726,7 +726,22 @@
               ← 返回上一步
             </a-button>
           </div>
+          <!-- H2: AIPULSE 进度提示 -->
+          <div v-if="aipulseStatus === 'fetching'" class="aipulse-status-bar">
+            <a-spin :size="14" /> 
+            正在从 AI-Pulse 检索最新行业动态...
+          </div>
+          <div v-else-if="aipulseStatus === 'done'" class="aipulse-status-bar aipulse-done">
+            📡 AI-Pulse 已加载 {{ aipulseCount }} 条最新资讯
+          </div>
+          <div v-else-if="aipulseStatus === 'empty'" class="aipulse-status-bar aipulse-empty">
+            📡 AI-Pulse 未找到相关资讯（不影响后续流程）
+          </div>
+          <div v-else-if="aipulseStatus === 'failed'" class="aipulse-status-bar aipulse-failed">
+            ⚠️ AI-Pulse 暂时不可用（不影响后续流程）
+          </div>
           <ThreeColumnWorkbench
+            ref="threeColRef"
             :phase="phase"
             :streaming-thinking="streamingThinking"
             :stream-done="streamDone"
@@ -748,6 +763,12 @@
             :topic="mcpTopic"
             :selected-direction="selectedDirection"
             :slot-suggestions="slotSuggestions"
+            :web-search-enabled="webSearchEnabled"
+            :target-word-count="targetWordCount"
+            :analyze-result="analyzeResult"
+            :analyze-loading="analyzeLoadingType"
+            :analyze-error="analyzeError"
+            :analyze-type-label="analyzeTypeLabel"
             @update-slot="(k, u) => updateSlot(k, u)"
             @remove-slot="removeSlot"
             @add-slot="addSlot"
@@ -759,6 +780,10 @@
             @save-plan="saveWritingPlan"
             @add-material="addMaterialToSlot"
             @ask-followup="askFollowupQuestion"
+            @analyze-slot="handleAnalyzeSlot"
+            @integrate-outline="(d) => handleIntegrateOutlineWrapper(d)"
+            @web-search-slot="(d) => handleWebSearchSlotWrapper(d)"
+            @confirm-all-slots="handleConfirmAllSlots"
             @run-pre-check="runSlotPreCheck"
             @adopt-alternative="adoptAlternative"
             @proceed-to-article="generateArticleV4"
@@ -767,6 +792,8 @@
             @evaluate-angle="handleEvaluateAngle"
             @use-custom-angle="handleUseCustomAngle"
             @update-outline="handleUpdateOutline"
+            @update-web-search="handleUpdateWebSearch"
+            @update-target-word-count="(v) => targetWordCount = v"
           />
         </div>
 
@@ -1427,11 +1454,14 @@
         保存后，未来同类项目可自动复用这些内容
       </p>
     </a-modal>
+
+    <!-- 全局AI思考日志面板 -->
+    <ThinkingLogPanel />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch, h } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch, h, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { useAppStore } from '../stores/app'
@@ -1449,6 +1479,7 @@ import {
   IconRefresh,
 } from '@arco-design/web-vue/es/icon'
 import ThreeColumnWorkbench from '../components/workflow/ThreeColumnWorkbench.vue'
+import ThinkingLogPanel from '../components/workflow/ThinkingLogPanel.vue'
 import StepSupplement from '../components/workflow/StepSupplement.vue'
 import { useStep3Workbench } from '../composables/useStep3_Workbench'
 import { useSession } from '../composables/useSession'
@@ -1485,6 +1516,7 @@ import {
   mcpMatchFiles as apiMcpMatchFiles,
   mcpSearch as apiMcpSearch,
   recommendAngles as apiRecommendAngles,
+  getAipulseStatus,
 } from '../utils/api'
 
 const route = useRoute()
@@ -1493,6 +1525,9 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const { currentStep, sessionId } = useSession()
+
+// Provide sessionId for child components (e.g., ThinkingLogPanel)
+provide('sessionId', sessionId)
 const collapsedSteps = ref({})
 const mcpSummary = ref('')
 const mcpFiles = ref([])
@@ -1509,7 +1544,31 @@ const {
   confirmAndFill, openEditPanel, closeEditPanel, saveWritingPlan,
   addMaterialToSlot, askFollowupQuestion, runPreCheck: runSlotPreCheck, adoptAlternative,
   confirmSlot, isSlotConfirmed, slotConfirmed,
+  webSearchEnabled,
+  // H3: 快速分析
+  analyzeResult, analyzeLoadingType, analyzeError, analyzeTypeLabel,
+  handleAnalyzeSlot,
+  handleIntegrateOutline, handleWebSearchSlot, handleConfirmAllSlots,
 } = useStep3Workbench()
+
+// ThreeColumnWorkbench ref（用于异步结果回传 EditPanel）
+const threeColRef = ref(null)
+
+// W2-2: 整合生成 wrapper
+async function handleIntegrateOutlineWrapper(data) {
+  const result = await handleIntegrateOutline(data)
+  if (result) {
+    threeColRef.value?.setEditPanelIntegratedOutline(result)
+  }
+}
+
+// W3: 联网搜索 wrapper
+async function handleWebSearchSlotWrapper(data) {
+  const results = await handleWebSearchSlot(data)
+  if (results) {
+    threeColRef.value?.setEditPanelWebResults(results)
+  }
+}
 
 // 写作角度推荐
 const availableAngles = ref([])
@@ -2204,6 +2263,11 @@ const step2SupplementDialogVisible = ref(false)
 const step2SupplementDialogRef = ref(null)
 const lastSupplementMeta = ref(null)
 
+// H2: AIPULSE 轮询状态
+const aipulseStatus = ref('idle')     // 'idle' | 'fetching' | 'done' | 'empty' | 'failed' | 'disabled'
+const aipulseCount = ref(0)
+let aipulsePollTimer = null
+
 // 预检测相关状态
 const preCheckResult = ref(null)
 const preCheckLoading = ref(false)
@@ -2554,7 +2618,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  // 清理：防止异步操作在组件卸载后执行
+  stopAipulsePolling()
 })
 
 // 监听步骤变化
@@ -2712,6 +2776,11 @@ function handleUseCustomAngle(angle) {
 // 更新槽位提纲
 function handleUpdateOutline(slotKey, outlineList) {
   slotOutlines[slotKey] = outlineList
+}
+
+// 联网兜底开关
+function handleUpdateWebSearch(val) {
+  webSearchEnabled.value = val
 }
 
 function getScoreColor(score) {
@@ -2875,6 +2944,7 @@ async function loadTopics() {
     }
 
     const res = await apiMcpSuggest({
+      session_id: sessionId.value,
       topic: route.query.topic || '',
       folders,
       categories: route.query.categories ? JSON.parse(route.query.categories) : [],
@@ -2887,17 +2957,35 @@ async function loadTopics() {
       // 话题数据 + 补充评估分数（后端可能不返回，用已有字段推导）
       topics.value = (res.data.data.topics || []).map(t => {
         const coverage = t.coverage || 0.5
+        
+        // 兼容性处理：material_score = 内容完整度分数（越高越好）
+        // 注意：旧后端 prompt 把 deficiency_score 定义为"内容完整度"（命名矛盾）
+        // 由于 LLM 在这个矛盾命名下总是返回虚高值，忽略它，改用 coverage 推算
+        // 优先级：1. t.material_score  2. evaluation.material_score  3. coverage 推导
+        let material_score = t.material_score || (t.evaluation?.material_score)
+        if (!material_score && material_score !== 0) {
+          material_score = Math.round(coverage * 100)
+        }
+        
         const evalData = t.evaluation || {
           direction_score: Math.round(coverage * 100),
-          deficiency_score: Math.round((1 - coverage) * 100),
+          material_score,
+          deficiency_score: 100 - material_score,
           overall_score: Math.round(coverage * 100),
           direction_analysis: t.reason || '',
           deficiency_details: t.needed ? [{ item: t.needed, severity: 'medium', explanation: t.needed }] : [],
           supplement_strategy: coverage >= 0.7 ? '信息充足' : coverage >= 0.4 ? '需补充关键信息' : '素材严重不足'
         }
+        
+        // 确保 material_score 存在（供模板显示）
+        if (evalData.material_score === undefined && material_score !== undefined) {
+          evalData.material_score = material_score
+        }
+        
         return {
           ...t,
           ...evalData,
+          material_score,  // 确保在根级别有这个字段
           evaluation: evalData
         }
       })
@@ -3901,6 +3989,9 @@ async function skipSupplement2() {
   // 将已有素材保存到后端 session
   await saveMaterialsToSession()
   
+  // H2: 启动 AIPULSE 后台拉取后不等待，直接进 Step 2
+  startAipulsePolling()
+  
   currentStep.value = 2
 }
 
@@ -3911,6 +4002,9 @@ async function confirmSupplementAndProceed() {
   
   // 将素材保存到后端 session，供 Step 2 槽位填充使用
   await saveMaterialsToSession()
+  
+  // H2: 启动 AIPULSE 后台拉取后直接进 Step 2（进度条在 Step 2 顶部展示）
+  startAipulsePolling()
   
   currentStep.value = 2
 }
@@ -3938,6 +4032,39 @@ async function saveMaterialsToSession() {
     console.log('📦 素材已保存到 session:', { files: files.length, materials: materials.length })
   } catch (e) {
     console.warn('保存素材到 session 失败:', e)
+  }
+}
+
+// H2: AIPULSE 轮询
+async function pollAipulseStatus() {
+  if (!sessionId.value) return
+  try {
+    const res = await getAipulseStatus(sessionId.value)
+    if (res.data?.code === 0) {
+      const { status, count } = res.data.data
+      aipulseStatus.value = status
+      aipulseCount.value = count || 0
+      if (status !== 'fetching') {
+        stopAipulsePolling()
+      }
+    }
+  } catch (e) {
+    // 网络错误不终止轮询，静默重试
+  }
+}
+
+function startAipulsePolling() {
+  stopAipulsePolling()
+  aipulseStatus.value = 'fetching'
+  aipulseCount.value = 0
+  aipulsePollTimer = setInterval(pollAipulseStatus, 2000)
+  pollAipulseStatus() // 首次立即查询
+}
+
+function stopAipulsePolling() {
+  if (aipulsePollTimer) {
+    clearInterval(aipulsePollTimer)
+    aipulsePollTimer = null
   }
 }
 
@@ -6068,6 +6195,35 @@ function downloadGeneratedImage() {
   margin-bottom: 8px;
   display: flex;
   align-items: center;
+}
+
+/* H2: AIPULSE 进度提示条 */
+.aipulse-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #f0f6ff;
+  color: #165dff;
+  border: 1px solid #c9d9f2;
+}
+.aipulse-done {
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
+}
+.aipulse-empty {
+  background: #fefce8;
+  color: #a16207;
+  border-color: #fde68a;
+}
+.aipulse-failed {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
 }
 
 .step-content :deep(.arco-card) {

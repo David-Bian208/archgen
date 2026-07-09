@@ -191,57 +191,45 @@
         <a-button type="primary" size="small" @click="$emit('confirm-slots')">✔️ 确认槽位，开始填充</a-button>
       </div>
 
-      <!-- 追问区 - 完整对话样式 -->
+      <!-- 素材补充搜索 -->
       <div class="followup-panel">
         <div class="followup-header">
-          <span class="followup-title">💬 AI 问答助手</span>
-          <span class="followup-hint">可基于当前素材追问</span>
-        </div>
-
-        <!-- 对话历史 -->
-        <div v-if="followupReplies.length" class="followup-history">
-          <div v-for="(item, i) in followupReplies" :key="i" class="followup-bubble">
-            <div class="bubble-q">
-              <span class="bubble-label">你问：</span>
-              {{ item.q }}
-            </div>
-            <div class="bubble-a">
-              <span class="bubble-label">AI 答：</span>
-              {{ item.a }}
-            </div>
-          </div>
+          <span class="followup-title">🔍 素材补充搜索</span>
+          <span class="followup-hint">搜关键词，从素材池中找匹配素材</span>
         </div>
 
         <!-- 输入区域 -->
         <div class="followup-input-area">
           <a-textarea
-            v-model="followupQuestion"
-            placeholder="输入你的问题，例如：为什么拆分成这几个维度？是否遗漏了XX角度？..."
-            :auto-size="{ minRows: 3, maxRows: 6 }"
-            @press-enter="handleAskFollowup"
+            v-model="searchQuestion"
+            placeholder="输入关键词，如「中小企业案例」「技术趋势」..."
+            :auto-size="{ minRows: 2, maxRows: 4 }"
+            @press-enter="handleSearchMaterials"
           />
           <div class="followup-toolbar">
-            <div class="toolbar-left">
-              <a-radio-group v-model="searchScope" type="button" size="mini">
-                <a-radio value="all">全库搜索</a-radio>
-                <a-radio value="folder">指定文件夹</a-radio>
-                <a-radio value="file">指定文件</a-radio>
-              </a-radio-group>
+            <div class="toolbar-right" style="flex:1;display:flex;justify-content:flex-end">
+              <a-button size="small" type="primary" @click="handleSearchMaterials" :loading="asking">
+                🔍 搜索素材
+              </a-button>
             </div>
-            <div class="toolbar-right">
-              <a-space>
-                <a-upload 
-                  :show-file-list="false" 
-                  accept="image/*"
-                  :before-upload="handleImageUpload"
-                >
-                  <a-button type="text" size="small">📷 图片</a-button>
-                </a-upload>
-                <a-button size="small" type="primary" @click="handleAskFollowup" :loading="asking">
-                  追问 AI
-                </a-button>
-              </a-space>
+          </div>
+
+          <!-- 搜索结果 -->
+          <div v-if="searchResults.length" class="search-results">
+            <div class="search-results-header">
+              找到 {{ searchResults.length }} 条匹配素材：
             </div>
+            <div v-for="(mat, i) in searchResults" :key="i" class="search-result-item">
+              <span class="source-tag-sm">{{ sourceIcon(mat.source_type) }}</span>
+              <span class="search-result-name">{{ mat.source_name || mat.filename || '素材' }}</span>
+              <span class="search-result-preview">{{ mat.text }}</span>
+              <a-select size="mini" placeholder="添加到槽位" style="width:120px;margin-left:8px" @change="(v) => addSearchResultToSlot(mat, v)">
+                <a-option v-for="s in allSlotKeys" :key="s" :value="s">{{ slotLabels[s] || s }}</a-option>
+              </a-select>
+            </div>
+          </div>
+          <div v-else-if="searchDone" class="search-results">
+            <div class="search-no-result">未找到匹配素材，试试其他关键词</div>
           </div>
         </div>
       </div>
@@ -272,19 +260,20 @@ const props = defineProps({
   topic: { type: String, default: '' },
   selectedDirection: { type: Object, default: null },
   slotSuggestions: { type: Object, default: () => ({}) },  // AI 补充建议 { slotKey: text }
+  slotMaterials: { type: Object, default: () => ({}) },     // 素材池 { slotKey: [materials] }
 })
 
 const emit = defineEmits([
   'update-slot', 'remove-slot', 'add-slot',
-  'confirm-slots', 'stop-stream', 'ask-followup',
+  'confirm-slots', 'stop-stream', 'add-material-to-slot',
   'run-pre-check', 'adopt-alternative', 'update-outline',
 ])
 
 const showRelations = ref(true)
 const asking = ref(false)
-const searchScope = ref('all')
-const followupQuestion = ref('')
-const followupReplies = ref([])
+const searchQuestion = ref('')
+const searchResults = ref([])
+const searchDone = ref(false)
 const expandedSlots = ref({})  // 展开/收起状态
 const slotPreviews = ref({})  // 槽位提纲预览（AI生成未采纳）
 const previewLoading = ref({})  // 预览加载状态
@@ -324,27 +313,13 @@ function toggleExpand(slotKey) {
   expandedSlots[slotKey] = !expandedSlots[slotKey]
 }
 
-// 提纲要点素材充足度标记
-function getOutlineMark(item) {
-  if (!item) return '⚪'
-  if (item.material_count >= 3) return '✅'
-  if (item.material_count >= 1) return '⚠️'
-  return '⚪'
-}
-function getOutlineMarkTitle(item) {
-  if (!item) return '暂无匹配素材'
-  if (item.material_count >= 3) return `✅ 素材充足 (${item.material_count}条)`
-  if (item.material_count >= 1) return `⚠️ 素材偏少 (${item.material_count}条)`
-  return '⚪ 暂无匹配素材'
-}
-
 // 更新单个提纲要点
 function updateOutlinePoint(slotKey, index, newText) {
   const list = props.slotOutlines[slotKey]
   if (!list || !list[index]) return
   list[index].point = newText
   list[index].text = newText
-  $emit('update-outline', slotKey, list)
+  emit('update-outline', slotKey, list)
 }
 
 function getSlotLabel(key) {
@@ -391,13 +366,6 @@ async function requestOutline(slotKey) {
   }
 }
 
-function autoPreview(slot) {
-  const res = props.preCheckResults[slot.slot_key]
-  const files = (res?.matched_files || []).slice(0, 3).map(f => f.filename).join('、')
-  const count = res?.count || 0
-  if (!files) return `基于 ${count} 条素材生成`
-  return `基于 ${files}${res.matched_files.length > 3 ? '等' : ''} 共 ${count} 条素材，从「${slot.description || slot.label}」角度撰写`
-}
 
 // 采纳 AI 生成的提纲（拆分为要点列表）
 function applyOutline(slotKey) {
@@ -469,17 +437,56 @@ function batchAdoptOutlines() {
   slotsLocked.value = true
 }
 
-async function handleAskFollowup() {
-  if (!followupQuestion.value.trim()) return
-  const q = followupQuestion.value.trim()
+// 素材来源图标
+function sourceIcon(type) {
+  const map = { knowledge_base: '📄', aipulse: '📡', web_search: '🌐', user_upload: '🖐️' }
+  return map[type] || '📄'
+}
+
+// 所有槽位列表
+const allSlotKeys = computed(() => props.slots.map(s => s.slot_key))
+const slotLabels = computed(() => {
+  const m = {}
+  props.slots.forEach(s => { m[s.slot_key] = s.label || s.slot_key })
+  return m
+})
+
+// 素材补充搜索
+function handleSearchMaterials() {
+  const q = searchQuestion.value.trim()
+  if (!q) return
   asking.value = true
-  try {
-    await emit('ask-followup', q)
-    followupReplies.value.push({ q, a: '正在思考...' })
-    // 实际响应由外部注入 followupReplies
-  } catch (e) {}
+  searchDone.value = false
+  searchResults.value = []
+
+  // 从所有槽位的素材池中搜索匹配关键词
+  const kw = q.toLowerCase()
+  const found = []
+  const seen = new Set()
+  for (const [slotKey, mats] of Object.entries(props.slotMaterials)) {
+    for (const m of mats) {
+      const text = (m.text || '').toLowerCase()
+      const name = (m.source_name || m.filename || '').toLowerCase()
+      if ((text.includes(kw) || name.includes(kw)) && !seen.has(text.slice(0, 80))) {
+        found.push({ ...m, _slotKey: slotKey })
+        seen.add(text.slice(0, 80))
+      }
+      if (found.length >= 10) break
+    }
+    if (found.length >= 10) break
+  }
+
+  searchResults.value = found
+  searchDone.value = true
   asking.value = false
-  followupQuestion.value = ''
+}
+
+// 将搜索结果添加到指定槽位
+function addSearchResultToSlot(mat, targetSlotKey) {
+  emit('add-material-to-slot', targetSlotKey, mat.text, mat.source_name || mat.filename || '素材', mat.source_type)
+  Message.success(`已添加到 ${slotLabels.value[targetSlotKey] || targetSlotKey}`)
+  // 从结果中移除
+  searchResults.value = searchResults.value.filter(m => m !== mat)
 }
 </script>
 
@@ -906,6 +913,49 @@ async function handleAskFollowup() {
   display: flex;
   justify-content: space-between;
   margin-top: 10px;
+}
+
+/* 素材搜索结果 */
+.search-results {
+  margin-top: 12px;
+  border-top: 1px solid #f0f0f0;
+  padding-top: 10px;
+}
+.search-results-header {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 8px;
+}
+.search-result-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #fafafa;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.search-result-name {
+  font-weight: 600;
+  color: #333;
+  min-width: 80px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-result-preview {
+  color: #86909c;
+  flex: 1;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.search-no-result {
+  color: #86909c;
+  font-size: 13px;
+  text-align: center;
+  padding: 12px;
 }
 
 .precheck-loading {

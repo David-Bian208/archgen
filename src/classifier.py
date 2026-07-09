@@ -79,7 +79,7 @@ class ContentClassifier:
         self.config = config or {}
         self.api_key = self.config.get("api_key", "")
         self.base_url = self.config.get("base_url", "https://api.deepseek.com/v1")
-        self.model = self.config.get("model", "deepseek-chat")
+        self.model = self.config.get("model", "deepseek-v4-flash")
         self.max_tokens = self.config.get("max_tokens", 1024)
         self.temperature = self.config.get("temperature", 0.1)
         self.timeout = self.config.get("timeout", 30)

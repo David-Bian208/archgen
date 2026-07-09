@@ -22,8 +22,8 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# AI-Pulse 主机地址（可通过环境变量覆盖）
-_AI_PULSE_HOST = os.environ.get("AI_PULSE_HOST", "8.130.148.166")
+# AI-Pulse 主机地址（可通过环境变量 AI_PULSE_HOST 或 config.yaml 覆盖）
+_AI_PULSE_HOST = os.environ.get("AI_PULSE_HOST", "127.0.0.1")
 
 
 class AIPulseClient:

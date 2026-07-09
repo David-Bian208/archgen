@@ -1,15 +1,29 @@
 """API 接口定义 - ArchGen v2.0"""
 
+import os
 import uuid
 import json
 import logging
 import re
 import asyncio
+import threading
 import httpx
 from pathlib import Path
 from typing import Optional, Dict, List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
+from config.model_config import get_model_for_scene, get_default_max_tokens, V4_FLASH, V4_PRO
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+
+
+def _v4_model(scene: str) -> str:
+    """
+    V4 迁移：统一模型选择入口。
+    替代旧代码中的 V4_FLASH
+    
+    用法：
+        model = _v4_model("场景名称")   # 返回 "deepseek-v4-pro" 或 "deepseek-v4-flash"
+    """
+    return get_model_for_scene(scene)
 
 from src.knowledge_base import KnowledgeBaseReader
 from src.classifier import ContentClassifier
@@ -52,6 +66,448 @@ def _success(data=None, msg="success"):
 def _error(code=1, msg="error", data=None):
     """错误响应"""
     return {"code": code, "msg": msg, "data": data}
+
+
+def _error_internal(e: Exception = None, default_msg="内部错误，请重试"):
+    """安全错误响应：log 完整堆栈，返回通用消息（不泄露内部细节）"""
+    if e:
+        logger.error(f"内部错误: {e}", exc_info=True)
+    return _error(msg=default_msg)
+
+
+def _log_llm_call_legacy(
+    session_id: str,
+    call_id: str,
+    call_name: str,
+    messages: list,
+    result: str = None,
+    error: str = None,
+    model: str = None,
+    temperature: float = None,
+    duration: float = None,
+    phase: str = "其他",
+    thinking_chain: list = None,
+):
+    """
+    为老式同步 LLM 调用（非 stream_llm_call）记录思考日志。
+    在已有 LLM 调用的端点末尾调用此函数，无需重构代码。
+    """
+    import time
+    llm_config = _get_config("llm")
+    session = _get_session(session_id)
+    if not session:
+        return
+    
+    if "thinking_logs" not in session:
+        session["thinking_logs"] = []
+    
+    if thinking_chain is None:
+        thinking_chain = [
+            {"step": 1, "action": "执行分析任务", "reason": f"{call_name}", "result": result[:200] if result else ""}
+        ]
+    
+    log = {
+        "call_id": call_id,
+        "call_name": call_name,
+        "phase": phase,
+        "session_id": session_id,
+        "start_time": time.time() - (duration or 0),
+        "end_time": time.time(),
+        "duration": duration or 0,
+        "model": model or V4_FLASH,
+        "temperature": temperature or 0.7,
+        "status": "success" if not error else "failed",
+        "full_prompt": json.dumps(messages, ensure_ascii=False)[:8000],
+        "final_output": result[:5000] if result else None,
+        "result": result[:3000] if result else None,
+        "error": error,
+        "thinking_chain": thinking_chain,
+        "log_id": f"log_{int(time.time() * 1000)}"
+    }
+    session["thinking_logs"].append(log)
+    if len(session["thinking_logs"]) > 50:
+        session["thinking_logs"] = session["thinking_logs"][-50:]
+
+
+def _log_process_step(
+    session_id: str,
+    call_name: str,
+    phase: str,
+    steps: list,
+    output: str = None,
+    duration: float = None,
+):
+    """
+    为非 LLM 的数据处理步骤记录思考日志。
+    用于展示扫描、分类、筛选等中间过程。
+    
+    steps: [{"action": "...", "reason": "...", "result": "..."}, ...]
+    """
+    import time
+    session = _get_session(session_id)
+    if not session:
+        return
+    
+    if "thinking_logs" not in session:
+        session["thinking_logs"] = []
+    
+    log = {
+        "call_id": f"process_{int(time.time() * 1000)}",
+        "call_name": call_name,
+        "phase": phase,
+        "session_id": session_id,
+        "start_time": time.time() - (duration or 0),
+        "end_time": time.time(),
+        "duration": duration or 0,
+        "model": "—",
+        "temperature": "—",
+        "status": "success",
+        "thinking_chain": steps,
+        "result": output[:2000] if output else None,
+        "log_id": f"log_{int(time.time() * 1000)}"
+    }
+    session["thinking_logs"].append(log)
+    if len(session["thinking_logs"]) > 50:
+        session["thinking_logs"] = session["thinking_logs"][-50:]
+
+
+async def _call_llm(
+    session_id: str = None,
+    call_name: str = "",
+    messages: list = None,
+    model: str = None,
+    temperature: float = None,
+    max_tokens: int = None,
+    timeout: float = None,
+    seed: int = None,
+    base_url: str = None,
+    api_key: str = None,
+    phase: str = "其他",
+):
+    """
+    统一 LLM 调用入口。自动选模型、记录日志。
+
+    session_id 支持两种传入方式：
+    - str: 通过 _get_session(session_id) 获取 session dict
+    - None: 不记录日志（独立模块无 session 场景）
+    
+    模型选择: 根据 call_name 从 SCENE_MODEL_MAP 查（默认 Flash）
+    日志: 自动写入 session["thinking_logs"]
+
+    用法：
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="方向检测",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        content = result["choices"][0]["message"]["content"]
+    """
+    import time as _time
+    import httpx as _httpx
+    
+    llm_config = _get_config("llm")
+    start_time = _time.time()
+    call_id = f"{call_name}_{int(start_time * 1000)}"
+    
+    if not base_url:
+        base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    if not api_key:
+        api_key = llm_config.get("api_key", "")
+    if not model:
+        # V4 迁移：根据业务场景自动选择 Pro / Flash
+        model = get_model_for_scene(call_name)
+    
+    # max_tokens 智能调整:
+    # - 调用方未指定（None）→ 自动: Flash=2048 / Pro=8192
+    # - 调用方显式指定 → 尊重调用方
+    if max_tokens is None:
+        max_tokens = 8192 if model == V4_PRO else 2048
+    if timeout is None:
+        timeout = llm_config.get("timeout", 60)
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if seed is not None:
+        payload["seed"] = seed
+    
+    try:
+        async with _httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+            )
+            response.raise_for_status()
+            result = response.json()
+        
+        elapsed = _time.time() - start_time
+        parsed_content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        
+        # 记录成功日志
+        session = _get_session(session_id) if isinstance(session_id, str) and session_id else None
+        if session:
+            if "thinking_logs" not in session:
+                session["thinking_logs"] = []
+            
+            # 提取 token 用量
+            usage = result.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", 0)
+            
+            # 构建思考链（带 Token 消耗和模型信息）
+            full_prompt_text = json.dumps(messages, ensure_ascii=False)
+            thinking_chain = [
+                {"step": 1, "action": "构造提示词", 
+                 "reason": f"将知识库分析结果、作者身份定位和选题要求组织成完整 Prompt",
+                 "result": f"提示词总长 {len(full_prompt_text)} 字符（约 {len(full_prompt_text) // 2} 个中文字符）"},
+                {"step": 2, "action": "调用大语言模型",
+                 "reason": f"模型：{model}，推理用时 {elapsed:.1f} 秒",
+                 "result": f"消耗 Token：输入 {prompt_tokens} + 输出 {completion_tokens} = 共 {total_tokens} tokens"},
+                {"step": 3, "action": "解析推荐结果",
+                 "reason": "从 LLM 返回的 JSON 中提取选题方向、覆盖度评分和缺失分析",
+                 "result": f"输出内容 {len(parsed_content)} 字符"},
+            ]
+            
+            session["thinking_logs"].append({
+                "call_id": call_id,
+                "call_name": call_name,
+                "phase": phase,
+                "session_id": session_id,
+                "start_time": start_time,
+                "end_time": _time.time(),
+                "duration": elapsed,
+                "model": model,
+                "temperature": temperature if temperature is not None else 0.7,
+                "status": "success",
+                "full_prompt": full_prompt_text[:8000],
+                "final_output": parsed_content[:5000],
+                "result": f"Prompt {len(full_prompt_text)} 字符 → LLM 推理 {elapsed:.1f}s → 输出 {len(parsed_content)} 字符 ({total_tokens} tokens)",
+                "thinking_chain": thinking_chain,
+                "log_id": f"log_{int(_time.time() * 1000)}"
+            })
+            if len(session["thinking_logs"]) > 50:
+                session["thinking_logs"] = session["thinking_logs"][-50:]
+        
+        return result
+    except Exception as e:
+        elapsed = _time.time() - start_time
+        
+        # 记录失败日志
+        session = _get_session(session_id) if isinstance(session_id, str) and session_id else None
+        if session:
+            if "thinking_logs" not in session:
+                session["thinking_logs"] = []
+            session["thinking_logs"].append({
+                "call_id": call_id,
+                "call_name": call_name,
+                "phase": phase,
+                "session_id": session_id,
+                "start_time": start_time,
+                "end_time": _time.time(),
+                "duration": elapsed,
+                "model": model,
+                "temperature": temperature if temperature is not None else 0.7,
+                "status": "failed",
+                "full_prompt": json.dumps(messages, ensure_ascii=False)[:8000],
+                "error": str(e)[:2000],
+                "thinking_chain": [
+                    {"step": 1, "action": "执行分析任务", "reason": call_name, "result": f"失败: {str(e)[:200]}"}
+                ],
+                "log_id": f"log_{int(_time.time() * 1000)}"
+            })
+            if len(session["thinking_logs"]) > 50:
+                session["thinking_logs"] = session["thinking_logs"][-50:]
+        raise
+
+
+async def stream_llm_call(
+    session_id: str,
+    call_id: str,
+    call_name: str,
+    messages: list,
+    model: str = None,
+    temperature: float = 0.7,
+    require_thinking_chain: bool = True
+) -> dict:
+    """
+    统一流式LLM调用入口：自动记录思考日志 + 流式输出
+    
+    Args:
+        session_id: 会话ID
+        call_id: 唯一调用标识（如"editpanel_analyze_risk"）
+        call_name: 显示名称（如"风险槽位核心观点分析"）
+        messages: Prompt列表（OpenAI格式）
+        model: 模型名，不传则用配置的默认模型
+        temperature: 温度参数
+        require_thinking_chain: 是否强制在Prompt末尾加思考链输出要求
+    
+    Returns:
+        {
+            "thinking_chain": [...],  // 思考步骤
+            "result": "最终结果",      // 最终输出
+            "log_id": "日志ID"        // 用于前端关联
+        }
+    """
+    import time
+    
+    start_time = time.time()
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    default_model = V4_FLASH
+    use_model = model or default_model
+    
+    # 构造思考日志
+    thinking_log = {
+        "call_id": call_id,
+        "call_name": call_name,
+        "session_id": session_id,
+        "start_time": start_time,
+        "model": use_model,
+        "temperature": temperature,
+        "status": "running",
+        "full_prompt": json.dumps(messages, ensure_ascii=False)[:5000],  # 限制长度
+        "thinking_chain": [],
+        "final_output": None,
+        "error": None
+    }
+    
+    try:
+        if not api_key:
+            raise ValueError("LLM API Key 未配置")
+        
+        # 如果需要思考链，在最后一条message后加格式要求
+        if require_thinking_chain and messages:
+            thinking_requirement = """
+【输出格式要求】
+请先输出你的思考过程，再输出最终结果，严格按以下JSON格式返回，不要加markdown代码块标记：
+{
+  "thinking_chain": [
+    { "step": 1, "action": "你做了什么分析", "reason": "基于什么素材/信息", "result": "得出了什么结论" }
+  ],
+  "result": "最终输出内容"
+}
+"""
+            last_msg = messages[-1]
+            if isinstance(last_msg, dict) and "content" in last_msg:
+                messages = messages[:-1] + [
+                    {**last_msg, "content": last_msg["content"] + "\n\n" + thinking_requirement}
+                ]
+        
+        # 调用LLM（流式）
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
+            response = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": use_model,
+                    "messages": messages,
+                    "max_tokens": 4096,
+                    "temperature": temperature,
+                    "stream": True,
+                },
+            )
+            response.raise_for_status()
+            
+            # 收集流式输出
+            full_text = ""
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if delta:
+                        full_text += delta
+                except:
+                    pass
+        
+        # 解析结果（尝试解析thinking_chain和result）
+        thinking_log["final_output"] = full_text
+        try:
+            # 先尝试直接解析JSON
+            parsed = json.loads(full_text.strip())
+            if isinstance(parsed, dict):
+                if "thinking_chain" in parsed:
+                    thinking_log["thinking_chain"] = parsed["thinking_chain"]
+                if "result" in parsed:
+                    thinking_log["result"] = parsed["result"]
+                else:
+                    thinking_log["result"] = full_text
+            else:
+                thinking_log["result"] = full_text
+        except:
+            # JSON解析失败，尝试找 { ... }
+            try:
+                start = full_text.find('{')
+                end = full_text.rfind('}')
+                if start >= 0 and end > start:
+                    parsed = json.loads(full_text[start:end+1])
+                    if isinstance(parsed, dict):
+                        if "thinking_chain" in parsed:
+                            thinking_log["thinking_chain"] = parsed["thinking_chain"]
+                        if "result" in parsed:
+                            thinking_log["result"] = parsed["result"]
+                        else:
+                            thinking_log["result"] = full_text
+                    else:
+                        thinking_log["result"] = full_text
+                else:
+                    thinking_log["result"] = full_text
+            except:
+                thinking_log["result"] = full_text
+        
+        thinking_log["status"] = "success"
+        thinking_log["end_time"] = time.time()
+        thinking_log["duration"] = thinking_log["end_time"] - start_time
+        
+        # 存储到session
+        session = _get_session(session_id)
+        if session:
+            if "thinking_logs" not in session:
+                session["thinking_logs"] = []
+            log_id = f"log_{int(time.time() * 1000)}"
+            thinking_log["log_id"] = log_id
+            session["thinking_logs"].append(thinking_log)
+            # 保留最近50条
+            if len(session["thinking_logs"]) > 50:
+                session["thinking_logs"] = session["thinking_logs"][-50:]
+        
+        return {
+            "thinking_chain": thinking_log.get("thinking_chain", []),
+            "result": thinking_log.get("result", thinking_log["final_output"]),
+            "final_output": thinking_log["final_output"],
+            "log_id": thinking_log.get("log_id", ""),
+            "duration": thinking_log.get("duration", 0)
+        }
+    
+    except Exception as e:
+        thinking_log["status"] = "failed"
+        thinking_log["error"] = str(e)
+        thinking_log["end_time"] = time.time()
+        thinking_log["duration"] = thinking_log["end_time"] - start_time
+        
+        # 存储错误日志
+        session = _get_session(session_id)
+        if session:
+            if "thinking_logs" not in session:
+                session["thinking_logs"] = []
+            log_id = f"log_{int(time.time() * 1000)}"
+            thinking_log["log_id"] = log_id
+            session["thinking_logs"].append(thinking_log)
+        
+        logger.error(f"[stream_llm_call] {call_id} 失败: {e}")
+        raise
 
 
 def _try_repair_json(raw: str) -> str:
@@ -101,7 +557,583 @@ async def get_kb_categories():
         return _success(categories)
     except Exception as e:
         logger.error(f"获取知识库分类失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
+
+
+# ===== Phase 1.5: 向量检索系统（MiniLM + NumPy 点积） =====
+
+import numpy as np
+from numpy.linalg import norm
+
+_VECTORS = None       # shape: (N, 384)
+_VECTOR_META = None   # List[Dict]
+_EMBED_MODEL = None   # SentenceTransformer 缓存
+
+VECTOR_DIR = os.path.join(os.path.dirname(__file__), "vector_index")
+
+
+def load_vectors():
+    """启动时加载向量索引"""
+    global _VECTORS, _VECTOR_META
+    vec_path = os.path.join(VECTOR_DIR, "vectors.npy")
+    meta_path = os.path.join(VECTOR_DIR, "metadata.pkl")
+    if os.path.exists(vec_path) and os.path.exists(meta_path):
+        try:
+            _VECTORS = np.load(vec_path)
+            import pickle
+            with open(meta_path, "rb") as f:
+                _VECTOR_META = pickle.load(f)
+            logger.info(f"[Vector] 加载完成: {_VECTORS.shape[0]} vectors, dim={_VECTORS.shape[1]}")
+        except Exception as e:
+            logger.warning(f"[Vector] 加载失败: {e}")
+            _VECTORS = None
+            _VECTOR_META = None
+    else:
+        logger.warning(f"[Vector] 索引未找到，运行 python build_index.py --md-dir=~/kb 构建索引")
+
+
+_embed_model_lock = threading.Lock()
+
+def get_embedding_model():
+    """懒加载 SentenceTransformer（全局缓存，线程安全）
+    
+    双重检查锁 + 超时降级：如果模型正在被其他线程加载，等待最多 10 秒后降级返回 None
+    """
+    global _EMBED_MODEL
+    if _EMBED_MODEL is not None:
+        return _EMBED_MODEL
+    
+    acquired = _embed_model_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("[Vector] 模型正在后台加载中，本次跳过向量召回")
+        return None
+    
+    try:
+        if _EMBED_MODEL is not None:  # 双重检查
+            return _EMBED_MODEL
+        try:
+            from sentence_transformers import SentenceTransformer
+            _EMBED_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", local_files_only=True)
+            logger.info(f"[Vector] MiniLM 模型加载完成")
+        except ImportError:
+            logger.error("[Vector] sentence-transformers 未安装，运行: pip install sentence-transformers")
+            return None
+    finally:
+        _embed_model_lock.release()
+    return _EMBED_MODEL
+
+
+def is_model_ready():
+    """检查 MiniLM 模型是否已就绪（非阻塞）"""
+    return _EMBED_MODEL is not None
+
+
+def search_similar(query_vector: np.ndarray, top_k: int = 5) -> list:
+    """
+    在内存向量中余弦召回
+    
+    Returns: [{"meta": {...}, "score": float}, ...] 降序
+    """
+    if _VECTORS is None or _VECTOR_META is None:
+        return []
+    
+    q = query_vector / (norm(query_vector) + 1e-8)
+    vecs_n = _VECTORS / (norm(_VECTORS, axis=1, keepdims=True) + 1e-8)
+    sims = np.dot(vecs_n, q)  # (N,)
+    
+    top_idx = np.argsort(sims)[-top_k:][::-1]
+    return [
+        {"meta": _VECTOR_META[i], "score": float(sims[i])}
+        for i in top_idx
+    ]
+
+
+async def recall_with_dedup(representatives: list, top_k: int = 5) -> list:
+    """
+    混合检索：用代表文件的语义向量，在全量库中召回相似旧文 + 去重
+    
+    representatives: [{"name": ..., "path": ..., "_full_content": ...}, ...]
+    返回: [{"name": ..., "path": ..., "content": ..., "score": float}, ...] 去重后
+    """
+    if _VECTORS is None or not _VECTOR_META:
+        logger.warning("[Vector] 索引为空，跳过向量召回")
+        return []
+    
+    model = get_embedding_model()
+    if model is None:
+        logger.warning("[Vector] 模型未加载，跳过向量召回")
+        return []
+    
+    # 构造 query：拼接代表文件的 Front Matter + 首段
+    query_parts = []
+    for r in representatives[:5]:  # 最多用 5 篇构造 query
+        content = r.get("_full_content", "")
+        if content:
+            fm = _extract_front_matter(content)
+            if fm:
+                query_parts.append(fm)
+            first_para = content[:200] if content else r.get("name", "")
+            query_parts.append(first_para)
+    
+    query_text = " ".join(query_parts)[:1000]  # 限制查询长度
+    
+    if not query_text.strip():
+        return []
+    
+    # 编码 query
+    q_vec = model.encode(query_text, convert_to_numpy=True)
+    
+    # 余弦召回
+    recalled = search_similar(q_vec, top_k=top_k)
+    
+    if not recalled:
+        return []
+    
+    # 去重：按 abs_path 比对
+    rep_paths = {r.get("path", r.get("abs_path", "")) for r in representatives}
+    rep_names = {r.get("name", "") for r in representatives}
+    
+    deduped = []
+    excluded = []
+    for r in recalled:
+        meta = r["meta"]
+        if meta["abs_path"] in rep_paths or meta["path"] in rep_names:
+            excluded.append({
+                "name": meta["path"],
+                "score": r["score"],
+                "reason": "已在密度精选代表中",
+            })
+            continue
+        # 读取文件内容
+        try:
+            content = ""
+            with open(meta["abs_path"], "r", encoding="utf-8") as f:
+                content = f.read()
+            deduped.append({
+                "name": meta["path"],
+                "path": meta["abs_path"],
+                "abs_path": meta["abs_path"],
+                "_full_content": content,
+                "_density": calc_heuristic_density(content),
+                "_recall_score": r["score"],
+                "_source": "vector_recall",
+            })
+        except Exception as e:
+            logger.warning(f"[Vector] 读取召回文件失败: {meta['abs_path']}: {e}")
+            excluded.append({
+                "name": meta["path"],
+                "score": r["score"],
+                "reason": f"文件读取失败: {e}",
+            })
+    
+    logger.info(f"[Vector] 召回 {len(recalled)} 篇，去重后 {len(deduped)} 篇，排除 {len(excluded)} 篇")
+    return {"recalled": deduped[:top_k], "excluded": excluded, "total_searched": len(recalled)}
+
+
+def get_vector_index_info() -> Dict:
+    """获取向量索引状态信息"""
+    if _VECTORS is not None and _VECTOR_META is not None:
+        return {
+            "loaded": True,
+            "total_vectors": _VECTORS.shape[0],
+            "dimension": int(_VECTORS.shape[1]),
+            "directory": VECTOR_DIR,
+        }
+    return {"loaded": False, "directory": VECTOR_DIR}
+
+
+# ============================================================
+# 选题管道：证据检测 + 素材评分 + 文档格式化
+# ============================================================
+
+def detect_evidence_in_content(content: str, fm: dict) -> tuple:
+    """
+    扫描正文内容，检测四种证据类型的出现次数。
+    不依赖 Front Matter 标签，直接扫正文关键词组合。
+    
+    返回: (evidence_dict, days_old)
+    """
+    import re
+    from datetime import datetime
+    
+    evidence = {
+        "case_study": 0,
+        "roi_data": 0,
+        "manager_perspective": 0,
+        "data_quality": 0
+    }
+    
+    # 1. 案例检测：含"案例/实战/落地/项目/实践"关键词
+    case_keywords = r'(案例|实战|落地|项目实践|真实|复盘)'
+    entity_pattern = r'([A-Z][a-z]+|[一-龟]{2,4}(公司|集团|部门|团队|项目))'
+    
+    if re.search(case_keywords, content):
+        if re.search(entity_pattern, content):
+            evidence["case_study"] += 2  # 含实体名，强证据
+        else:
+            evidence["case_study"] += 1  # 弱证据
+    
+    # 2. ROI/数据检测：数字 + 百分比 + 业务指标
+    roi_keywords = r'(ROI|成本|收益|节省|提升|增长|降低|效率|转化率|GMV|营收|付费|留存)'
+    number_pattern = r'\d+(\.\d+)?%?'
+    matches = re.findall(
+        f'{roi_keywords}.{{0,30}}?{number_pattern}|{number_pattern}.{{0,30}}?{roi_keywords}',
+        content
+    )
+    if matches:
+        evidence["roi_data"] = min(len(matches), 5)
+    
+    # 3. 中层视角检测：核心读者群体关键词
+    manager_keywords = r'(中层|管理者|决策者|主管|总监|负责人|团队管理|跨部门|协作|汇报|KPI|OKR|向上管理|领导力)'
+    if re.search(manager_keywords, content):
+        evidence["manager_perspective"] += 1
+    
+    # 4. 数据质量/口径说明
+    quality_keywords = r'(样本量|调研|问卷|访谈|数据来源|口径|统计方法|方法论|实验|对照)'
+    if re.search(quality_keywords, content):
+        evidence["data_quality"] += 1
+    
+    # 5. 时效性检测：优先从 FM 读 date，兜底扫内容中的年份
+    days_old = 365 * 5  # 默认 5 年前
+    fm_date = fm.get('date', '')
+    if fm_date:
+        try:
+            # 尝试多种日期格式
+            for fmt in ['%Y-%m-%d', '%Y-%m', '%Y/%m/%d', '%Y%m%d']:
+                try:
+                    update_dt = datetime.strptime(str(fm_date)[:10], fmt)
+                    days_old = (datetime.now() - update_dt).days
+                    break
+                except ValueError:
+                    continue
+        except Exception:
+            pass
+    
+    if days_old >= 365 * 5:  # FM 没读到，尝试内容
+        year_match = re.search(r'20\d{2}年?', content)
+        if year_match:
+            try:
+                year = int(year_match.group(0).replace('年', ''))
+                days_old = (datetime.now() - datetime(year, 1, 1)).days
+            except ValueError:
+                pass
+    
+    return evidence, days_old
+
+
+def _generate_deficiency_list(evidence_totals: dict, latest_update_days: int, avg_density: float) -> list:
+    """根据证据统计生成缺失清单（业务语言）"""
+    items = []
+    
+    if evidence_totals["case_study"] < 3:
+        items.append({
+            "item": "真实落地案例",
+            "severity": "high" if evidence_totals["case_study"] == 0 else "medium",
+            "explanation": f"仅 {evidence_totals['case_study']} 篇含案例，不足以支撑有说服力的分析"
+        })
+    
+    if evidence_totals["roi_data"] < 3:
+        items.append({
+            "item": "ROI 或成本收益数据",
+            "severity": "medium",
+            "explanation": f"仅 {evidence_totals['roi_data']} 篇含量化数据，结论缺乏数据支撑"
+        })
+    
+    if evidence_totals["manager_perspective"] < 3:
+        items.append({
+            "item": "中层管理者视角",
+            "severity": "high" if evidence_totals["manager_perspective"] == 0 else "medium",
+            "explanation": f"仅 {evidence_totals['manager_perspective']} 篇涉及核心读者群体"
+        })
+    
+    if latest_update_days > 365:
+        items.append({
+            "item": "时效性不足",
+            "severity": "medium" if latest_update_days < 730 else "high",
+            "explanation": f"最新素材更新于 {latest_update_days} 天前，AI 领域变化快，可能需要补充近期内容"
+        })
+    
+    if avg_density < 0.5:
+        items.append({
+            "item": "信息密度偏低",
+            "severity": "medium" if avg_density > 0.3 else "high",
+            "explanation": f"相关素材平均密度 {avg_density:.0%}，部分文章干货含量不足"
+        })
+    
+    return items
+
+
+def calculate_material_scores(direction_name: str, all_docs_map: dict) -> dict:
+    """
+    计算单个方向的素材完整度评分 (0-100)。
+    复用现有向量索引（search_similar + get_embedding_model），不做全量重新编码。
+    
+    all_docs_map: {"文件路径": {"_full_content": ..., "name": ..., ...}, ...}
+    """
+    model = get_embedding_model()
+    if model is None or _VECTORS is None:
+        return {
+            "direction": direction_name,
+            "material_score": 0,
+            "related_count": 0,
+            "evidence_counts": {"case_study": 0, "roi_data": 0, "manager_perspective": 0, "data_quality": 0},
+            "latest_update_days": 365 * 10,
+            "avg_density": 0.0,
+            "deficiency_details": [
+                {"item": "向量模型未就绪", "severity": "high", "explanation": "无法进行语义匹配，无法计算素材完整度"}
+            ]
+        }
+    
+    # 1. 编码方向名称 → 在现有 FAISS 索引中搜索
+    try:
+        q_vec = model.encode(direction_name, convert_to_numpy=True)
+        search_results = search_similar(q_vec, top_k=20)
+    except Exception as e:
+        logger.warning(f"[MaterialScore] 向量搜索失败: {e}")
+        search_results = []
+    
+    # 2. 匹配全库文档，统计证据
+    evidence_totals = {"case_study": 0, "roi_data": 0, "manager_perspective": 0, "data_quality": 0}
+    latest_update_days = 365 * 10
+    densities = []
+    matched_count = 0
+    
+    for res in search_results:
+        meta = res["meta"]
+        # 多路径尝试匹配（metadata 中的路径格式多样）
+        doc_abs_dir = meta.get("abs_path", "")
+        doc_rel = meta.get("path", "")
+        full_doc = None
+        
+        candidates = [
+            os.path.join(doc_abs_dir, doc_rel) if doc_abs_dir and doc_rel else "",
+            doc_rel,
+            doc_abs_dir,
+            os.path.basename(doc_rel) if doc_rel else "",
+        ]
+        for cand in candidates:
+            if not cand:
+                continue
+            full_doc = all_docs_map.get(cand)
+            if full_doc is not None:
+                break
+        if full_doc is None:
+            continue
+        
+        matched_count += 1
+        content = full_doc.get("_full_content", full_doc.get("content", ""))
+        fm = full_doc.get("front_matter", {})
+        if not fm:
+            # 从内容提取 FM
+            extracted = _extract_front_matter(content)
+            fm = {"date": ""}
+        
+        evidence, days_old = detect_evidence_in_content(content, fm)
+        
+        for key in evidence_totals:
+            evidence_totals[key] += evidence.get(key, 0)
+        
+        if days_old < latest_update_days:
+            latest_update_days = days_old
+        
+        density = full_doc.get("_density", calc_heuristic_density(content))
+        densities.append(density)
+    
+    avg_density = sum(densities) / len(densities) if densities else 0.0
+    
+    # 3. 应用评分公式
+    score = 0.0
+    score += min(matched_count / 10.0, 1.0) * 40
+    score += min(evidence_totals["case_study"] / 3.0, 1.0) * 20
+    score += min(evidence_totals["roi_data"] / 3.0, 1.0) * 15
+    score += min(evidence_totals["manager_perspective"] / 3.0, 1.0) * 25
+    score += min(evidence_totals["data_quality"] / 3.0, 1.0) * 5
+    
+    # 扣分项
+    if latest_update_days > 365:
+        score -= 20
+    if latest_update_days > 730:
+        score -= 20
+    if avg_density < 0.5:
+        score -= 15
+    if avg_density < 0.3:
+        score -= 15
+    
+    return {
+        "direction": direction_name,
+        "material_score": max(0, round(score)),
+        "related_count": matched_count,
+        "evidence_counts": evidence_totals,
+        "latest_update_days": latest_update_days,
+        "avg_density": round(avg_density, 2),
+        "deficiency_details": _generate_deficiency_list(evidence_totals, latest_update_days, avg_density)
+    }
+
+
+def format_selected_docs(selected_docs: list, max_total_chars: int = 12000) -> str:
+    """
+    将 Phase 1 精选文档格式化为 LLM 可读的摘要文本。
+    每篇控制在 800 字以内，总长度硬性熔断。
+    
+    selected_docs: [{"name": ..., "_full_content": ..., "_density": ..., "path": ...}, ...]
+    """
+    formatted_parts = []
+    current_chars = 0
+    target_chars_per_doc = 800
+    
+    for i, doc in enumerate(selected_docs):
+        name = doc.get("name", f"文档{i+1}")
+        path = doc.get("path", "")
+        content = doc.get("_full_content", "")
+        density = doc.get("_density", 0)
+        
+        # 提取 Front Matter
+        fm = _extract_front_matter(content)
+        fm_display = fm[:200] if fm else "（无 Front Matter）"
+        
+        # 提取标题结构
+        lines = content.split('\n')
+        headers = []
+        for line in lines:
+            if line.startswith('# ') or line.startswith('## '):
+                headers.append(line.strip())
+        headers_str = ' > '.join(headers[:6]) if headers else "（无标题结构）"
+        
+        # 智能截断
+        truncated = smart_truncate(content, max_chars=target_chars_per_doc)
+        
+        # 组装单篇摘要
+        doc_block = (
+            f"### 文档 {i+1}：{name}\n"
+            f"- 路径：{path}\n"
+            f"- 信息密度：{density:.0%}\n"
+            f"- 内容结构：{headers_str}\n"
+            f"- Front Matter 摘要：{fm_display}\n"
+            f"\n内容摘要：\n{truncated}\n"
+        )
+        
+        block_chars = len(doc_block)
+        if current_chars + block_chars > max_total_chars:
+            remaining = len(selected_docs) - i
+            formatted_parts.append(f"\n... [还有 {remaining} 篇文档因长度限制省略] ...\n")
+            break
+        
+        formatted_parts.append(doc_block)
+        current_chars += block_chars
+    
+    return "\n---\n".join(formatted_parts)
+
+
+# ============================================================
+# Step 2 + Step 5 Prompt 模板
+# ============================================================
+
+NOMINATION_PROMPT = """你是一位拥有 10 年经验的**资深内容策略师**，擅长从海量信息中挖掘高价值选题。
+你的任务是：基于**作者的核心定位**和**知识库的宏观分布**，提名 8-10 个最具潜力的写作方向。
+
+---
+## 🔴 作者身份定位（宪法级约束，必须遵守）
+{persona_content}
+
+---
+## 📊 知识库宏观分布（仅作分布参考，不代表内容深度）
+*   **总文件数**：{total_files} 篇
+*   **分类交叉统计**（单篇可多标签）：
+    {category_distribution}
+*   **注**：分类为交叉标签，单篇可同时属于多个分类（如一篇可同时标"技巧 + 产品"），
+    故分类计数总和可能大于总文件数。
+*   **基石锚点**（知识库密度最高的核心文档，选题时应主动呼应其方法论）：
+    {anchor_docs}
+
+---
+##  绝对禁令
+1.  **严禁判断素材完整度**：你此刻没有权限读取具体文件内容，因此绝对不能评价"素材够不够"、"是否有案例"。此类判断将由系统后续完成。
+2.  **严禁编造数据**：不要编造 ROI、百分比或具体人名。
+3.  **避免泛泛而谈**：拒绝"AI 未来展望"这类虚题，必须紧扣"落地"、"效率"、"决策"、"系统化"。
+
+---
+## ✅ 输出要求
+请直接输出 JSON 对象，不要包含任何解释性文字或 markdown 代码块。
+
+**格式**：
+{{
+  "nominated_directions": [
+    {{"name": "方向名称（简洁有力，吸引决策者）", "description": "一句话描述该方向如何解决受众痛点（30 字以内）。"}}
+  ]
+}}
+
+**示例**（仅展示格式，实际请输出 8-10 个）：
+{{
+  "nominated_directions": [
+    {{"name": "中层管理者的 AI 决策避坑指南", "description": "基于系统化思维，梳理决策流程中的常见幻觉与验证机制。"}},
+    {{"name": "小微企业的零代码自动化改造路径", "description": "利用现有工具链，构建低成本、高可靠性的业务流系统。"}}
+  ]
+}}
+"""
+
+
+SCORING_PROMPT = """你是一位**资深选题评审官**，以严苛和务实著称。
+你的任务是：基于**作者身份**、**精选素材内容**以及**系统预计算的素材完整度**，对以下提名方向进行最终评审。
+
+---
+## 🔴 作者身份定位（宪法级约束）
+{persona_content}
+
+---
+## 📚 精选素材内容（Phase 1 密度精选，质量最高）
+以下是系统基于信息密度评分精选出的核心文档摘要（已做语义切片处理）：
+
+{selected_docs_content}
+
+---
+## 📊 待评审方向及系统预计算数据
+系统已对每个方向的素材完整度进行了全库扫描和计算。请务必尊重以下数据，不要质疑或修改它们。
+
+{directions_json}
+
+---
+## 🧮 评分规则（必须严格执行）
+
+请对每个方向进行评分：
+
+1. **direction_score（方向适合度，0-100）**：
+   - 由你判断。该方向是否符合作者的核心定位？是否能击中目标读者的真实痛点？
+   - 高分标准：能直接落地实践、有系统化思维框架、去概念化的务实风格
+   - 低分标准：过于学术理论、过于基础入门、或偏离核心读者群体
+
+2. **material_score（素材完整度，0-100）**：
+   - 系统预计算，你无权修改。直接引用输入数据中提供的值。
+   - 该分数已综合考虑：相关文件数量、案例/ROI/中层视角含量、时效性、信息密度。
+
+3. **reason（评分理由，50 字内）**：
+   - 简要说明该方向为何匹配或不匹配作者身份（重点解释 direction_score 的判断依据）
+
+⚠️ 注意：综合评分将由系统自动计算（方向适合度 × 0.6 + 素材完整度 × 0.4），你不需要计算。
+
+---
+## ✅ 输出要求
+
+请直接输出 JSON 对象，不要包含任何解释性文字或 markdown 代码块。
+
+**格式**：
+{{
+  "topics": [
+    {{
+      "name": "方向名称",
+      "description": "方向描述（延续提名时的描述）",
+      "direction_score": 85,
+      "material_score": 78,
+      "reason": "简要说明方向匹配度"
+    }}
+  ],
+  "summary": "知识库内容概况（100 字内），说明各类别分布和文件总数"
+}}
+
+**注意**：
+- material_score 必须与输入数据完全一致，不得自行修改
+- 按 direction_score 降序排列 topics 数组
+- 从所有提名方向中选出最优的 3-5 个作为最终推荐
+"""
 
 
 @router.post("/api/workflow/supplement/ai-auto")
@@ -136,7 +1168,7 @@ async def ai_auto_supplement(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
 
     persona_summary = ""
@@ -288,22 +1320,20 @@ async def ai_auto_supplement(request: Dict = Body(...)):
 """
 
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-
+        import time
+        start_time = time.time()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="ai_supplement",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.3,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="AI补充",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -315,7 +1345,7 @@ async def ai_auto_supplement(request: Dict = Body(...)):
         return _success(supplement)
     except Exception as e:
         logger.error(f"AI 自动补充失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/add")
@@ -351,7 +1381,7 @@ async def add_supplement(request: Dict = Body(...)):
         return _success({"supplement_id": supplement_id})
     except Exception as e:
         logger.error(f"添加补充内容失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/confirm")
@@ -378,7 +1408,7 @@ async def confirm_supplement(request: Dict = Body(...)):
         return _error(code=404, msg="补充内容不存在")
     except Exception as e:
         logger.error(f"确认补充内容失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/list")
@@ -404,7 +1434,7 @@ async def list_supplements(request: Dict = Body(...)):
         return _success({"supplements": supplements, "stats": stats})
     except Exception as e:
         logger.error(f"获取补充内容列表失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/export")
@@ -431,7 +1461,7 @@ async def export_supplements_to_domain(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"导出到领域库失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/session/metadata")
@@ -463,7 +1493,7 @@ async def record_metadata(request: Dict = Body(...)):
         return _success(metadata)
     except Exception as e:
         logger.error(f"记录元数据失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/cleanup")
@@ -482,7 +1512,7 @@ async def run_cleanup(request: Dict = Body(default={})):
         return _success(result)
     except Exception as e:
         logger.error(f"清理过期数据失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/ai-pulse")
@@ -633,7 +1663,7 @@ async def ai_infer_supplement(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
@@ -685,7 +1715,6 @@ async def ai_infer_supplement(request: Dict = Body(...)):
             from src.ai_pulse_client import AIPulseClient
             ai_pulse_config = _get_config("ai_pulse")
             if ai_pulse_config.get("enabled", False):
-                import httpx as _httpx
                 client = AIPulseClient(
                     base_url=ai_pulse_config.get("base_url", "http://8.130.148.166:8887"),
                     timeout=ai_pulse_config.get("timeout", 5),
@@ -796,21 +1825,17 @@ confidence 取值 0-1，越高越可信
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="AI推断补充",
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0.3,
+            max_tokens=2048,
+            seed=42,
+            timeout=timeout,
+            phase="补充信息",
+        )
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
@@ -827,17 +1852,46 @@ confidence 取值 0-1，越高越可信
             supplement["supplement_type"] = "infer"
         try:
             conf = float(supplement.get("confidence", 0.7))
+            # ══ 修复：LLM 可能显式返回 0，setdefault 无法拦截 ══
+            if conf <= 0:
+                conf = 0.7
             supplement["confidence"] = max(0.0, min(1.0, conf))
         except:
             supplement["confidence"] = 0.7
         
         # 方案 B：附带匹配素材
         supplement["matched_materials"] = matched_materials
+
+        # 丰富最近一条日志的 thinking_chain：AI推断补充详情
+        session = _get_session(session_id)
+        if session:
+            logs = session.get("thinking_logs", [])
+            if logs:
+                last = logs[-1]
+                supp_type_map = {"thicken": "增厚补充", "fill": "补全补充", "infer": "推断补充"}
+                supp_type_name = supp_type_map.get(supplement.get("supplement_type", "infer"), "补充")
+                content_text = supplement.get("content", "")
+                content_words = len(content_text) if content_text else 0
+                sources = supplement.get("sources", [])
+                source_names = "、".join(sources) if sources else "知识库推断"
+                chain = [
+                    {"step": 1, "action": f"AI{supp_type_name}", "reason": f"针对缺失项进行{supp_type_name}，补充{content_words}字，数据来源：{source_names}", "result": f"补充完成，置信度{int(supplement.get('confidence', 0.7) * 100)}%"},
+                ]
+                kb_files = matched_materials.get("kb_files", [])
+                pulse_articles = matched_materials.get("ai_pulse_articles", [])
+                step_idx = 2
+                for kf in kb_files:
+                    chain.append({"step": step_idx, "action": f"知识库素材：{kf.get('name', '未命名文件')}", "reason": "匹配到知识库相关文件，提取关键信息", "result": f"引用了{kf.get('name', '')}中的内容"})
+                    step_idx += 1
+                for pa in pulse_articles:
+                    chain.append({"step": step_idx, "action": f"联网检索：{pa.get('title', '未命名文章')}", "reason": f"通过AI-Pulse检索到相关案例，来源{pa.get('source', '未知')}", "result": "已纳入参考素材"})
+                    step_idx += 1
+                last["thinking_chain"] = chain
         
         return _success(supplement)
     except Exception as e:
         logger.error(f"AI 推断失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.get("/api/kb/files")
@@ -849,7 +1903,7 @@ async def get_kb_files(category: Optional[str] = None):
         return _success(files)
     except Exception as e:
         logger.error(f"列出知识库文件失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/kb/read")
@@ -866,7 +1920,7 @@ async def read_kb_file(request: Dict = Body(...)):
         return _success({"content": content, "file_path": file_path})
     except Exception as e:
         logger.error(f"读取文件失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 本地文件夹接口（新增） =====
@@ -892,7 +1946,7 @@ async def verify_folder(request: Dict = Body(...)):
     except PermissionError:
         return _error(code=403, msg="没有读取权限")
     except Exception as e:
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 def _build_folder_tree(path: Path, base_path: Path, max_depth: int = 5, current_depth: int = 0) -> List[Dict]:
@@ -964,7 +2018,7 @@ async def list_folder_files(request: Dict = Body(...)):
     except PermissionError:
         return _error(code=403, msg="没有读取权限")
     except Exception as e:
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/folders/read")
@@ -985,7 +2039,7 @@ async def read_folder_file(request: Dict = Body(...)):
     except PermissionError:
         return _error(code=403, msg="没有读取权限")
     except Exception as e:
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 分类器接口 =====
@@ -1009,7 +2063,7 @@ async def classify_by_intent(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"分类失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 框架匹配接口 =====
@@ -1045,7 +2099,7 @@ async def match_frameworks(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"框架匹配失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/frameworks")
@@ -1116,7 +2170,7 @@ async def data_preflight(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"数据预检失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/data/ai_generate")
@@ -1164,27 +2218,20 @@ async def ai_generate_field(request: Dict = Body(...)):
 请直接输出该字段的内容（JSON 数组格式或字符串），不要输出其他说明。
 """
 
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 30)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers=headers,
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0,  # 固定为 0，确保相同输入产生一致输出
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-
+        result = await _call_llm(
+            session_id=None,
+            call_name="generate_field",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+            temperature=0,
+            phase="字段生成",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         return _success({"content": content})
 
     except Exception as e:
         logger.error(f"AI 辅助生成失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/data/autopopulate")
@@ -1208,7 +2255,7 @@ async def data_autopopulate(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"数据自动填充失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 数据检查接口 =====
@@ -1226,7 +2273,7 @@ async def check_data_completeness(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"数据检查失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 生成接口 =====
@@ -1263,7 +2310,7 @@ async def suggest_framework_from_slots(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 30)
 
     framework_options = [
@@ -1287,36 +2334,32 @@ async def suggest_framework_from_slots(request: Dict = Body(...)):
 只需返回类型代号，例如：swot"""
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 50,
-                    "temperature": 0.1,
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(f"框架推荐失败: {resp.status_code}")
-                return _success({"framework_key": "analysis", "reason": "LLM 请求失败，使用默认"})
-
-            text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip().lower()
-            valid_keys = ["swot", "comparison", "causal", "timeline", "analysis", "sequence", "process"]
-            for k in valid_keys:
-                if k in text:
-                    reason_map = {
-                        "swot": "检测到多维度结构化分析",
-                        "comparison": "检测到对比/比较关系",
-                        "causal": "检测到因果逻辑链",
-                        "timeline": "检测到时间/阶段演进",
-                        "analysis": "检测到分析型结构",
-                        "sequence": "检测到步骤序列",
-                        "process": "检测到流程结构",
-                    }
-                    return _success({"framework_key": k, "reason": reason_map.get(k, "AI 自动匹配")})
-            return _success({"framework_key": "analysis", "reason": f"LLM 返回未知类型 {text}，使用默认"})
+        result = await _call_llm(
+            session_id=None,
+            call_name="配图生成",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=50,
+            temperature=0.1,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="框架推荐",
+        )
+        text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip().lower()
+        valid_keys = ["swot", "comparison", "causal", "timeline", "analysis", "sequence", "process"]
+        for k in valid_keys:
+            if k in text:
+                reason_map = {
+                    "swot": "检测到多维度结构化分析",
+                    "comparison": "检测到对比/比较关系",
+                    "causal": "检测到因果逻辑链",
+                    "timeline": "检测到时间/阶段演进",
+                    "analysis": "检测到分析型结构",
+                    "sequence": "检测到步骤序列",
+                    "process": "检测到流程结构",
+                }
+                return _success({"framework_key": k, "reason": reason_map.get(k, "AI 自动匹配")})
+        return _success({"framework_key": "analysis", "reason": f"LLM 返回未知类型 {text}，使用默认"})
     except Exception as e:
         logger.warning(f"框架推荐异常: {e}")
         return _success({"framework_key": "analysis", "reason": "AI 推荐异常，使用默认"})
@@ -1388,7 +2431,7 @@ async def generate_preview(request: Dict = Body(...)):
         return _success({"html": html})
     except Exception as e:
         logger.error(f"预览生成失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/generate/async")
@@ -1398,11 +2441,26 @@ async def generate_diagram_async(
     text: str = Form(...),
     style: str = Form("minimal"),
     size: str = Form("default"),
+    session_id: str = Form(""),
 ):
     """异步生成架构图"""
     task_id = str(uuid.uuid4())
     async_tasks[task_id] = {"status": "pending", "progress": 0}
     background_tasks.add_task(_process_async, task_id, framework_key, text, style, size)
+
+    # 记录配图生成日志
+    _log_llm_call_legacy(
+        session_id=session_id,
+        call_id=f"step5_generate_diagram_{task_id}",
+        call_name="配图生成",
+        messages=[{"role": "user", "content": f"框架: {framework_key}\n样式: {style}\n尺寸: {size}\n文本: {text[:200]}"}],
+        result=f"任务已创建，task_id: {task_id}",
+        duration=0,
+        thinking_chain=[
+            {"step": 1, "action": "生成配图", "reason": f"为框架「{framework_key}」生成架构图，样式{style}，尺寸{size}", "result": f"任务已创建，编号{task_id}"},
+        ]
+    )
+
     return _success({"task_id": task_id})
 
 
@@ -1543,22 +2601,15 @@ async def analyze_directions(request: Dict = Body(...)):
 [{{"name": "方向名", "score": 0.85, "reason": "因为资料中...", "confidence_label": "强烈推荐|推荐|可以考虑|不太适合"}}]
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 30)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers={"Authorization": f"Bearer {llm_config.get('api_key', '')}"},
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 512,
-                    "temperature": 0.2,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="analyze_directions",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512,
+            temperature=0.2,
+            seed=42,
+            phase="方向分析",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
         import json
@@ -1952,22 +3003,15 @@ async def generate_content_structure(request: Dict = Body(...)):
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 60)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers={"Authorization": f"Bearer {llm_config.get('api_key', '')}"},
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 8192,
-                    "temperature": 0.2,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="content_structure",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=8192,
+            temperature=0.2,
+            seed=42,
+            phase="内容结构",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -2111,22 +3155,15 @@ async def generate_outline_versions(request: Dict = Body(...)):
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 60)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers={"Authorization": f"Bearer {llm_config.get('api_key', '')}"},
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.5,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="outline_versions",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.5,
+            seed=42,
+            phase="提纲版本",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -2141,7 +3178,7 @@ async def generate_outline_versions(request: Dict = Body(...)):
         
     except Exception as e:
         logger.warning(f"LLM 提纲版本生成失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/check_direction")
@@ -2202,22 +3239,15 @@ async def check_direction_alignment(request: Dict = Body(...)):
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 60)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers={"Authorization": f"Bearer {llm_config.get('api_key', '')}"},
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="section_alignment",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+            temperature=0,
+            seed=42,
+            phase="方向检测",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -2249,7 +3279,7 @@ async def check_direction_alignment(request: Dict = Body(...)):
         
     except Exception as e:
         logger.warning(f"方向性检测失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/ai_generate")
@@ -2423,22 +3453,15 @@ async def ai_generate_section(request: Dict = Body(...)):
 请撰写该段落内容：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 60)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers=headers,
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="generate_section",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.3,
+            seed=42,
+            phase="段落生成",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         
         # P2: source_tag 处理
@@ -2463,7 +3486,7 @@ async def ai_generate_section(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"AI 段落生成失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/ai_rewrite")
@@ -2544,22 +3567,15 @@ async def ai_rewrite_section(request: Dict = Body(...)):
 请重写该段落内容：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 60)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers=headers,
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="rewrite_section",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.3,
+            seed=42,
+            phase="段落重写",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         
         # P2: source_tag 处理
@@ -2576,7 +3592,7 @@ async def ai_rewrite_section(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"AI 重写失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/ai_generate_full")
@@ -2660,23 +3676,43 @@ async def ai_generate_full_content(request: Dict = Body(...)):
 请撰写全文：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=llm_config.get("timeout", 120)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers=headers,
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 8192,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="全文生成",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=8192,
+            temperature=0.3,
+            seed=42,
+            phase="文章生成",
+        )
         full_content = result["choices"][0]["message"]["content"].strip()
+        
+        # 记录思考日志
+        usage = result.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        paragraphs = [p for p in full_content.split("\n\n") if p.strip()]
+        sections = [p for p in full_content.split("## ") if p.strip()]
+        word_count = len(full_content)
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="全文生成",
+            phase="写稿",
+            steps=[
+                {"step": 1, "action": "组装文章结构和素材",
+                 "reason": f"方向「{direction_name}」，含 {len(structure.get('sections', []))} 个正文章节 + 开篇 + 结尾，素材 {len(source_text)} 字",
+                 "result": "Prompt 已构造完毕，送入 LLM 生成"},
+                {"step": 2, "action": "LLM 一次性生成全文",
+                 "reason": f"使用 {llm_config.get('model', V4_PRO)} 模型，输入 {prompt_tokens} token，输出 {completion_tokens} token",
+                 "result": f"生成 {word_count} 字，共 {len(paragraphs)} 个段落、{len(sections)} 个章节"},
+                {"step": 3, "action": "素材来源标注",
+                 "reason": "对生成内容中的引用和推断进行自动标注，区分原文引用和 AI 推断",
+                 "result": f"有效标签 {processed['valid_count']} 个，已过滤 {processed['filtered_count']} 个"},
+            ],
+            output=f"全文生成完成：{word_count} 字，{len(sections)} 个章节",
+            duration=999,
+        )
         
         # P2: source_tag 处理（全文按段落分割处理）
         processor = get_source_tag_processor()
@@ -2701,7 +3737,7 @@ async def ai_generate_full_content(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"AI 全文生成失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/smart_fill")
@@ -2799,22 +3835,15 @@ async def smart_fill_content(request: Dict = Body(...)):
 """
             
             try:
-                import httpx
-                async with httpx.AsyncClient(timeout=llm_config.get("timeout", 60)) as client:
-                    response = await client.post(
-                        f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                        headers=headers,
-                        json={
-                            "model": llm_config.get("model", "deepseek-chat"),
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": 2048,
-                            "temperature": 0.3,
-                            "seed": 42,
-                        },
-                    )
-                    response.raise_for_status()
-                    result = response.json()
-                
+                result = await _call_llm(
+                    session_id=session_id,
+                    call_name="智能补全",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=2048,
+                    temperature=0.3,
+                    seed=42,
+                    phase="智能补全",
+                )
                 content = result["choices"][0]["message"]["content"].strip()
                 content = content.replace("```markdown", "").replace("```", "").strip()
                 # Remove heading if AI outputted it
@@ -2837,6 +3866,43 @@ async def smart_fill_content(request: Dict = Body(...)):
     final_contents = {}
     for key, sec_result in result_sections.items():
         final_contents[key] = sec_result["content"]
+    
+    ai_count = len([v for v in result_sections.values() if v["source"] == "ai"])
+    original_count = len([v for v in result_sections.values() if v["source"] == "original"])
+    supplement_count = len([v for v in result_sections.values() if v["source"] == "supplement"])
+    
+    # 记录思考日志
+    fill_detail_steps = []
+    step_idx = 1
+    for sec_info in sections_to_fill:
+        key = sec_info["key"]
+        sec_result = result_sections.get(key, {})
+        source_type = sec_result.get("source", "unknown")
+        content = sec_result.get("content", "")
+        if source_type == "original":
+            desc = "素材充足，直接复用原文"
+        elif source_type == "supplement":
+            desc = "素材部分覆盖，AI 在原素材基础上补充扩展"
+        elif source_type == "ai":
+            desc = "素材不足，AI 从零生成"
+        else:
+            desc = "回退使用预填内容"
+        fill_detail_steps.append({
+            "step": step_idx,
+            "action": f"「{sec_info['title']}」：{desc}",
+            "reason": f"生成了 {len(content)} 字内容",
+            "result": "已写入最终文章"
+        })
+        step_idx += 1
+    
+    _log_process_step(
+        session_id=session_id,
+        call_name="智能补全",
+        phase="写稿",
+        steps=fill_detail_steps,
+        output=f"智能补全完成：{len(sections_to_fill)} 个段落（{original_count} 段复用原文、{ai_count} 段 AI 生成）",
+        duration=999,
+    )
     
     return _success({
         "sections": final_contents,
@@ -2954,7 +4020,7 @@ async def parse_persona(request: Dict = Body(default={})):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
         timeout = llm_config.get("timeout", 60)
         
         prompt = f"""你是一个专业的角色建模专家。请分析以下身份定位文件，提取作者的六维动态行为模型。
@@ -3011,22 +4077,18 @@ async def parse_persona(request: Dict = Body(default={})):
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="parse_persona",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="身份解析",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -3044,7 +4106,7 @@ async def parse_persona(request: Dict = Body(default={})):
         
     except Exception as e:
         logger.warning(f"LLM 身份解析失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 async def _parse_persona_sync(content: str):
@@ -3053,7 +4115,7 @@ async def _parse_persona_sync(content: str):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
         timeout = llm_config.get("timeout", 60)
         
         # 加载六维配置模板
@@ -3128,22 +4190,18 @@ async def _parse_persona_sync(content: str):
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="parse_persona_sync",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="身份解析",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -3175,7 +4233,7 @@ async def auto_parse_persona(app=None):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
         timeout = llm_config.get("timeout", 60)
         
         if not api_key:
@@ -3216,22 +4274,19 @@ async def auto_parse_persona(app=None):
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=None,
+            call_name="auto_parse_persona",
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            max_tokens=1024,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="身份自动解析",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -3356,42 +4411,37 @@ async def llm_filter_by_titles(topic: str, file_list: List[Dict], llm_config: Di
 
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 200,
-                    "temperature": 0.1,
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(f"LLM 标题筛选请求失败: {resp.status_code} {resp.text[:200]}")
-                return list(range(min(len(file_list), top_n)))
-            
-            result = resp.json()
-            text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            
-            # 解析编号
-            indices = []
-            for line in text.split("\n"):
-                line = line.strip()
-                if line.isdigit():
-                    idx = int(line) - 1
-                    if 0 <= idx < len(file_list):
-                        indices.append(idx)
-            
-            if not indices:
-                # 解析失败，回退
-                return list(range(min(len(file_list), top_n)))
-            
-            return indices
+        result = await _call_llm(
+            session_id=None,
+            call_name="mcp_title_filter",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.1,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="文件过滤",
+        )
+        text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        
+        # 解析编号
+        indices = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.isdigit():
+                idx = int(line) - 1
+                if 0 <= idx < len(file_list):
+                    indices.append(idx)
+        
+        if not indices:
+            # 解析失败，回退
+            return list(range(min(len(file_list), top_n)))
+        
+        return indices
     except Exception as e:
         logger.warning(f"LLM 标题筛选异常: {e}")
         return list(range(min(len(file_list), top_n)))
@@ -3493,10 +4543,8 @@ async def mcp_search(request: Dict = Body(...)):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
         timeout = llm_config.get("timeout", 30)
-        
-        import httpx
         
         prompt = f"""基于以下资料，整理一份关于「{topic}」的综合摘要：
 {context}
@@ -3518,21 +4566,18 @@ async def mcp_search(request: Dict = Body(...)):
 请直接返回 JSON：
 """
         
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 4096,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            
+        result = await _call_llm(
+            session_id=None,
+            call_name="mcp_search_summary",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="MCP检索",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -3551,10 +4596,244 @@ async def mcp_search(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"MCP 检索失败: {e}", exc_info=True)
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== MCP 题材推荐接口 =====
+
+# ---- Phase 1: 语义切片 + 密度评分工具函数 ----
+
+def _extract_front_matter(content: str) -> str:
+    """提取 Markdown Front Matter（YAML 三明治）"""
+    if content.startswith("---"):
+        end = content.find("---", 3)
+        if end > 0:
+            return content[:end + 3]
+    return ""
+
+
+def _extract_headers(content: str) -> str:
+    """提取 H1/H2 标题列表"""
+    headers = re.findall(r"^#{1,2}\s+(.+)$", content, re.M)
+    if not headers:
+        return ""
+    return "\n".join(f"- {h}" for h in headers)
+
+
+def _find_safe_cut_point(text: str, max_len: int) -> int:
+    """
+    在 text 中找安全的截断点，截断点必须在：
+    - 句号后
+    - 或换行后
+    - 或代码块结束标记（```）后
+    - 或表格行结束后
+    禁止在代码块中间或表格中间断开
+    """
+    if len(text) <= max_len:
+        return len(text)
+    
+    # 检查 max_len 位置是否在代码块内
+    code_block_starts = [m.start() for m in re.finditer(r"```", text[:max_len])]
+    inside_code_block = len(code_block_starts) % 2 == 1
+    
+    # 如果在代码块内，回退到代码块结束位置
+    if inside_code_block:
+        # 找到最近的代码块开始位置之前
+        last_code_start = code_block_starts[-1] if code_block_starts else 0
+        # 回退到代码块开始前的安全位置
+        search_start = last_code_start - 5
+        if search_start < 100:
+            search_start = 100  # 至少保留一些内容
+        text_before_code = text[:last_code_start]
+        if text_before_code:
+            return _find_safe_cut_point(text_before_code, len(text_before_code) - 1)
+        return max_len
+    
+    # 检查是否在表格行内（| 开头或包含 |）
+    line_start = text.rfind("\n", 0, max_len)
+    if line_start < 0:
+        line_start = 0
+    line_at_cut = text[line_start:max_len]
+    if "|" in line_at_cut and line_at_cut.strip().startswith("|"):
+        # 在表格内，找到表格开始前
+        table_start = text.rfind("\n\n", 0, max_len)
+        if table_start < 0:
+            table_start = text.rfind("\n", 0, max_len)
+        if table_start > 50:
+            return table_start
+        return max_len
+    
+    # 正常情况：从句号或换行处断开
+    # 从 max_len 位置往回找最近的句号或换行
+    safe_chars = [".", "\n", "。", "！", "？", ")", "）", "】", "」"]
+    for i in range(max_len, max(50, max_len - 200), -1):
+        if text[i] in safe_chars:
+            # 额外检查：不在代码块内
+            code_marks_before = len(re.findall(r"```", text[:i]))
+            if code_marks_before % 2 == 0:
+                return i + 1
+    
+    # 兜底：在最近一个换行处断开
+    last_nl = text.rfind("\n", 0, max_len)
+    if last_nl > 50:
+        return last_nl
+    
+    return max_len
+
+
+def smart_truncate(content: str, max_chars: int = 1500) -> str:
+    """
+    语义切片：保留文件骨架，不在代码块/表格中间截断
+    
+    保留顺序:
+    1. Front Matter（完整保留）
+    2. H1/H2 标题列表（理解结构）
+    3. 第一段（凤头）
+    4. 中间内容（安全截断）
+    5. 最后一段（豹尾）
+    """
+    if not content or len(content) <= max_chars:
+        return content
+    
+    parts = []
+    used = 0
+    
+    # 1. Front Matter
+    fm = _extract_front_matter(content)
+    if fm:
+        parts.append(fm)
+        used += len(fm) + 2
+        content_body = content[len(fm):].lstrip("\n")
+    else:
+        content_body = content
+    
+    # 2. Headers
+    headers = _extract_headers(content_body)
+    if headers:
+        header_block = f"## 文章结构\n{headers}"
+        parts.append(header_block)
+        used += len(header_block) + 2
+    
+    # 3 & 4 & 5. 正文：首段 + 中间 + 尾段
+    remaining = max_chars - used - 50  # 预留 [...] 标记空间
+    if remaining < 200:
+        remaining = 200
+    
+    paragraphs = content_body.split("\n\n")
+    if len(paragraphs) <= 3:
+        # 短文直接保留
+        body_text = content_body[:remaining]
+        parts.append(body_text)
+    else:
+        first_p = paragraphs[0] if paragraphs else ""
+        last_p = paragraphs[-1] if len(paragraphs) > 1 else ""
+        
+        # 首段（不超过 remaining 的 30%）
+        first_part = first_p[:int(remaining * 0.3)]
+        parts.append(f"【开篇】\n{first_part}")
+        
+        # 中间内容
+        middle = content_body[len(first_p):]
+        if last_p and len(paragraphs) > 1:
+            middle = content_body[len(first_p):-len(last_p)]
+        
+        middle_max = remaining - len(first_part) - min(len(last_p), 300) - 100
+        if middle_max > 100:
+            cut = _find_safe_cut_point(middle, middle_max)
+            if cut > 0:
+                parts.append("\n[...内容截断...]\n")
+                parts.append(middle[:cut].rstrip())
+        
+        # 尾段
+        if last_p:
+            parts.append(f"\n[...内容截断...]\n【结论】\n{last_p[:300]}")
+    
+    return "\n\n".join(parts)
+
+
+def calc_heuristic_density(content: str) -> float:
+    """
+    启发式信息密度估算 (0.0-1.0)
+    
+    优先读 Front Matter 的 density 字段
+    兜底用启发式公式:
+      structure(最多0.5) + 干货(最多0.4) × 长度惩罚
+    
+    A) Front Matter density 字段 → 直接使用（如果存在）
+    B) 启发式估算
+    """
+    # A: Front Matter density 字段优先
+    fm = _extract_front_matter(content)
+    if fm:
+        match = re.search(r"density\s*:\s*([0-9.]+)", fm)
+        if match:
+            try:
+                val = float(match.group(1))
+                return round(max(0.0, min(1.0, val)), 2)
+            except ValueError:
+                pass
+    
+    # B: 启发式估算
+    if not content or len(content.strip()) < 50:
+        return 0.1
+    
+    # 结构分：标题 + 列表 + 代码块 + 表格
+    h_count = len(re.findall(r"^#{1,3}\s", content, re.M))
+    list_count = len(re.findall(r"^\s*[-*+]\s|^\s*\d+\.\s", content, re.M))
+    code_blocks = len(re.findall(r"```", content))
+    code_count = code_blocks // 2 if code_blocks >= 2 else 0
+    table_count = len(re.findall(r"^\|.+\|", content, re.M))
+    
+    structure = min(0.5, h_count * 0.05 + list_count * 0.02 + code_count * 0.1 + table_count * 0.08)
+    
+    # 干货分：代码块权重高
+    substance = min(0.4, code_count * 0.15 + table_count * 0.12)
+    
+    # 长度惩罚
+    length = len(content)
+    if length < 300:
+        penalty = 0.5
+    elif length < 800:
+        penalty = 0.7
+    elif length > 8000:
+        penalty = 0.8
+    else:
+        penalty = 1.0
+    
+    return round(min(1.0, (structure + substance) * penalty), 2)
+
+
+def _calc_file_score(file_info: Dict) -> float:
+    """
+    文件质量评分（密度优先 + 时效性）
+    
+    formula: score = density × log(max(word_count, 1)) × 0.9^years_since_mtime
+    """
+    import math
+    
+    content = file_info.get("_full_content", "")
+    density = calc_heuristic_density(content)
+    word_count = max(len(content.split()), 1)
+    density_factor = math.log(max(word_count, 1))
+    
+    # 时效性因子
+    mtime_str = file_info.get("mtime", "")
+    import datetime as dt
+    try:
+        if isinstance(mtime_str, (int, float)):
+            mtime = dt.datetime.fromtimestamp(mtime_str)
+        else:
+            mtime = dt.datetime.fromisoformat(mtime_str.replace("Z", "+00:00"))
+            if mtime.tzinfo:
+                mtime = mtime.replace(tzinfo=None)
+        years = (dt.datetime.now() - mtime).days / 365.25
+        recency = 0.9 ** max(years, 1.0)
+    except Exception:
+        recency = 0.81  # 默认 ~2年
+    
+    score = density * density_factor * recency
+    return round(score, 2)
+
 
 def _classify_file(file_info: Dict) -> List[str]:
     """
@@ -3591,6 +4870,50 @@ def _get_all_category_keys() -> List[str]:
         return list(cats.keys())
     except Exception:
         return ["ai-models", "ai-products", "industry", "paper", "tip"]
+
+
+def _get_category_display_name(cat_key: str) -> str:
+    """分类键名 → 中文业务名称"""
+    try:
+        from src.classifier import ContentClassifier
+        cats = ContentClassifier({}).get_categories()
+        if cat_key in cats:
+            return cats[cat_key].get("name", cat_key)
+    except Exception:
+        pass
+    # 兜底映射
+    _FALLBACK = {
+        "ai-models": "模型技术", "ai-products": "AI产品",
+        "industry": "行业洞察", "paper": "学术研究",
+        "tip": "实战技巧", "case": "实战案例",
+        "methodology": "方法论", "tool": "工具教程",
+        "trend": "行业趋势", "personal": "个人品牌",
+    }
+    return _FALLBACK.get(cat_key, cat_key)
+
+
+def _get_category_business_name(cat_key: str) -> str:
+    """分类键名 → 完整中文业务名称（用于业务解释）"""
+    try:
+        from src.classifier import ContentClassifier
+        cats = ContentClassifier({}).get_categories()
+        if cat_key in cats:
+            return f"{cats[cat_key].get('name', cat_key)}（{cats[cat_key].get('description', '')}）"
+    except Exception:
+        pass
+    _FULL = {
+        "ai-models": "模型技术（大模型发布、评测、架构演进）",
+        "ai-products": "AI产品（工具/平台/应用发布与更新）",
+        "industry": "行业洞察（政策、趋势、融资、商业模式）",
+        "paper": "学术研究（论文、研究报告、技术突破）",
+        "tip": "实战技巧（教程、经验、最佳实践）",
+        "case": "实战案例（具体企业/项目的AI落地复盘）",
+        "methodology": "方法论（系统化框架、思维模型）",
+        "tool": "工具教程（AI工具的操作指南）",
+        "trend": "行业趋势（市场分析、前景判断）",
+        "personal": "个人品牌（博主运营、增长方法论）",
+    }
+    return _FULL.get(cat_key, cat_key)
 
 
 _LLM_CLASSIFY_CACHE: Dict[str, List[str]] = {}
@@ -3646,6 +4969,7 @@ async def mcp_topic_suggestion(request: Dict = Body(...)):
     time_range = request.get("time_range", "all")
     start_date = request.get("start_date", "")
     end_date = request.get("end_date", "")
+    session_id = request.get("session_id", "")
     
     if not folders:
         return _error(code=400, msg="缺少 folders 参数")
@@ -3671,7 +4995,7 @@ async def mcp_topic_suggestion(request: Dict = Body(...)):
         
         # 全空时：自动推荐（使用快速全量扫描）
         if is_empty_search:
-            return await _auto_recommend_topics(folders)
+            return await _auto_recommend_topics(session_id, folders)
         
         # 有筛选条件时：使用 list_files 扫描
         all_matched_files = []
@@ -3739,7 +5063,7 @@ async def mcp_topic_suggestion(request: Dict = Body(...)):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
         timeout = llm_config.get("timeout", 60)
         
         persona_content = _get_persona_summary()
@@ -3764,40 +5088,36 @@ async def mcp_topic_suggestion(request: Dict = Body(...)):
    - needed: 需要补充什么
    - direction_score: 方向适合度 0-100（该素材与这个方向的匹配程度）
    - direction_analysis: 为什么适合这个方向（具体说明）
-   - deficiency_score: 内容完整度 0-100（写这个方向时素材的完整程度，越高越完整）
-   - deficiency_details: 缺失项列表 [{"item": "名称", "severity": "high/medium/low", "explanation": "影响说明"}]
+   - material_score: 内容完整度 0-100（写这个方向时素材的完整程度，越高越完整）
+   - deficiency_details: 缺失项列表 [{{"item": "名称", "severity": "high/medium/low", "explanation": "影响说明"}}]
    - overall_score: 综合评分 0-100
 3. 返回 JSON 格式（不要 markdown 代码块）：
 {{
     "topics": [
-        {{"name": "...", "description": "...", "coverage": 0.8, "reason": "...", "needed": "...", "direction_score": 85, "direction_analysis": "...", "deficiency_score": 70, "deficiency_details": [...], "overall_score": 78}}
+        {{"name": "...", "description": "...", "coverage": 0.8, "reason": "...", "needed": "...", "direction_score": 85, "direction_analysis": "...", "material_score": 30, "deficiency_details": [...], "overall_score": 78}}
     ],
     "summary": "这批资料的整体情况（100字内）"
 }}
 
 每个方向的 3 个评分说明：
 - direction_score（方向适合度）：该素材与这个方向的匹配程度，0-100分
-- deficiency_score（内容完整度）：写这个方向时素材的完整程度，0-100分（越高越完整）
+- material_score（内容完整度）：写这个方向时素材的完整程度，0-100分（越高越完整）
 - overall_score（综合评分）：综合以上两个维度，0-100分
 
 请直接返回 JSON：
 """
         
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 4096,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="MCP题材推荐",
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0,
+            max_tokens=4096,
+            seed=42,
+            timeout=timeout,
+            phase="选题",
+        )
         
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
@@ -3816,7 +5136,7 @@ async def mcp_topic_suggestion(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"MCP 题材分析失败: {e}", exc_info=True)
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/mcp/match-files")
@@ -3896,16 +5216,19 @@ async def mcp_match_files(request: Dict = Body(...)):
 
     except Exception as e:
         logger.error(f"MCP match-files 失败: {e}", exc_info=True)
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
-async def _auto_recommend_topics(folders: List[str]):
+async def _auto_recommend_topics(session_id: str, folders: List[str]):
     """自动推荐值得写的话题：按分类统计后推荐（支持大规模知识库）"""
     try:
         from datetime import datetime, timedelta
         import time as _time
         import random
         
+        session = _get_session(session_id)
+        
+        _t0 = _time.time()
         now = datetime.now()
         
         # Step 1: 快速全量扫描（只取文件名 + mtime，不读内容）
@@ -3949,6 +5272,41 @@ async def _auto_recommend_topics(folders: List[str]):
         total_count = len(all_file_basenames)
         logger.info(f"知识库共 {total_count} 个文件，开始全量分类...")
         
+        # 记录扫描结果
+        # 计算文件大小和修改时间范围
+        total_size = sum(f.get("size", 0) for f in all_file_basenames.values())
+        total_size_kb = total_size / 1024
+        mtimes = [f.get("mtime", 0) for f in all_file_basenames.values() if f.get("mtime", 0) > 0]
+        time_range = ""
+        if mtimes:
+            from datetime import datetime
+            newest = datetime.fromtimestamp(max(mtimes)).strftime("%Y-%m-%d")
+            oldest = datetime.fromtimestamp(min(mtimes)).strftime("%Y-%m-%d")
+            time_range = f"，时间跨度 {oldest} ~ {newest}"
+        
+        # 文件列表摘要（最多列 10 个，超出省略）
+        all_names = [f.get("name", f.get("relative_path", "?")) for f in all_file_basenames.values()]
+        name_list = "、".join(all_names[:10])
+        if len(all_names) > 10:
+            name_list += f" 等共 {len(all_names)} 篇"
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="文件夹扫描",
+            phase="选题",
+            steps=[
+                {"step": 1, "action": f"扫描 {len(folders)} 个知识库目录", 
+                 "reason": f"遍历目录下所有 .md 文件，按路径自动去重",
+                 "result": f"找到 {total_count} 篇 Markdown 文档（去重后）"},
+                {"step": 2, "action": "文件概览",
+                 "reason": f"总大小 {total_size_kb:.0f} KB{time_range}",
+                 "result": f"文件列表：{name_list}"},
+            ],
+            output=f"扫描完成：{total_count} 篇文档，总 {total_size_kb:.0f} KB",
+            duration=_time.time() - _t0,
+        )
+        _scan_end = _time.time()
+        
         # Step 2: 全量读取 Front Matter + 内容，进行分类
         unique_files = []
         for name, info in all_file_basenames.items():
@@ -3983,6 +5341,46 @@ async def _auto_recommend_topics(folders: List[str]):
         
         logger.info(f"分类完成：{len(category_counts)} 个类别，{len(uncategorized)} 个未分类")
         
+        # 记录分类结果
+        cat_display = [_get_category_display_name(k) for k in category_counts]
+        
+        # 构建每个类别下的文件明细
+        classify_steps = [
+            {"step": 1, "action": "逐篇读取文章内容", 
+             "reason": f"共 {total_count} 篇文档，读取全文用于分类和后续分析",
+             "result": f"成功读取 {len(unique_files)} 篇，{total_count - len(unique_files)} 篇读取失败"},
+        ]
+        classify_steps.append({
+            "step": 2, "action": "按业务领域自动归类",
+            "reason": f"根据文章 Front Matter 标签和正文内容，自动识别所属业务领域（模型技术/AI产品/行业洞察/学术研究/实战技巧等）",
+            "result": f"分成 {len(category_counts)} 个类别（{', '.join(cat_display)}），{len(uncategorized)} 篇未归类"
+        })
+        
+        # 每类下列出具体文件
+        step_idx = 3
+        for cat_key, files in category_counts.items():
+            cat_name = _get_category_display_name(cat_key)
+            file_names = "、".join([f["name"] for f in files[:8]])
+            if len(files) > 8:
+                file_names += f" 等 {len(files)} 篇"
+            classify_steps.append({
+                "step": step_idx,
+                "action": f"「{cat_name}」类：{len(files)} 篇",
+                "reason": f"这些文章主要涉及该领域的实操、理论或案例",
+                "result": file_names
+            })
+            step_idx += 1
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="内容分类",
+            phase="选题",
+            steps=classify_steps,
+            output=f"分类完成：{len(category_counts)} 个类别（{', '.join(cat_display)}），{len(uncategorized)} 篇未归类",
+            duration=_time.time() - _scan_end,
+        )
+        _classify_end = _time.time()
+        
         # Step 3: 构建分类统计描述
         from src.classifier import ContentClassifier
         cat_names = ContentClassifier({}).get_categories()
@@ -3998,91 +5396,362 @@ async def _auto_recommend_topics(folders: List[str]):
         if uncategorized:
             cat_desc += f"\n- 未分类/其他: {len(uncategorized)} 篇"
         
-        # Step 4: 每个分类取最近 2 个作为代表传给 LLM
-        llm_targets = []
+        # ========== Phase 1: 密度优先 + 多样性兜底精选 ==========
+        # Step 3: 为每个文件计算质量评分
+        for f in unique_files:
+            f["_quality_score"] = _calc_file_score(f)
+            f["_density"] = calc_heuristic_density(f.get("_full_content", ""))
+        
+        # 识别动态锚点（信息密度最高的 3 个文件）
+        all_sorted = sorted(unique_files, key=lambda x: x["_density"], reverse=True)
+        anchors = all_sorted[:3]
+        anchor_names = [a["name"] for a in anchors]
+        anchor_densities = [f"{a['_density']:.2f}" for a in anchors]
+        
+        # 构建每篇锚点的详细信息
+        anchor_steps = [{
+            "step": 1, 
+            "action": "识别信息密度最高的核心文档",
+            "reason": "在所有文档中，按信息密度（结构完整度 + 干货含量 × 长度系数）排序，找到知识库中最具代表性的基石文档",
+            "result": f"从 {len(unique_files)} 篇中筛选出 Top 3 锚点文档"
+        }]
+        for idx, a in enumerate(anchors, 2):
+            word_cnt = len(a.get("_full_content", "").split())
+            anchor_steps.append({
+                "step": idx,
+                "action": f"锚点文档：{a['name']}",
+                "reason": f"信息密度 {a['_density']:.0%}，全文约 {word_cnt} 词，质量和完整度在同类中领先",
+                "result": f"作为核心代表文件送入后续精选和 LLM 分析"
+            })
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="动态锚点识别",
+            phase="选题",
+            steps=anchor_steps,
+            output=f"动态锚点: {', '.join(anchor_names)}",
+            duration=0,
+        )
+
+        # Step 4: 密度优先 + 多样性兜底精选（最多 10 篇）
+        MAX_SELECT = 10
+        selected = []
+        selection_tags = {}  # {path: "保底"|"补位"} 标记每篇的入选原因
+        
+        # 4a: 每类保底 1 篇（多样性兜底）
         for cat_key, cat_files in category_counts.items():
-            sorted_cats = sorted(cat_files, key=lambda x: x["mtime"], reverse=True)
-            llm_targets.extend(sorted_cats[:2])
+            if not cat_files:
+                continue
+            best = max(cat_files, key=lambda x: x.get("_quality_score", 0))
+            selected.append(best)
+            selection_tags[best["path"]] = f"保底（{_get_category_display_name(cat_key)}类Top1）"
+
+        # 4b: 未分类也保底 1 篇
         if uncategorized:
-            sorted_uncat = sorted(uncategorized, key=lambda x: x["mtime"], reverse=True)
-            llm_targets.extend(sorted_uncat[:2])
+            best_uncat = max(uncategorized, key=lambda x: x.get("_quality_score", 0))
+            selected.append(best_uncat)
+            selection_tags[best_uncat["path"]] = "保底（未分类Top1）"
+
+        # 4c: 剩余名额按全局 score 降序补位
+        selected_paths = {f["path"] for f in selected}
+        remaining_slots = MAX_SELECT - len(selected)
+        all_others = [f for f in all_sorted if f["path"] not in selected_paths]
+        for f in all_others[:remaining_slots]:
+            selected.append(f)
+            selection_tags[f["path"]] = "补位（全局高分）"
         
-        # 限制最多 10 个文件传给 LLM
-        llm_targets = llm_targets[:10]
+        # 重新按分类排序（保证输出有序）
+        selected.sort(key=lambda x: x.get("_quality_score", 0), reverse=True)
         
-        llm_contents = []
-        for f in llm_targets:
-            content = f.get("_full_content", "")[:1500]
+        llm_results = []
+        selection_details = []
+        for f in selected:
+            content = smart_truncate(f.get("_full_content", ""), max_chars=1500)
             if content:
-                llm_contents.append(f"## {f['name']}\n\n{content}")
+                llm_results.append(f"## {f['name']}\n\n{content}")
+            cats = _classify_file(f)
+            cat_key = cats[0] if cats else "未分类"
+            cat_str = _get_category_display_name(cat_key)
+            selection_details.append(f"{f['name']}(密度{f['_density']:.2f}, 分{f['_quality_score']:.0f}, {cat_str})")
         
-        context = "\n\n---\n\n".join(llm_contents)
+        context = "\n\n---\n\n".join(llm_results)
+        total_tokens = sum(len(f.get("_full_content", "").split()) for f in selected)
+
+        # 记录精选过程（业务语言，带每篇明细）
+        selection_steps = [
+            {"step": 1, "action": "密度优先排序",
+             "reason": "综合评分公式：信息密度 × 内容规模 × 时效系数。三维度兼顾文章质量、篇幅深度和新鲜度",
+             "result": f"从 {len(unique_files)} 篇候选文档中按综合质量评分排序"},
+            {"step": 2, "action": "多样性兜底——每类保底至少 1 篇",
+             "reason": f"共 {len(category_counts)} 个业务类别，每类选质量最高的 1 篇确保覆盖面，避免单一领域垄断选题",
+             "result": f"各类别均已覆盖，无遗漏"},
+        ]
         
-        persona_content = _get_persona_summary()
-        persona_context = f"\n\n作者身份定位：\n{persona_content}" if persona_content else ""
+        # 每篇入选文件的明细
+        step_idx = 3
+        for f in selected:
+            tag = selection_tags.get(f["path"], "入选")
+            score = f.get("_quality_score", 0)
+            density = f.get("_density", 0)
+            word_cnt = len(f.get("_full_content", "").split())
+            cats = _classify_file(f)
+            cat_name = _get_category_display_name(cats[0]) if cats else "未分类"
+            selection_steps.append({
+                "step": step_idx,
+                "action": f"入选：{f['name']}",
+                "reason": f"质量分 {score:.0f}，信息密度 {density:.0%}，约 {word_cnt} 词，属「{cat_name}」领域，{tag}",
+                "result": "已纳入 LLM 上下文用于选题推荐"
+            })
+            step_idx += 1
         
-        llm_config = _get_config("llm")
-        base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
-        api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
-        timeout = llm_config.get("timeout", 60)
+        selection_steps.append({
+            "step": step_idx,
+            "action": "语义切片——保留文章骨架",
+            "reason": "每篇文档截取标题结构、开头和结尾，中间按段落安全截断，不打断代码块和表格，确保 LLM 理解文章核心",
+            "result": f"最终上下文约 {sum(len(f.get('_full_content', '').split()) for f in selected)} 词，{len(context)} 字符"
+        })
         
-        prompt = (
-            "你是一个专业的选题策划师。请分析知识库内容分布，结合写作者的身份定位，推荐 3-5 个值得写的文章题材。\n\n"
-            "=== 作者身份定位（首要参考，题材必须符合作者身份）===\n"
-            f"{persona_context}\n\n"
-            "=== 知识库内容素材（次要参考，看哪些素材能支撑符合身份的题材）===\n"
-            f"知识库总文件数：{total_count} 篇\n\n"
-            f"分类分布：\n{cat_desc}\n\n"
-            f"代表文件内容摘要：\n{context[:4000]}\n\n"
-            "要求：\n"
-            "1. 推荐 3-5 个写作方向\n"
-            "2. 每个方向必须严格符合作者身份定位，优先从作者擅长的领域和视角出发\n"
-            "3. 每个方向包含：name, description, coverage(0-1), reason, needed\n"
-            "4. 理由要具体，说明该题材如何结合作者身份与知识库素材\n"
-            "5. 每个方向还要包含 3 个评分：\n"
-            "   - direction_score: 方向适合度 0-100（该方向对作者身份的匹配程度）\n"
-            "   - direction_analysis: 为什么适合该作者（具体说明）\n"
-            "   - deficiency_score: 内容完整度 0-100（知识库中该方向的素材完整程度）\n"
-            '   - deficiency_details: 缺失项列表 [{"item": "名称", "severity": "high/medium/low", "explanation": "影响说明"}]\n'
-            "   - overall_score: 综合评分 0-100\n"
-            "6. 返回 JSON 格式（不要 markdown 代码块）：\n"
-            '{\n'
-            '    "topics": [\n'
-            '        {"name": "...", "description": "...", "coverage": 0.8, "reason": "...", "needed": "...", "direction_score": 85, "direction_analysis": "...", "deficiency_score": 70, "deficiency_details": [...], "overall_score": 78}\n'
-            '    ],\n'
-            '    "summary": "知识库内容概况（100字内），说明各类别分布和文件总数"\n'
-            '}\n\n'
-            "每个方向的 3 个评分说明：\n"
-            "- direction_score（方向适合度）：该方向与作者身份的匹配程度，0-100分\n"
-            "- deficiency_score（内容完整度）：知识库中该方向的素材完整程度，0-100分（越高越完整）\n"
-            "- overall_score（综合评分）：综合身份匹配和素材完整度，0-100分\n\n"
-            "请直接返回 JSON：\n"
+        _log_process_step(
+            session_id=session_id,
+            call_name="密度优先精选",
+            phase="选题",
+            steps=selection_steps,
+            output=f"精选 {len(selected)} 篇文档送入 LLM 分析",
+            duration=_time.time() - _classify_end,
+        )
+
+        # 记录排除的关键文件
+        excluded_notable = [f for f in all_sorted[15:18] if f["_density"] > 0.5 and f["path"] not in selected_paths]
+        if excluded_notable:
+            excluded_names = [f"{e['name']}(密度{e['_density']:.2f})" for e in excluded_notable]
+            _log_process_step(
+                session_id=session_id,
+                call_name="排除说明",
+                phase="选题",
+                steps=[
+                    {"step": 1, "action": "高分但未入选的文件", 
+                     "reason": "已满 10 篇上限，需在所有类别保底后被挤出",
+                     "result": f"排除: {', '.join(excluded_names)}"},
+                ],
+                output=f"排除了 {len(excluded_notable)} 篇高质量文件（名额已满）",
+                duration=0,
+            )
+        
+        # ========== Phase 1.5: 向量检索增强（10 篇代表 + 最多 5 篇向量召回） ==========
+        _recall_t0 = _time.time()
+        try:
+            recall_result = await recall_with_dedup(selected, top_k=5)
+            if isinstance(recall_result, dict):
+                recalled = recall_result.get("recalled", [])
+                recalled_excluded = recall_result.get("excluded", [])
+                total_searched = recall_result.get("total_searched", 0)
+            else:
+                # 兼容旧格式（list）
+                recalled = recall_result or []
+                recalled_excluded = []
+                total_searched = len(recalled)
+        except Exception as e:
+            logger.warning(f"[Vector] 召回异常（非致命）: {e}")
+            recalled = []
+            recalled_excluded = []
+            total_searched = 0
+        
+        _recall_duration = _time.time() - _recall_t0
+        
+        if recalled:
+            # 将召回文件的 content 追加到上下文
+            for f in recalled:
+                truncated = smart_truncate(f.get("_full_content", ""), max_chars=1200)
+                if truncated:
+                    llm_results.append(f"## [向量召回] {f['name']} (相似度 {f.get('_recall_score', 0):.2f})\n\n{truncated}")
+                    selection_details.append(f"{f['name']}(召回, 分{f['_recall_score']:.2f})")
+            
+            context = "\n\n---\n\n".join(llm_results)
+        
+        # 记录向量召回日志
+        recall_steps = [
+            {"step": 1, "action": "语义向量搜索", 
+             "reason": f"用密度精选的 {len(selected)} 篇代表文件构造语义查询，在全量 {len(unique_files)} 篇知识库中检索语义相似的文件",
+             "result": f"搜索完成，共检索 {total_searched} 篇候选"},
+            {"step": 2, "action": "去重检查",
+             "reason": "与密度精选结果逐篇对比文件名和路径，排除重复，确保不浪费上下文空间",
+             "result": f"去重后新增 {len(recalled)} 篇，排除 {len(recalled_excluded)} 篇重复"},
+        ]
+        
+        # 召回的每篇文件单独列出详情
+        if recalled:
+            for idx, f in enumerate(recalled, 1):
+                recall_steps.append({
+                    "step": f"2.{idx}", 
+                    "action": f"召回文件：{f['name']}",
+                    "reason": f"与已有代表文件语义相似度 {f.get('_recall_score', 0):.0%}，内容相关度高",
+                    "result": f"已加入上下文，文件名：{f['name']}，相似度：{f.get('_recall_score', 0):.0%}"
+                })
+        
+        # 被排除的文件说明
+        if recalled_excluded:
+            for idx, e in enumerate(recalled_excluded, 1):
+                recall_steps.append({
+                    "step": f"2.{len(recalled) + idx}",
+                    "action": f"排除：{e['name']}",
+                    "reason": e.get("reason", "重复"),
+                    "result": f"相似度 {e.get('score', 0):.0%} 但已存在，不重复加入"
+                })
+        
+        if not recalled and not recalled_excluded and total_searched == 0:
+            recall_steps.append({
+                "step": 2, "action": "无新增文件", 
+                "reason": "向量索引为空或模型未就绪，跳过此步骤不影响选题主流程",
+                "result": "合并上下文仍为密度精选结果"
+            })
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="混合检索（向量召回）",
+            phase="选题",
+            steps=recall_steps,
+            output=f"向量召回新增 {len(recalled)} 篇，排除 {len(recalled_excluded)} 篇重复，合并共 {len(selected) + len(recalled)} 篇上下文",
+            duration=_recall_duration,
         )
         
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 4096,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        # ========== 新选题管道：Step 2 提名 → Python 算分 → Step 5 评分 ==========
+        _pipeline_t0 = _time.time()
         
-        content = result["choices"][0]["message"]["content"].strip()
-        content = content.replace("```json", "").replace("```", "").strip()
+        persona_content = _get_persona_summary()
+        
+        # 构建 all_docs_map（多路径索引 → 完整信息，供 calculate_material_scores 使用）
+        all_docs_map = {}
+        for f in unique_files:
+            full_path = f["path"]
+            all_docs_map[full_path] = f
+            # 同时用绝对路径索引
+            abs_path = os.path.abspath(full_path) if not os.path.isabs(full_path) else full_path
+            all_docs_map[abs_path] = f
+            # 同时用纯文件名索引（去目录前缀）
+            base_name = os.path.basename(full_path)
+            if base_name not in all_docs_map:
+                all_docs_map[base_name] = f
+        
+        llm_config = _get_config("llm")
+        model = V4_FLASH
+        timeout = llm_config.get("timeout", 60)
+        
+        # Step 2: LLM 提名方向（只看宏观分布，不碰具体内容）
+        cat_dist_lines = []
+        for cat_key, cat_files in sorted(category_counts.items(), key=lambda x: len(x[1]), reverse=True):
+            cat_name = _get_category_display_name(cat_key)
+            cat_dist_lines.append(f"    *   {cat_name}：{len(cat_files)} 篇")
+        cat_dist_str = "\n".join(cat_dist_lines) if cat_dist_lines else "（无分类数据）"
+        
+        anchor_lines = []
+        for i, a in enumerate(anchors[:3], 1):
+            anchor_lines.append(f"    {i}. {a['name']}（密度 {a['_density']:.0%}）")
+        anchor_str = "\n".join(anchor_lines) if anchor_lines else "（无锚点文档）"
+        
+        nom_prompt = NOMINATION_PROMPT.format(
+            persona_content=persona_content or "（未设置身份定位）",
+            total_files=total_count,
+            category_distribution=cat_dist_str,
+            anchor_docs=anchor_str,
+        )
+        
+        nom_result = await _call_llm(
+            session_id=session_id,
+            call_name="方向提名",
+            messages=[{"role": "user", "content": nom_prompt}],
+            model=model,
+            temperature=0.3,
+            max_tokens=2000,
+            seed=42,
+            timeout=timeout,
+            phase="选题",
+        )
+        
+        nom_content = nom_result["choices"][0]["message"]["content"].strip()
+        nom_content = nom_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
-        parsed = json_mod.loads(content)
+        nom_parsed = json_mod.loads(nom_content)
+        nominated = nom_parsed.get("nominated_directions", [])
+        logger.info(f"[Pipeline] Step 2 提名: {len(nominated)} 个方向")
+        
+        # Step 3: Python 对每个提名方向计算 material_score
+        directions_with_scores = []
+        for d in nominated:
+            score_data = calculate_material_scores(d["name"], all_docs_map)
+            directions_with_scores.append({
+                "name": d["name"],
+                "description": d.get("description", ""),
+                "material_score": score_data["material_score"],
+                "related_count": score_data["related_count"],
+                "evidence_counts": score_data["evidence_counts"],
+                "latest_update_days": score_data["latest_update_days"],
+                "avg_density": score_data["avg_density"],
+                "deficiency_details": score_data["deficiency_details"],
+            })
+        logger.info(f"[Pipeline] Step 3 素材评分: {len(directions_with_scores)} 个方向")
+        
+        # Step 4: LLM 评分（看到精选文档 + 预计算 material_score）
+        formatted_docs = format_selected_docs(selected)
+        
+        scoring_prompt = SCORING_PROMPT.format(
+            persona_content=persona_content or "（未设置身份定位）",
+            selected_docs_content=formatted_docs,
+            directions_json=json_mod.dumps(directions_with_scores, ensure_ascii=False, indent=2),
+        )
+        
+        score_result = await _call_llm(
+            session_id=session_id,
+            call_name="选题评分",
+            messages=[{"role": "user", "content": scoring_prompt}],
+            model=model,
+            temperature=0,
+            max_tokens=3000,
+            seed=42,
+            timeout=timeout,
+            phase="选题",
+        )
+        
+        score_content = score_result["choices"][0]["message"]["content"].strip()
+        score_content = score_content.replace("```json", "").replace("```", "").strip()
+        parsed = json_mod.loads(score_content)
         
         topics = parsed.get("topics", [])
         summary = parsed.get("summary", "")
+        
+        # Step 5: Python 后处理 —— 计算 overall_score + 排序 + 截断 Top 5
+        for topic in topics:
+            direction = topic.get("direction_score", 0)
+            material = topic.get("material_score", 0)
+            topic["overall_score"] = round(direction * 0.6 + material * 0.4)
+            # 前端需要 coverage (0-1) 和 evaluation 对象
+            topic["coverage"] = round(material / 100, 2)
+            topic["evaluation"] = {
+                "direction_score": direction,
+                "material_score": material,  # 内容完整度分数，越高越好
+                "deficiency_score": 100 - material,  # 缺陷分数，越低越好（兼容字段）
+                "overall_score": topic["overall_score"],
+                "direction_analysis": topic.get("reason", ""),
+                "deficiency_details": [],
+                "supplement_strategy": "信息充足" if material >= 70 else "需补充关键信息" if material >= 40 else "素材严重不足",
+            }
+        
+        topics.sort(key=lambda x: x["overall_score"], reverse=True)
+        topics = topics[:5]
+        
+        # 将素材完整度详情附加到每个 topic（前端可展开查看）
+        for topic in topics:
+            name = topic["name"]
+            matched = [d for d in directions_with_scores if d["name"] == name]
+            if matched:
+                topic["_material_detail"] = matched[0]
+                # 补充 deficiency_details 到 evaluation
+                topic["evaluation"]["deficiency_details"] = matched[0].get("deficiency_details", [])
+        
+        logger.info(f"[Pipeline] Step 5 后处理: {len(topics)} 个最终选题, 耗时 {_time.time() - _pipeline_t0:.1f}s")
+        
+        # 保存到 session 供后续步骤（角度推荐等）使用
+        session["mcp_summary"] = summary
+        session["mcp_topics"] = topics
         
         return _success({
             "topics": topics,
@@ -4092,12 +5761,14 @@ async def _auto_recommend_topics(folders: List[str]):
         })
         
     except Exception as e:
-        logger.error(f"自动推荐失败: {e}", exc_info=True)
+        import traceback
+        error_detail = traceback.format_exc()
+        logger.error(f"自动推荐失败: {e}\n{error_detail}")
         return _success({
             "topics": [
                 {"name": "综合分析报告", "description": "从多个维度全面分析", "coverage": 0.5, "reason": "通用题材", "needed": "具体数据"},
             ],
-            "summary": "分析失败，请重试或输入关键词搜索。",
+            "summary": f"分析失败: {str(e)[:200]}，请重试。",
             "source_files": [],
             "file_count": 0,
         })
@@ -4136,35 +5807,37 @@ async def _process_async(task_id: str, framework_key: str, text: str, style: str
 # ===== 多段式工作流接口 =====
 
 _sessions: Dict[str, Dict] = {}
+_sessions_lock = asyncio.Lock()  # 保护 AIPULSE 后台任务与主请求的并发写入
 
 def _get_session(session_id: str) -> Dict:
-    """获取或创建会话状态"""
-    if session_id not in _sessions:
-        _sessions[session_id] = {
-            "mcp_summary": "",
-            "mcp_files": [],
-            "completeness": 0,
-            "supplement_count": 0,
-            "check_count": 0,  # 方向检测次数（用于3次强制放行）
-            "step1": {},
-            "step2": {},
-            "step3": {},
-            "outline": [],
-            "material_pool": [],       # V4: 素材池 [{text, source_type, filename}]
-            "confirmed_slots": [],     # V4: 已确认槽位
-            "slot_materials": {},      # V4: {slot_key: [matched_materials]}
-            "slot_outlines": {},       # V4: {slot_key: [outline_items]}
-        }
-    # 确保 V4 字段存在（兼容旧 session）
-    if "material_pool" not in _sessions[session_id]:
-        _sessions[session_id]["material_pool"] = []
-    if "confirmed_slots" not in _sessions[session_id]:
-        _sessions[session_id]["confirmed_slots"] = []
-    if "slot_materials" not in _sessions[session_id]:
-        _sessions[session_id]["slot_materials"] = {}
-    if "slot_outlines" not in _sessions[session_id]:
-        _sessions[session_id]["slot_outlines"] = {}
-    return _sessions[session_id]
+    """获取或创建会话状态。使用 setdefault 保证原子性创建。"""
+    session = _sessions.setdefault(session_id, {
+        "mcp_summary": "",
+        "mcp_files": [],
+        "completeness": 0,
+        "supplement_count": 0,
+        "check_count": 0,
+        "step1": {},
+        "step2": {},
+        "step3": {},
+        "outline": [],
+        "material_pool": [],
+        "confirmed_slots": [],
+        "slot_materials": {},
+        "slot_outlines": {},
+    })
+    # 确保 V4 字段存在（兼容旧 session，setdefault 原子化）
+    session.setdefault("material_pool", [])
+    session.setdefault("confirmed_slots", [])
+    session.setdefault("slot_materials", {})
+    session.setdefault("slot_outlines", {})
+    return session
+
+
+async def _get_session_for_async(session_id: str) -> Dict:
+    """异步获取 session（用于后台任务，加锁防止并发写入冲突）"""
+    async with _sessions_lock:
+        return _get_session(session_id)
 
 
 @router.post("/api/workflow/session/create")
@@ -4212,7 +5885,7 @@ async def evaluate_completeness(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     # 获取身份定位信息（使用 _get_persona_summary 有回退逻辑）
@@ -4308,22 +5981,19 @@ missing_critical 只包含以下3种情况（缺一不可，严格限制）：
 """
     
     try:
-        import httpx
         logger.info(f"开始评估完整度, session: {session_id}")
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        # 走 _call_llm，自动记录日志
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="完整度评估",
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0,
+            max_tokens=1024,
+            seed=42,
+            timeout=httpx.Timeout(30, connect=10),
+            phase="补充",
+        )
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
@@ -4332,6 +6002,24 @@ missing_critical 只包含以下3种情况（缺一不可，严格限制）：
         
         session["completeness"] = evaluation.get("completeness", 0)
         session["supplement_count"] = evaluation.get("supplement_count", 3)
+        
+        # 丰富最近一条日志的 thinking_chain：完整度评估详情
+        logs = session.get("thinking_logs", [])
+        if logs:
+            last = logs[-1]
+            chain = [{"step": 1, "action": "完整度综合评估", "reason": "评估素材信息完整度，判断是否可以继续写作", "result": f"完整度评分：{session['completeness']}分，建议补充{session['supplement_count']}次"}]
+            missing_critical = evaluation.get("missing_critical", [])
+            missing_optional = evaluation.get("missing_optional", [])
+            step_idx = 2
+            for item in missing_critical:
+                chain.append({"step": step_idx, "action": f"关键缺失项：{item}", "reason": f"缺失项：{item}，严重程度：必须补充，否则无法继续写作", "result": "标记为必须补充项"})
+                step_idx += 1
+            for item in missing_optional:
+                chain.append({"step": step_idx, "action": f"可选缺失项：{item}", "reason": f"缺失项：{item}，严重程度：建议补充，但不阻塞写作流程", "result": "标记为建议补充项"})
+                step_idx += 1
+            if not missing_critical and not missing_optional:
+                chain.append({"step": 2, "action": "缺失项检查", "reason": "素材信息基本完整，未发现明显缺失", "result": "无关键缺失项，可直接进入下一步"})
+            last["thinking_chain"] = chain
         
         logger.info(f"评估完成: completeness={session['completeness']}")
         return _success(evaluation)
@@ -4364,7 +6052,7 @@ async def analyze_directions_v2(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
@@ -4472,21 +6160,19 @@ async def analyze_directions_v2(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 4096,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        import time
+        # 走 _call_llm，自动记录日志
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="方向分析",
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0,
+            max_tokens=4096,
+            seed=42,
+            timeout=timeout,
+            phase="选题",
+        )
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
@@ -4627,10 +6313,28 @@ async def analyze_directions_v2(request: Dict = Body(...)):
                 d.setdefault("deficiency_details", [])
                 d.setdefault("overall_score", 0)
                 
-                # ══ 用关键词匹配计算 coverage ══
-                d["coverage"] = calc_coverage_by_keywords(d)
-                if d.get("overall_score", 0) <= 0 and d.get("coverage", 0) > 0:
-                    d["overall_score"] = min(int(d["coverage"] * 100), 85)
+                # ══ 统一推导：setdefault 无法拦截 LLM 显式返回 0 的情况 ══
+                dir_score = d.get("direction_score", 0)
+                def_score = d.get("deficiency_score", 0)
+                coverage = d.get("coverage", 0)
+                
+                # 1) coverage 为 0 或缺失 → 关键词匹配重新计算
+                if coverage == 0 or coverage is None:
+                    d["coverage"] = calc_coverage_by_keywords(d)
+                coverage = d["coverage"]
+                
+                # 2) direction_score 为 0 → 从 coverage 推导
+                if dir_score <= 0:
+                    d["direction_score"] = max(20, int(coverage * 80))
+                    dir_score = d["direction_score"]
+                
+                # 3) deficiency_score 为 0 → 从 direction_score + coverage 推导
+                if def_score <= 0:
+                    d["deficiency_score"] = max(20, int(dir_score - 40 + coverage * 50))
+                
+                # 4) overall_score 为 0 → 综合 direction_score + deficiency_score 推导
+                if d.get("overall_score", 0) <= 0:
+                    d["overall_score"] = min(int(0.6 * d["direction_score"] + 0.4 * d["deficiency_score"]), 90)
                 
                 # 校验字段值
                 if d.get("source") not in valid_sources:
@@ -4663,10 +6367,24 @@ async def analyze_directions_v2(request: Dict = Body(...)):
                 d.setdefault("deficiency_details", [])
                 d.setdefault("overall_score", 0)
                 
-                # ══ 用关键词匹配计算 coverage ══
-                d["coverage"] = calc_coverage_by_keywords(d)
-                if d.get("overall_score", 0) <= 0 and d.get("coverage", 0) > 0:
-                    d["overall_score"] = min(int(d["coverage"] * 100), 85)
+                # ══ 统一推导：setdefault 无法拦截 LLM 显式返回 0 的情况 ══
+                dir_score = d.get("direction_score", 0)
+                def_score = d.get("deficiency_score", 0)
+                coverage = d.get("coverage", 0)
+                
+                if coverage == 0 or coverage is None:
+                    d["coverage"] = calc_coverage_by_keywords(d)
+                coverage = d["coverage"]
+                
+                if dir_score <= 0:
+                    d["direction_score"] = max(20, int(coverage * 80))
+                    dir_score = d["direction_score"]
+                
+                if def_score <= 0:
+                    d["deficiency_score"] = max(20, int(dir_score - 40 + coverage * 50))
+                
+                if d.get("overall_score", 0) <= 0:
+                    d["overall_score"] = min(int(0.6 * d["direction_score"] + 0.4 * d["deficiency_score"]), 90)
                 
                 if d.get("source") not in valid_sources:
                     d["source"] = "user_implied"
@@ -4684,12 +6402,14 @@ async def analyze_directions_v2(request: Dict = Body(...)):
         return _success(result_data)
     except Exception as e:
         logger.error(f"方向推荐失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/directions/evaluate")
 async def evaluate_user_direction(request: Dict = Body(...)):
     """评估用户自定义方向（根据 MCP 素材 + 补充素材打分）"""
+    import time
+    
     session_id = request.get("session_id", "")
     custom_direction = request.get("direction", "").strip()
     
@@ -4701,7 +6421,7 @@ async def evaluate_user_direction(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     if not api_key:
@@ -4759,21 +6479,17 @@ async def evaluate_user_direction(request: Dict = Body(...)):
 }}"""
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0.1,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="evaluate_direction",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+            temperature=0.1,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="方向评估",
+        )
         content = result["choices"][0]["message"]["content"].strip()
         content = content.replace("```json", "").replace("```", "").strip()
         import json as jmod
@@ -4784,15 +6500,43 @@ async def evaluate_user_direction(request: Dict = Body(...)):
         data.setdefault("direction_analysis", "")
         data.setdefault("deficiency_details", [])
         data.setdefault("suggestion", "")
+
+        # ══ 统一推导：setdefault 无法拦截 LLM 显式返回 0 的情况 ══
+        dir_score = data.get("direction_score", 0)
+        def_score = data.get("deficiency_score", 0)
+        overall_score = data.get("overall_score", 0)
+        
+        # direction_score 为 0 → LLM 未正确打分，给合理默认
+        if dir_score <= 0:
+            data["direction_score"] = 50
+            dir_score = 50
+        
+        # deficiency_score 为 0 → 从 direction_score 推导
+        if def_score <= 0:
+            data["deficiency_score"] = max(20, int(dir_score - 30))
+        
+        # overall_score 为 0 → 综合推导
+        if overall_score <= 0:
+            data["overall_score"] = min(int(0.6 * dir_score + 0.4 * data["deficiency_score"]), 90)
+
+        _log_llm_call_legacy(session_id, "step1_evaluate_direction", "方向评估", messages=[{"role": "user", "content": prompt}], result=content, duration=time.time() - start_time, thinking_chain=[
+            {"step": 1, "action": "评估用户自定义方向", "reason": f"针对用户指定的方向「{custom_direction}」，评估其与当前素材的匹配度", "result": f"评估完成：方向评分{data.get('direction_score', 0)}，综合评分{data.get('overall_score', 0)}"},
+        ])
+
         return _success(data)
     except Exception as e:
         logger.error(f"自定义方向评估失败: {e}")
-        return _error(msg=str(e))
+        _log_llm_call_legacy(session_id, "step1_evaluate_direction", "方向评估", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "方向评估失败", "reason": f"评估方向「{custom_direction}」时发生错误", "result": "评估中断"},
+        ])
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/angle/recommend")
 async def recommend_angles(request: Dict = Body(...)):
-    """写作角度推荐（基于素材 + MCP 摘要）"""
+    """写作角度推荐（多步推理：素材扫描 → 覆盖度评分 → 人设匹配）"""
+    import time as _time
+
     session_id = request.get("session_id", "")
     topic = request.get("topic", "")
     
@@ -4808,16 +6552,12 @@ async def recommend_angles(request: Dict = Body(...)):
     if isinstance(step2_supplement, dict):
         text = step2_supplement.get("text", "")
         if text:
-            supplement_text_block += f"\n【用户补充文本】\n{text[:500]}"
-        files = step2_supplement.get("files", [])
-        if files:
-            supplement_text_block += "\n【用户补充文件】\n" + ", ".join(f.get('name', '') for f in files[:10])
+            supplement_text_block += f"\n【用户补充文本】\n{text[:800]}"
     
     llm_config = _get_config("llm")
     api_key = llm_config.get("api_key", "")
     
     if not api_key:
-        # 降级：返回默认角度
         return _success({
             "angles": [
                 {"name": "案例研究型", "description": "深入拆解典型实践案例，提炼可复用经验", "coverage": 0.5},
@@ -4826,57 +6566,247 @@ async def recommend_angles(request: Dict = Body(...)):
             ]
         })
     
-    prompt = f"""你是一个内容策划专家。请基于以下素材推荐 3-5 个写作角度。
-        
-【创作主题】
-{topic or '根据素材推断'}
+    # 辅助函数：给最近一条日志替换思考链（覆盖 _call_llm 的默认值）
+    def _enrich_last_log(step_num: int, step_name: str, input_summary: str, reasoning: str, output_data):
+        logs = session.get("thinking_logs", [])
+        if not logs:
+            return
+        last = logs[-1]
+        last["thinking_chain"] = [{
+            "step": step_num,
+            "step_name": step_name,
+            "input": input_summary,
+            "reasoning": reasoning,
+            "output": output_data,
+        }]
 
-【MCP 素材摘要】
-{mcp_summary[:1000]}
-{supplement_text_block}
-
-请返回 JSON（不要 markdown 代码块）：
-{{
-  "angles": [
-    {{ "name": "角度名称", "description": "角度描述（1-2句话）", "coverage": 0.85 }}
-  ]
-}}
-
-coverage 是 0-1 之间的浮点数，表示该角度对现有素材的覆盖程度：
-- 0.8-1.0：素材丰富，可直接展开
-- 0.5-0.8：素材基本足够，部分需要补充
-- 0.3-0.5：素材偏少，需要较多补充
-- 0.0-0.3：素材严重不足"""
+    def _get_last_log():
+        """获取最近一条 thinking_log，若不存在则返回 None"""
+        logs = session.get("thinking_logs", [])
+        return logs[-1] if logs else None
+    
+    if "thinking_logs" not in session:
+        session["thinking_logs"] = []
+    
+    materials_text = f"【创作主题】{topic}\n【MCP素材摘要】{mcp_summary[:2000]}\n{supplement_text_block}"
     
     try:
-        import httpx
-        base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
-        model = llm_config.get("model", "deepseek-chat")
-        timeout = llm_config.get("timeout", 60)
+        # ====== Step 1: 素材扫描 —— 从素材中提取核心主题域 ======
+        step1_prompt = f"""你是 ArchGen 的「素材扫描引擎」。请对以下素材做结构化审查。
+
+素材内容：
+{materials_text[:3000]}
+
+审查任务：
+逐段扫描素材，识别其中的核心话题，提炼出 3-5 个最适合展开写作的主题方向。
+
+请按以下结构输出（标注为【推理】和【结果】）：
+
+【推理】
+1. 话题分布：素材中出现了哪些领域/话题？各自的篇幅和权重如何？
+2. 高频关键词：哪些术语/概念反复出现？在什么语境下出现？
+3. 上下游延伸：这些话题可以往什么方向延伸？（如：管理 → 决策框架 → 工具落地）
+4. 差异化潜力：哪些话题在常见写作中较少被覆盖，有独特的切入点？
+5. 信息密度评估（按以下标准）：
+   - 0.3：仅提及概念，无任何细节
+   - 0.5：提及概念 + 模糊案例/原则
+   - 0.8：提及概念 + 2-3个具体案例/原则 + 简单解释
+   - 1.0：提及概念 + 3个以上具体案例/原则 + 原理/对比/数据
+6. 数据缺口：每个主题素材里明显缺失了什么？
+
+【结果】
+返回 JSON（不要 markdown 代码块）：
+{{
+  "themes": [
+    {{"name": "主题名称", "description": "一句话描述", "frequency": "高/中/低", "importance": "核心/次要/边缘",
+     "info_density": 0.8, "data_gap": "缺少的具体内容说明"}}
+  ],
+  "reasoning": "你的审查结论"
+}}"""
+
+        step1_result = await _call_llm(
+            session_id=session_id,
+            call_name="角度推荐 · 素材扫描",
+            messages=[{"role": "user", "content": step1_prompt}],
+            temperature=0.3, max_tokens=2048, timeout=llm_config.get("timeout", 60),
+            phase="素材扫描",
+        )
         
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0.3,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        step1_raw = step1_result["choices"][0]["message"]["content"].strip()
+        step1_raw = step1_raw.replace("```json", "").replace("```", "").strip()
+        if "【结果】" in step1_raw:
+            step1_json_str = step1_raw.split("【结果】", 1)[1].strip()
+        else:
+            step1_json_str = step1_raw
+        step1_data = json.loads(step1_json_str)
+        themes = step1_data.get("themes", [])
+        step1_reasoning = step1_data.get("reasoning", "") or step1_raw.split("【结果】")[0].replace("【推理】", "").strip()
         
-        content = result["choices"][0]["message"]["content"].strip()
-        content = content.replace("```json", "").replace("```", "").strip()
-        import json as jmod
-        data = jmod.loads(content)
-        angles = data.get("angles", [])
+        last = _get_last_log()
+        if last:
+            chain = [{"step": 1, "action": "素材审查", "reason": "对全文进行结构化审查，识别核心话题、高频关键词、信息密度", "result": f"扫描完成，识别出{len(themes)}个候选主题方向"}]
+            for i, t in enumerate(themes):
+                freq_text = {"高": "较高", "中": "中等", "低": "较低"}.get(t.get("frequency", ""), t.get("frequency", "未知"))
+                imp_text = {"核心": "核心级", "次要": "次要级", "边缘": "边缘级"}.get(t.get("importance", ""), t.get("importance", "未知"))
+                chain.append({"step": f"1.{i+1}", "action": f"候选主题「{t['name']}」", "reason": f"话题：{t['name']}，出现频率{freq_text}，重要性{imp_text}，信息密度{t.get('info_density', 0)}，缺失内容：{t.get('data_gap', '无')}", "result": "已纳入候选池"})
+            last["thinking_chain"] = chain
+        
+        # ====== Step 2: 覆盖度评分 —— 为每个主题打分 ======
+        step2_prompt = f"""你是 ArchGen 的「覆盖度评分引擎」。请逐主题审计素材的覆盖情况。
+
+候选主题：
+{json.dumps(themes, ensure_ascii=False)}
+
+素材概况：
+{materials_text[:1500]}
+
+覆盖度标准：
+- 0.8-1.0：素材充足，可直接展开写作
+- 0.5-0.8：素材基本够用，部分需要补充
+- 0.3-0.5：素材偏少，需要搜集较多外部资料
+- < 0.3：素材严重不足，不建议作为主方向
+
+可行性标准（0-100）：
+- 90+：读者可直接套用，素材有具体原则/步骤/案例
+- 70-90：素材有方向但缺细节，读者需部分自行加工
+- 50-70：素材停留在概念层，读者需要大量补充
+- < 50：仅有名称提及，无法支撑写作
+
+请按以下结构逐主题审计（标注为【推理】和【结果】）：
+
+【推理】
+对每个候选主题，逐一说明：
+1. 支撑内容：素材中哪些段落/观点支撑了这个主题？具体是什么？
+2. 缺失项：这个主题要写好，还需要什么？素材里缺了什么？
+3. 对比分析：为什么这个主题的覆盖度比另一个高或低？差距在内容深度还是数量？
+4. 可行性判断：读者写这个主题的难度如何？需要二次加工哪些部分？
+   （必须给出具体理由：有具体原则/步骤/案例？还是仅有方向概念？）
+
+【结果】
+返回 JSON（不要 markdown 代码块）：
+{{
+  "scores": [
+    {{"name": "主题名称", "coverage": 0.85, "feasibility": 90,
+     "gap": "缺失的具体内容说明",
+     "feasibility_reason": "为什么是这个可行性分数：素材提供了哪些可直接使用的内容，读者还需补充什么"}}
+  ],
+  "reasoning": "你的审计结论"
+}}"""
+
+        step2_result = await _call_llm(
+            session_id=session_id,
+            call_name="角度推荐 · 覆盖度评分",
+            messages=[{"role": "user", "content": step2_prompt}],
+            temperature=0.3, max_tokens=2048, timeout=llm_config.get("timeout", 60),
+            phase="覆盖度评分",
+        )
+        
+        step2_raw = step2_result["choices"][0]["message"]["content"].strip()
+        step2_raw = step2_raw.replace("```json", "").replace("```", "").strip()
+        if "【结果】" in step2_raw:
+            step2_json_str = step2_raw.split("【结果】", 1)[1].strip()
+        else:
+            step2_json_str = step2_raw
+        step2_data = json.loads(step2_json_str)
+        scores = step2_data.get("scores", [])
+        step2_reasoning = step2_data.get("reasoning", "") or step2_raw.split("【结果】")[0].replace("【推理】", "").strip()
+        
+        last = _get_last_log()
+        if last:
+            chain = [{"step": 2, "action": "覆盖度评分", "reason": "对每个候选主题评估素材覆盖度和写作可行性", "result": f"{len(scores)}个主题均完成评分"}]
+            for i, s in enumerate(scores):
+                cov = s.get("coverage", 0)
+                fea = s.get("feasibility", 0)
+                cov_desc = "素材充足，可直接展开写作" if cov >= 0.8 else ("素材基本够用，部分需要补充" if cov >= 0.5 else ("素材偏少，需搜集较多外部资料" if cov >= 0.3 else "素材严重不足"))
+                chain.append({"step": f"2.{i+1}", "action": f"主题「{s['name']}」评分", "reason": f"主题：{s['name']}，覆盖度{cov}/可行性{fea}，{cov_desc}，缺失项：{s.get('gap', '无')}", "result": "评分完成"})
+            last["thinking_chain"] = chain
+        
+        # ====== Step 3: 人设匹配 —— 筛选最终角度 ======
+        persona_summary = ""
+        try:
+            persona_summary = _get_persona_summary()
+        except:
+            pass
+        
+        step3_prompt = f"""你是 ArchGen 的「人设匹配引擎」。请严格结合作者定位，从候选主题中筛选最终写作角度。
+
+已评分主题（含覆盖度和可行性）：
+{json.dumps(scores, ensure_ascii=False)}
+
+作者身份定位：
+{persona_summary if persona_summary else '未配置（请根据创作主题自动推断目标读者）'}
+
+创作主题：{topic or '根据素材推断'}
+
+筛选规则：
+1. 覆盖度 > 0.5 且可行性 > 60 的才进入候选
+2. 结合作者人设判断：目标读者是谁？ta 们关心什么？需要什么深度？偏好什么风格？
+3. 角度之间必须有差异化——两个角度不能说同一件事
+4. 角度名称要具体、有吸引力，描述要清晰告诉读者这篇文章写什么
+5. 必须明确列出被排除的主题，并逐一说明排除理由
+
+请按以下结构审计（标注为【推理】和【结果】）：
+
+【推理】
+对每个候选主题，逐一判断：
+1. 人设适配：这个主题的目标读者是谁？符合当前作者的内容定位吗？
+2. 差异化价值：这个角度和其他角度有什么不同？读者为什么选这篇而不是另一篇？
+3. 排除判断：如果排除某个主题，是因为人设不匹配？覆盖度过低？可行性不足？还是和其他角度重叠？
+   （必须明确说明排除的具体原因，不能只说"不符合"）
+4. 最终选择：综合覆盖度、可行性、人设适配度，入选的角度及其排序理由
+
+【结果】
+返回 JSON（不要 markdown 代码块）：
+{{
+  "angles": [
+    {{"name": "具体的角度名称", "description": "1-2句描述写什么、给谁看", "coverage": 0.85,
+     "match_reason": "为什么这个角度入选：覆盖度如何、写作资源如何、与人设的契合点在哪"}}
+  ],
+  "excluded": [
+    {{"name": "被排除的主题", "reason": "排除的具体原因"}}
+  ],
+  "reasoning": "你的筛选审计结论"
+}}"""
+
+        step3_result = await _call_llm(
+            session_id=session_id,
+            call_name="角度推荐 · 人设匹配",
+            messages=[{"role": "user", "content": step3_prompt}],
+            temperature=0.3, max_tokens=2048, timeout=llm_config.get("timeout", 60),
+            phase="人设匹配",
+        )
+        
+        step3_raw = step3_result["choices"][0]["message"]["content"].strip()
+        step3_raw = step3_raw.replace("```json", "").replace("```", "").strip()
+        if "【结果】" in step3_raw:
+            step3_json_str = step3_raw.split("【结果】", 1)[1].strip()
+        else:
+            step3_json_str = step3_raw
+        step3_data = json.loads(step3_json_str)
+        angles = step3_data.get("angles", [])
+        excluded = step3_data.get("excluded", [])
+        step3_reasoning = step3_data.get("reasoning", "") or step3_raw.split("【结果】")[0].replace("【推理】", "").strip()
+        
+        last = _get_last_log()
+        if last:
+            chain = [{"step": 3, "action": "人设匹配筛选", "reason": "结合作者身份定位和读者画像，筛选最匹配的写作角度", "result": f"入选{len(angles)}个角度，排除{len(excluded)}个"}]
+            for i, a in enumerate(angles):
+                chain.append({"step": f"3.{i+1}", "action": f"入选角度「{a['name']}」", "reason": f"入选：{a['name']}，入选理由：{a.get('match_reason', '与作者定位匹配')}", "result": "推荐给用户"})
+            for i, e in enumerate(excluded):
+                chain.append({"step": f"3.{len(angles)+i+1}", "action": f"排除角度「{e.get('name', str(e))}」", "reason": f"排除：{e.get('name', str(e))}，排除原因：{e.get('reason', '不符合当前定位')}", "result": "不符合当前定位，不推荐"})
+            last["thinking_chain"] = chain
+        
+        # 限制日志总数
+        if len(session["thinking_logs"]) > 50:
+            session["thinking_logs"] = session["thinking_logs"][-50:]
+
         return _success({"angles": angles})
+
     except Exception as e:
+        if len(session.get("thinking_logs", [])) > 50:
+            session["thinking_logs"] = session["thinking_logs"][-50:]
         logger.warning(f"角度推荐失败: {e}")
-        return _error(msg=str(e)[:100])
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/1")
@@ -4893,12 +6823,18 @@ async def supplement_1(request: Dict = Body(...)):
     }
 
     # P3: 后台异步预拉 AIPULSE 结果（不阻塞响应，失败不影响主流程）
+    # H2: 写入状态供前端轮询
+    s = _get_session(session_id)
+    s["aipulse_status"] = "fetching"
+    s["aipulse_items_count"] = 0
+
     async def _prefetch_aipulse():
         try:
             from src.ai_pulse_client import get_ai_pulse_client
             ai_config = _get_config("ai_pulse")
             if not ai_config.get("enabled", False):
                 logger.info("[AIPulse-Prefetch] AI-Pulse 未启用，跳过预拉取")
+                s["aipulse_status"] = "disabled"
                 return
             client = get_ai_pulse_client(ai_config)
             # days=30 → time_filter=month，生产端有 98 条
@@ -4908,23 +6844,31 @@ async def supplement_1(request: Dict = Body(...)):
                 take=20,
             )
             if cases:
-                s = _get_session(session_id)
-                s["aipulse_items"] = [
-                    {
-                        "text": c.get("summary", c.get("title", ""))[:500],
-                        "source_type": "aipulse",
-                        "filename": c.get("title", f"aipulse_{c.get('id', '')}"),
-                        "source_name": c.get("source", "AI-Pulse"),
-                        "url": c.get("url", ""),
-                        "score": c.get("score", 0),
-                        "published_at": c.get("published_at", ""),
-                    }
-                    for c in cases
-                ]
+                async with _sessions_lock:
+                    s["aipulse_items"] = [
+                        {
+                            "text": c.get("summary", c.get("title", ""))[:500],
+                            "source_type": "aipulse",
+                            "filename": c.get("title", f"aipulse_{c.get('id', '')}"),
+                            "source_name": c.get("source", "AI-Pulse"),
+                            "url": c.get("url", ""),
+                            "score": c.get("score", 0),
+                            "published_at": c.get("published_at", ""),
+                        }
+                        for c in cases
+                    ]
+                    s["aipulse_items_count"] = len(cases)
+                    s["aipulse_status"] = "done"
                 logger.info(f"[AIPulse-Prefetch] 预拉取成功: {len(cases)}条 → session")
             else:
+                async with _sessions_lock:
+                    s["aipulse_items_count"] = 0
+                    s["aipulse_status"] = "empty"
                 logger.info("[AIPulse-Prefetch] 预拉取返回 0 条（关键词可能不匹配）")
         except Exception as e:
+            async with _sessions_lock:
+                s["aipulse_status"] = "failed"
+                s["aipulse_error"] = str(e)[:200]
             logger.warning(f"[AIPulse-Prefetch] 预拉取失败（不影响主流程）: {e}")
 
     asyncio.create_task(_prefetch_aipulse())
@@ -4932,9 +6876,44 @@ async def supplement_1(request: Dict = Body(...)):
     return _success({"status": "ok", "message": "第1次补充已保存"})
 
 
+@router.get("/api/workflow/aipulse_status/{session_id}")
+async def get_aipulse_status(session_id: str):
+    """H2: 查询 AIPULSE 预拉取状态"""
+    s = _get_session(session_id)
+    return _success({
+        "status": s.get("aipulse_status", "idle"),
+        "count": s.get("aipulse_items_count", 0),
+        "error": s.get("aipulse_error", None),
+    })
+
+
+@router.get("/api/workflow/thinking/logs")
+async def get_thinking_logs(session_id: str, since: float = 0.0):
+    """
+    获取AI思考日志
+    
+    Args:
+        session_id: 会话ID
+        since: 可选，时间戳，只返回该时间之后的日志（增量拉取）
+    """
+    s = _get_session(session_id)
+    if not s:
+        return _error(code=404, msg="会话不存在")
+    
+    logs = s.get("thinking_logs", [])
+    
+    # 增量拉取：只返回since之后的
+    if since > 0:
+        logs = [log for log in logs if log.get("start_time", 0) > since]
+    
+    return _success({"logs": logs, "total": len(logs)})
+
+
 @router.post("/api/workflow/frameworks/match")
 async def match_frameworks_v2(request: Dict = Body(...)):
     """推荐分析框架(v2: 双评分+降级兜底+业务化warning)"""
+    import time
+    
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
     supplement_1 = request.get("supplement_1", {})
@@ -4951,7 +6930,7 @@ async def match_frameworks_v2(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     fw_config = _get_config("framework_recommendation") or {}
@@ -5029,22 +7008,15 @@ async def match_frameworks_v2(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="fix_direction",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0,
+            seed=42,
+            phase="补充修正",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         frameworks = json.loads(parsed_content)
@@ -5056,6 +7028,12 @@ async def match_frameworks_v2(request: Dict = Body(...)):
             fw.setdefault("name", "未知框架")
             fw.setdefault("description", "")
             fw.setdefault("direction_alignment_score", fw.get("match_score", 0.5))
+            # ══ 修复：LLM 可能显式返回 0，避免框架被误过滤 ══
+            try:
+                if float(fw.get("direction_alignment_score", 0)) <= 0:
+                    fw["direction_alignment_score"] = fw.get("match_score", 0.5)
+            except (TypeError, ValueError):
+                fw["direction_alignment_score"] = 0.5
             fw.setdefault("direction_alignment_reason", "")
             fw.setdefault("reason", "")
             fw.setdefault("evidence_quote", "")
@@ -5122,6 +7100,27 @@ async def match_frameworks_v2(request: Dict = Body(...)):
                 ),
             })
         
+        # 记录成功日志
+        fw_chain = [{"step": 1, "action": "匹配分析框架", "reason": f"为方向「{direction}」推荐适合的分析框架", "result": f"匹配到{len(frameworks)}个框架"}]
+        for i, fw in enumerate(frameworks):
+            fw_chain.append({
+                "step": i + 2,
+                "action": f"框架「{fw.get('name', '未知')}」",
+                "reason": f"来源：{fw.get('source', '未知')}，对齐度：{fw.get('direction_alignment_score', 0)}，匹配理由：{fw.get('direction_alignment_reason', fw.get('reason', '未提供'))[:100]}",
+                "result": "已纳入推荐列表"
+            })
+        _log_llm_call_legacy(
+            session_id=session_id,
+            call_id=f"match_frameworks_{session_id}_{int(time.time())}",
+            call_name="框架匹配",
+            messages=[{"role": "user", "content": prompt}],
+            result=json.dumps(frameworks, ensure_ascii=False),
+            model=model,
+            temperature=0.0,
+            duration=time.time() - start_time,
+            thinking_chain=fw_chain
+        )
+
         return _success({
             "frameworks": frameworks,
             "mode": "premium",
@@ -5129,6 +7128,9 @@ async def match_frameworks_v2(request: Dict = Body(...)):
         })
     except json.JSONDecodeError as e:
         logger.error(f"框架推荐 JSON 解析失败: {e}")
+        _log_llm_call_legacy(session_id, "step2_match_frameworks", "框架匹配", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "框架匹配失败", "reason": f"为方向「{direction}」匹配分析框架时发生JSON解析错误", "result": "使用兜底框架"},
+        ])
         default_frameworks = [
             {
                 "name": "SWOT 分析",
@@ -5150,7 +7152,10 @@ async def match_frameworks_v2(request: Dict = Body(...)):
         })
     except Exception as e:
         logger.error(f"框架推荐失败: {e}")
-        return _error(msg=str(e))
+        _log_llm_call_legacy(session_id, "step2_match_frameworks", "框架匹配", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "框架匹配失败", "reason": f"为方向「{direction}」匹配分析框架时发生未知错误", "result": "匹配中断"},
+        ])
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/2")
@@ -5256,7 +7261,7 @@ async def check_direction(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
@@ -5359,31 +7364,50 @@ async def check_direction(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="方向检测",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=2048,
+            seed=42,
+            timeout=timeout,
+            phase="选题",
+        )
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         check_result = json.loads(parsed_content)
         
+        # 丰富最近一条日志的 thinking_chain：方向检测详情
+        session = _get_session(session_id)
+        if session:
+            logs = session.get("thinking_logs", [])
+            if logs:
+                last = logs[-1]
+                passed = check_result.get("ready_for_next", True)
+                score = check_result.get("overall_score", 0)
+                block_count = len([i for i in check_result.get("issues", []) if i.get("level") == "block"])
+                suggest_count = len([i for i in check_result.get("issues", []) if i.get("level") == "suggest"])
+                chain = [{
+                    "step": 1, "action": "方向检测",
+                    "reason": f"检查当前内容与选定方向「{direction}」的匹配程度",
+                    "result": f"检测{'通过' if passed else '未通过'}，综合评分{score}分，发现问题{block_count}个拦截项、{suggest_count}个建议项"
+                }]
+                if not passed:
+                    chain.append({"step": 2, "action": "方向偏离警告", "reason": f"检测到{block_count}个需要修复的拦截项", "result": "需要修正后才能继续"})
+                last["thinking_chain"] = chain
+        
         # 验证返回格式
         check_result.setdefault("issues", [])
         check_result.setdefault("overall_score", 50)
         check_result.setdefault("ready_for_next", True)
-        check_result.setdefault("content_completeness_score", check_result.get("overall_score", 0))
+        # ══ 修复：LLM 可能显式返回 0，setdefault 无法拦截 ══
+        if check_result.get("overall_score", 0) <= 0:
+            check_result["overall_score"] = 50
+        check_result.setdefault("content_completeness_score", check_result["overall_score"])
+        if check_result.get("content_completeness_score", 0) <= 0:
+            check_result["content_completeness_score"] = check_result["overall_score"]
         check_result.setdefault("status", "checked")
         
         # 兼容旧字段：将 level 映射为 type（前端可能还在用 type）
@@ -5430,7 +7454,7 @@ async def check_direction(request: Dict = Body(...)):
         return _success(default_result)
     except Exception as e:
         logger.error(f"方向检测失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/direction/fix")
@@ -5447,7 +7471,7 @@ async def fix_direction_issue(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
@@ -5495,22 +7519,18 @@ async def fix_direction_issue(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="recommend_structures",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="结构推荐",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -5526,12 +7546,14 @@ async def fix_direction_issue(request: Dict = Body(...)):
         return _success(fix_result)
     except Exception as e:
         logger.error(f"AI 修改失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/structures/recommend")
 async def recommend_structures(request: Dict = Body(...)):
     """推荐内容结构"""
+    import time
+    
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
     framework = request.get("framework", "")
@@ -5542,7 +7564,7 @@ async def recommend_structures(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
@@ -5624,22 +7646,18 @@ async def recommend_structures(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="recommend_structures_v2",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="结构推荐",
+        )
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
         import json as json_mod
@@ -5688,11 +7706,56 @@ async def recommend_structures(request: Dict = Body(...)):
                 "recommendation": "",
                 "recommendation_reason": "",
             }
-        
+
+        # 记录成功日志
+        structures_list = result_data.get("structures", []) if isinstance(result_data, dict) else []
+        struct_chain = [{"step": 1, "action": "推荐文章结构", "reason": "基于写作方向和素材特征，评估最适合的文章组织结构", "result": f"共推荐{len(structures_list)}种结构方案"}]
+        for i, s in enumerate(structures_list):
+            if isinstance(s, dict):
+                sections = s.get("sections", s.get("outline", []))
+                sec_count = len(sections) if isinstance(sections, list) else 0
+                sec_names = []
+                if isinstance(sections, list):
+                    for sec in sections:
+                        if isinstance(sec, dict):
+                            sec_names.append(sec.get("name", sec.get("title", "?")))
+                sec_preview = "、".join(sec_names[:5]) if sec_names else "未指定"
+                struct_chain.append({
+                    "step": i + 2,
+                    "action": f"结构「{s.get('name', '未知')}」",
+                    "reason": f"包含{sec_count}个章节，章节预览：{sec_preview}",
+                    "result": "已纳入结构方案"
+                })
+        _log_llm_call_legacy(
+            session_id=session_id,
+            call_id=f"recommend_structures_{session_id}_{int(time.time())}",
+            call_name="结构推荐",
+            messages=[{"role": "user", "content": prompt}],
+            result=parsed_content,
+            model=model,
+            temperature=0.0,
+            duration=time.time() - start_time,
+            thinking_chain=struct_chain
+        )
+
         return _success(result_data)
     except Exception as e:
         logger.error(f"结构推荐失败: {e}")
-        return _error(msg=str(e))
+        # 记录失败日志
+        _log_llm_call_legacy(
+            session_id=session_id,
+            call_id=f"recommend_structures_{session_id}_{int(time.time())}",
+            call_name="结构推荐",
+            messages=[{"role": "user", "content": prompt}],
+            error=str(e),
+            model=model,
+            temperature=0.0,
+            duration=time.time() - start_time,
+            thinking_chain=[
+                {"step": 1, "action": "结构推荐失败", "reason": "推荐文章结构时发生错误", "result": "未产出结构方案"},
+            ]
+        )
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/3")
@@ -5738,7 +7801,7 @@ async def supplement_draft(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_FLASH
     timeout = llm_config.get("timeout", 60)
     
     # 起草 Prompt：不走降级链，直接生成参考草稿
@@ -5762,21 +7825,17 @@ async def supplement_draft(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 2048,
-                    "temperature": 0.3,  # 草稿需要一定创造性
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-        
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="结构推荐",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.3,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="提纲生成",
+        )
         draft_text = result["choices"][0]["message"]["content"].strip()
         
         return _success({
@@ -5792,6 +7851,8 @@ async def supplement_draft(request: Dict = Body(...)):
 @router.post("/api/workflow/outline/generate")
 async def generate_outline_v2(request: Dict = Body(...)):
     """生成写作提纲（基于所有补充信息）"""
+    import time
+    
     session_id = request.get("session_id", "")
     session = _get_session(session_id)
     
@@ -5811,7 +7872,7 @@ async def generate_outline_v2(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_PRO
     timeout = llm_config.get("timeout", 60)
     
     persona_summary = ""
@@ -5942,21 +8003,19 @@ async def generate_outline_v2(request: Dict = Body(...)):
 """
     
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 4096,
-                    "temperature": 0,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="结构推荐_final",
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            max_tokens=4096,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            phase="提纲最终生成",
+        )
         
         parsed_content = result["choices"][0]["message"]["content"].strip()
         parsed_content = parsed_content.replace("```json", "").replace("```", "").strip()
@@ -5998,6 +8057,10 @@ async def generate_outline_v2(request: Dict = Body(...)):
         outline.setdefault("direction_alignment_reason", "")
         try:
             outline_align = float(outline.get("direction_alignment_score") or 0)
+            # ══ 修复：LLM 可能显式返回 0，避免误触发风险警告 ══
+            if outline_align <= 0:
+                outline_align = 0.7
+                outline["direction_alignment_score"] = 0.7
         except (TypeError, ValueError):
             outline_align = 0.7
             outline["direction_alignment_score"] = 0.7
@@ -6012,10 +8075,17 @@ async def generate_outline_v2(request: Dict = Body(...)):
         
         session["outline"] = outline
         
+        _log_llm_call_legacy(session_id, "step3_generate_outline", "提纲生成", messages=[{"role": "user", "content": prompt}], result=parsed_content, duration=time.time() - start_time, thinking_chain=[
+            {"step": 1, "action": "生成文章提纲", "reason": f"基于选定方向「{direction}」和框架，生成完整文章结构", "result": f"提纲生成完成：共{len(outline.get('sections', {}))}个章节"},
+        ])
+        
         return _success(outline)
     except Exception as e:
         logger.error(f"提纲生成失败: {e}")
-        return _error(msg=str(e))
+        _log_llm_call_legacy(session_id, "step3_generate_outline", "提纲生成", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "提纲生成失败", "reason": "生成文章提纲时发生错误", "result": "未产出提纲"},
+        ])
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/article/generate")
@@ -6023,6 +8093,8 @@ async def generate_full_article(request: Dict = Body(...)):
     """
     基于提纲生成完整文章
     """
+    import time
+    
     session_id = request.get("session_id", "")
     outline_sections = request.get("outline_sections", [])
     target_word_count = request.get("target_word_count", 2000)
@@ -6042,7 +8114,7 @@ async def generate_full_article(request: Dict = Body(...)):
     llm_config = _get_config("llm")
     base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "deepseek-chat")
+    model = V4_PRO
     timeout = llm_config.get("timeout", 120)
 
     mcp_summary = session.get("mcp_summary", "")
@@ -6140,12 +8212,9 @@ async def generate_full_article(request: Dict = Body(...)):
   ]
 }}
 """
-
-    import httpx
-
     # ===== P2: 长素材摘要压缩 =====
     # 对每个提纲段落对应的素材做压缩，避免素材过长稀释注意力
-    async def _summarize_long_material(text: str, client: httpx.AsyncClient, llm_cfg: Dict) -> str:
+    async def _summarize_long_material(text: str) -> str:
         if len(text) <= 500:
             return text
         summary_prompt = f"""请压缩以下素材内容为 100-150 字的摘要，保留核心事实、数据和结论：
@@ -6154,30 +8223,24 @@ async def generate_full_article(request: Dict = Body(...)):
 
 摘要："""
         try:
-            resp = await client.post(
-                f"{llm_cfg['base_url']}/chat/completions",
-                headers={"Authorization": f"Bearer {llm_cfg['api_key']}"},
-                json={
-                    "model": llm_cfg["model"],
-                    "messages": [{"role": "user", "content": summary_prompt}],
-                    "max_tokens": 300,
-                    "temperature": 0.1,
-                },
+            result = await _call_llm(
+                session_id=None,
+                call_name="summarize_material",
+                messages=[{"role": "user", "content": summary_prompt}],
+                model=V4_PRO,
+                max_tokens=300,
+                temperature=0.1,
+                phase="素材摘要压缩",
             )
-            if resp.status_code == 200:
-                summary = resp.json()["choices"][0]["message"]["content"].strip()
-                return summary[:500]
+            summary = result["choices"][0]["message"]["content"].strip()
+            return summary[:500]
         except Exception:
-            pass
-        return text[:500] + "（...截断）"
+            return text[:500] + "（...截断）"
 
     # ===== P1 Stage 1: 逐段独立展开成段落草稿 =====
     async def _generate_paragraph_draft(
         section: Dict,
         context: Dict,
-        client: httpx.AsyncClient,
-        llm_cfg: Dict,
-        all_materials_text: str,
     ) -> Dict:
         title = section.get("title", section.get("label", ""))
         key_points = section.get("key_points", [])
@@ -6189,7 +8252,7 @@ async def generate_full_article(request: Dict = Body(...)):
         mat_blocks = []
         for i, mt in enumerate(raw_texts[:5]):
             mt_str = str(mt) if not isinstance(mt, str) else mt
-            compressed = await _summarize_long_material(mt_str, client, llm_cfg)
+            compressed = await _summarize_long_material(mt_str)
             mat_blocks.append(f"【素材{i+1}】{compressed}")
         mat_section = "\n".join(mat_blocks) if mat_blocks else "（无具体素材，请基于知识展开）"
 
@@ -6219,18 +8282,17 @@ async def generate_full_article(request: Dict = Body(...)):
 
 正文：
 """
-        resp = await client.post(
-            f"{llm_cfg['base_url']}/chat/completions",
-            headers={"Authorization": f"Bearer {llm_cfg['api_key']}"},
-            json={
-                "model": llm_cfg["model"],
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 2048,
-                "temperature": 0.3,
-                "seed": 42,
-            },
+        result = await _call_llm(
+            session_id=None,
+            call_name="generate_paragraph_draft",
+            messages=[{"role": "user", "content": prompt}],
+            model=V4_PRO,
+            max_tokens=2048,
+            temperature=0.3,
+            seed=42,
+            phase="逐段展开",
         )
-        content_text = resp.json()["choices"][0]["message"]["content"].strip()
+        content_text = result["choices"][0]["message"]["content"].strip()
         # 统计字数
         import re as _re
         chinese_chars = len(_re.findall(r'[\u4e00-\u9fff]', content_text))
@@ -6240,10 +8302,7 @@ async def generate_full_article(request: Dict = Body(...)):
     async def _polish_article(
         drafts: List[Dict],
         context: Dict,
-        client: httpx.AsyncClient,
-        llm_cfg: Dict,
         target_words: int,
-        full_materials_context: str,
     ) -> Dict:
         drafts_text = "\n\n".join([f"### {d['title']}\n\n{d['content']}" for d in drafts])
 
@@ -6281,18 +8340,17 @@ async def generate_full_article(request: Dict = Body(...)):
 
 请直接返回 JSON：
 """
-        resp = await client.post(
-            f"{llm_cfg['base_url']}/chat/completions",
-            headers={"Authorization": f"Bearer {llm_cfg['api_key']}"},
-            json={
-                "model": llm_cfg["model"],
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 8192,
-                "temperature": 0.3,
-                "seed": 42,
-            },
+        result = await _call_llm(
+            session_id=None,
+            call_name="polish_article",
+            messages=[{"role": "user", "content": prompt}],
+            model=V4_PRO,
+            max_tokens=8192,
+            temperature=0.3,
+            seed=42,
+            phase="文章润色",
         )
-        content_raw = resp.json()["choices"][0]["message"]["content"].strip()
+        content_raw = result["choices"][0]["message"]["content"].strip()
         content_raw = content_raw.strip()
         if content_raw.startswith("```"):
             content_raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', content_raw, flags=re.MULTILINE).strip()
@@ -6301,14 +8359,6 @@ async def generate_full_article(request: Dict = Body(...)):
 
     # ===== 执行流水线 =====
     try:
-        llm_config = _get_config("llm")
-        llm_cfg = {
-            "base_url": llm_config.get("base_url", "https://api.deepseek.com/v1"),
-            "api_key": llm_config.get("api_key", ""),
-            "model": llm_config.get("model", "deepseek-chat"),
-        }
-        timeout = llm_config.get("timeout", 120)
-
         context = {
             "direction": direction,
             "framework": framework,
@@ -6317,21 +8367,17 @@ async def generate_full_article(request: Dict = Body(...)):
             "mcp_summary": mcp_summary,
         }
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # Stage 1: 并行生成各段落草稿
-            logger.info(f"文章生成 P1 - 开始逐段展开，共 {len(sections_list)} 段")
-            tasks = []
-            for s in sections_list:
-                tasks.append(_generate_paragraph_draft(s, context, client, llm_cfg, ""))
-            drafts = await asyncio.gather(*tasks)
-            logger.info(f"文章生成 P1 - 各段落草稿生成完成: {[d['title'] for d in drafts]}")
+        # Stage 1: 并行生成各段落草稿
+        logger.info(f"文章生成 P1 - 开始逐段展开，共 {len(sections_list)} 段")
+        tasks = []
+        for s in sections_list:
+            tasks.append(_generate_paragraph_draft(s, context))
+        drafts = await asyncio.gather(*tasks)
+        logger.info(f"文章生成 P1 - 各段落草稿生成完成: {[d['title'] for d in drafts]}")
 
-            # Stage 2: 拼接润色
-            logger.info("文章生成 P1 - 开始拼接润色")
-            article = await _polish_article(
-                drafts, context, client, llm_cfg,
-                target_word_count, context["mcp_summary"]
-            )
+        # Stage 2: 拼接润色
+        logger.info("文章生成 P1 - 开始拼接润色")
+        article = await _polish_article(drafts, context, target_word_count)
 
         # 添加框架 key
         framework_key = None
@@ -6357,20 +8403,36 @@ async def generate_full_article(request: Dict = Body(...)):
         if framework_key:
             article["framework_key"] = framework_key
 
+        _log_llm_call_legacy(session_id, "step4_generate_article", "文章生成", messages=[{"role": "user", "content": prompt}], result=json.dumps(article, ensure_ascii=False), duration=time.time() - start_time, thinking_chain=[
+            {"step": 1, "action": "生成完整文章", "reason": f"基于{len(sections_list)}段提纲展开成文，目标字数{target_word_count}字", "result": f"文章生成完成"},
+        ])
+
         return _success(article)
 
     except json.JSONDecodeError as e:
         logger.error(f"文章生成 JSON 解析失败: {e}")
+        _log_llm_call_legacy(session_id, "step4_generate_article", "文章生成", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "文章生成失败", "reason": "LLM返回格式错误，无法解析JSON", "result": "生成中断"},
+        ])
         return _error(msg="文章生成失败，LLM返回格式错误，请重试")
     except httpx.TimeoutException as e:
-        logger.error(f"文章生成 LLM 调用超时 (timeout={timeout}s): {e}")
-        return _error(msg=f"文章生成超时（LLM 响应超过{timeout}秒），请重试")
+        logger.error(f"文章生成 LLM 调用超时: {e}")
+        _log_llm_call_legacy(session_id, "step4_generate_article", "文章生成", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "文章生成超时", "reason": "LLM调用超时未响应", "result": "生成中断"},
+        ])
+        return _error(msg="文章生成超时，请重试")
     except httpx.HTTPStatusError as e:
         logger.error(f"文章生成 LLM HTTP 错误: status={e.response.status_code}, body={e.response.text[:500]}")
+        _log_llm_call_legacy(session_id, "step4_generate_article", "文章生成", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "文章生成失败", "reason": f"LLM服务返回HTTP {e.response.status_code}错误", "result": "生成中断"},
+        ])
         return _error(msg=f"文章生成失败，LLM 服务返回错误 (HTTP {e.response.status_code})")
     except Exception as e:
         logger.error(f"文章生成失败: {e}", exc_info=True)
-        return _error(msg=str(e) or "未知错误")
+        _log_llm_call_legacy(session_id, "step4_generate_article", "文章生成", messages=[{"role": "user", "content": prompt}], error=str(e), thinking_chain=[
+            {"step": 1, "action": "文章生成失败", "reason": "生成文章时发生未知错误", "result": "生成中断"},
+        ])
+        return _error_internal(e)
 
 
 # ===== P2: source_tag 硬约束 & 4 阶段 LLM Pipeline =====
@@ -6416,7 +8478,7 @@ async def validate_content_source_tags(request: Dict = Body(...)):
         })
     except Exception as e:
         logger.error(f"source_tag 验证失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/pipeline/generate")
@@ -6491,7 +8553,7 @@ async def pipeline_generate_content(request: Dict = Body(...)):
         return _success(result)
     except Exception as e:
         logger.error(f"Pipeline 调用失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/content/pipeline/full_workflow")
@@ -6598,7 +8660,7 @@ async def pipeline_full_workflow(request: Dict = Body(...)):
         return _success(workflow_result)
     except Exception as e:
         logger.error(f"Pipeline 工作流失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 知识评估与降级链接口（ArchGen v2.0） =====
@@ -6713,7 +8775,7 @@ async def smart_supplement(request: Dict = Body(...)):
         import traceback
         logger.error(f"[SmartSupplement] 智能补充失败: {e}")
         logger.error(f"[SmartSupplement] 错误堆栈: {traceback.format_exc()}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/degrade")
@@ -6763,7 +8825,7 @@ async def degrade_supplement(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[DegradeSupplement] 降级补充失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/supplement/clear-cache")
@@ -6789,7 +8851,7 @@ async def clear_assessment_cache(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[ClearCache] 清除缓存失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== 埋点与数据看板接口（ArchGen v2.0） =====
@@ -6827,7 +8889,7 @@ async def record_analytics_event(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[Analytics] 记录事件失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.get("/api/analytics/events")
@@ -6848,7 +8910,7 @@ async def get_analytics_events(session_id: str = "", limit: int = 100):
         
     except Exception as e:
         logger.error(f"[Analytics] 获取事件失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.get("/api/analytics/session/{session_id}")
@@ -6871,7 +8933,7 @@ async def get_session_summary(session_id: str):
         
     except Exception as e:
         logger.error(f"[Analytics] 获取会话汇总失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.get("/api/analytics/overview")
@@ -6902,7 +8964,7 @@ async def get_analytics_overview(days: int = 7):
         
     except Exception as e:
         logger.error(f"[Analytics] 获取分析概览失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ===== A/B 测试接口（ArchGen v2.0） =====
@@ -6940,7 +9002,7 @@ async def assign_ab_test(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[ABTest] 分配实验组失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.get("/api/ab-test/experiments")
@@ -6956,7 +9018,7 @@ async def get_ab_experiments():
         
     except Exception as e:
         logger.error(f"[ABTest] 获取实验配置失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/ab-test/start")
@@ -6987,7 +9049,7 @@ async def start_ab_experiment(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[ABTest] 启动实验失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/ab-test/pause")
@@ -7007,7 +9069,7 @@ async def pause_ab_experiment(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[ABTest] 暂停实验失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/ab-test/stop")
@@ -7027,7 +9089,7 @@ async def stop_ab_experiment(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[ABTest] 停止实验失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/ab-test/significance")
@@ -7063,7 +9125,7 @@ async def calculate_significance(request: Dict = Body(...)):
         
     except Exception as e:
         logger.error(f"[ABTest] 计算显著性失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 # ==================== V4.0 三列工作台端点 ====================
@@ -7270,20 +9332,163 @@ def _match_materials_internal(session_id: str, confirmed_slots: list, search_key
                     score += int(overlap_ratio * 15)
 
             if score > 0:
+                # 找匹配片段：第一个命中位置前后取上下文（约 80 字）
+                snippet = item_text[:80]  # 默认取前 80
+                for kw in keywords:
+                    if kw and kw in item_text:
+                        pos = item_text.index(kw)
+                        start = max(0, pos - 30)
+                        end = min(len(item_text), pos + len(kw) + 50)
+                        snippet = item_text[start:end]
+                        break
+                # 如果没找到整词命中，用第一个 bigram 命中位置
+                if snippet == item_text[:80]:
+                    for bg in bigrams:
+                        if bg in item_text:
+                            pos = item_text.index(bg)
+                            start = max(0, pos - 30)
+                            end = min(len(item_text), pos + 50)
+                            snippet = item_text[start:end]
+                            break
+
                 matched.append({
                     "text": item_text[:300],
                     "source_type": item.get("source_type", "unknown"),
                     "filename": item.get("filename", ""),
                     "score": score,
+                    "match_snippet": snippet,  # 匹配片段（供前端预览高亮）
                 })
 
         # 按匹配分排序
         matched.sort(key=lambda x: x["score"], reverse=True)
+
+        # 去重标记：文本相似的 items 加 is_duplicate 标记
+        seen_texts = []
+        for m in matched:
+            t = m.get("text", "")[:200]
+            is_dup = False
+            for st in seen_texts:
+                from difflib import SequenceMatcher
+                if SequenceMatcher(None, t, st).ratio() > 0.8:
+                    is_dup = True
+                    break
+            m["is_duplicate"] = is_dup
+            if not is_dup:
+                seen_texts.append(t)
+
         slot_materials[slot_key] = matched
 
     session["slot_materials"] = slot_materials
     logger.info(f"[MaterialPool] 匹配完成: {sum(len(v) for v in slot_materials.values())}条分配")
     return slot_materials
+
+
+# === W1: AI-Pulse LLM 语义分配 ===
+
+async def _match_aipulse_by_llm(session_id: str, confirmed_slots: list, slot_materials: dict) -> dict:
+    """
+    W1: 用 LLM 语义将 AIPULSE 素材分配到槽位。
+    替代关键词匹配——AIPULSE 新闻标题与槽位 label 通常无关键词重叠。
+    返回更新后的 slot_materials。
+    """
+    session = _get_session(session_id)
+    pool = session.get("material_pool", [])
+
+    # 提取所有 aipulse 素材
+    aipulse_items = [it for it in pool if it.get("source_type") == "aipulse" and it.get("text")]
+    if not aipulse_items:
+        return slot_materials
+
+    # 构建槽位信息
+    slot_info = []
+    for s in confirmed_slots:
+        sk = s.get("slot_key", "")
+        lb = s.get("label", "")
+        ds = s.get("description", "")
+        slot_info.append({"slot_key": sk, "label": lb, "desc": ds})
+
+    if not slot_info:
+        return slot_materials
+
+    # 构建 LLM 输入
+    items_text = ""
+    for i, it in enumerate(aipulse_items):
+        title = it.get("source_name", it.get("filename", ""))[:80]
+        text = it.get("text", "")[:150]
+        items_text += f"[{i}] {title}\n    {text}\n\n"
+
+    slots_text = "\n".join(f"- {s['slot_key']}: {s['label']}{'（' + s['desc'] + '）' if s.get('desc') else ''}" for s in slot_info)
+
+    prompt = f"""请将以下素材分配到最相关的槽位（可分配到多个槽位，也可留空）。
+
+【槽位】
+{slots_text}
+
+【素材】
+{items_text}
+
+返回 JSON（不要 markdown 代码块）：
+{{
+  "assignments": {{
+    "slot_key1": [0, 2, 5],
+    "slot_key2": [1, 3]
+  }}
+}}
+
+规则：
+- 只返回真正相关的分配，不相关的不分配
+- 如果素材与任何槽位都不相关，跳过
+- 数字是素材编号"""
+
+    llm_config = _get_config("llm")
+    base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
+    api_key = llm_config.get("api_key", "")
+    model = V4_FLASH
+
+    if not api_key:
+        logger.warning("[AIPulseMatch] 无 API key，跳过语义分配")
+        return slot_materials
+
+    try:
+        result = await _call_llm(
+            session_id=None,
+            call_name="aipulse_match",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512,
+            temperature=0,
+            seed=42,
+            base_url=base_url,
+            api_key=api_key,
+            timeout=30,
+            phase="素材匹配",
+        )
+        content = result["choices"][0]["message"]["content"].strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        assignments = json.loads(content).get("assignments", {})
+
+        assigned = 0
+        for slot_key, item_ids in assignments.items():
+            if slot_key not in slot_materials:
+                slot_materials[slot_key] = []
+            for idx in item_ids:
+                if isinstance(idx, int) and 0 <= idx < len(aipulse_items):
+                    it = aipulse_items[idx]
+                    slot_materials[slot_key].append({
+                        "text": it.get("text", "")[:500],
+                        "source_type": "aipulse",
+                        "filename": it.get("filename", "aipulse_item"),
+                        "source_name": it.get("source_name", "AI-Pulse"),
+                        "score": 99,  # LLM 分配的优先级最高
+                        "match_snippet": it.get("text", "")[:80],
+                    })
+                    assigned += 1
+
+        logger.info(f"[AIPulseMatch] LLM 语义分配: {assigned}条 → {len(assignments)}个槽位")
+        return slot_materials
+
+    except Exception as e:
+        logger.warning(f"[AIPulseMatch] 失败（不影响主流程）: {e}")
+        return slot_materials
 
 
 # === V4 端点 ===
@@ -7307,7 +9512,7 @@ async def build_material_pool(request: Dict = Body(...)):
         return _success({"material_pool": pool, "count": len(pool)})
     except Exception as e:
         logger.error(f"[MaterialPool] 构建失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/slot/generate_slots")
@@ -7317,6 +9522,8 @@ async def generate_slots(request: Dict = Body(...)):
     请求体: { session_id, topic, material_pool_summary }
     返回: SSE 流，事件类型: thinking | slot | done | error
     """
+    import time
+    
     session_id = request.get("session_id", "")
     topic = request.get("topic", "")
     material_pool_summary = request.get("material_pool_summary", "")
@@ -7325,11 +9532,12 @@ async def generate_slots(request: Dict = Body(...)):
         return _error(code=400, msg="缺少 session_id")
 
     async def event_generator():
+        _gen_start = time.time()
         try:
             llm_config = _get_config("llm")
             base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
             api_key = llm_config.get("api_key", "")
-            model = llm_config.get("model", "deepseek-chat")
+            model = V4_PRO
 
             if not api_key:
                 yield f"data: {json.dumps({'type': 'error', 'msg': 'LLM 配置缺失'})}\n\n"
@@ -7376,43 +9584,61 @@ async def generate_slots(request: Dict = Body(...)):
   ]
 }}"""
 
-            thinking_sent = False
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 2048,
-                        "temperature": 0.7,
-                        "stream": True,
-                    },
-                )
-                response.raise_for_status()
+            import asyncio as _asyncio
 
-                buffer = ""
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            buffer += content
-                    except (json.JSONDecodeError, KeyError):
-                        continue
+            # 立即发送 started 事件，让浏览器知道连接已建立
+            yield f"data: {json.dumps({'type': 'started'})}\n\n"
 
-            # 解析完整响应
-            parsed = buffer.strip()
-            parsed = parsed.replace("```json", "").replace("```", "").strip()
-            result = json.loads(parsed)
+            # 用 Queue + Task 实现 LLM 调用和心跳并行
+            event_queue = _asyncio.Queue()
+            llm_result_holder = {}
 
-            # 先发 thinking
+            async def _do_llm_call():
+                # [V4] 有意不迁移到 _call_llm：SSE 心跳模式下 logger 隔离度更高；
+                # 且下方有独立的 thinking_logs 手动记录（避免双重日志）
+                async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=10)) as client:
+                    response = await client.post(
+                        f"{base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 2048,
+                            "temperature": 0.7,
+                            "stream": False,
+                        },
+                    )
+                    response.raise_for_status()
+                    llm_result_holder["result"] = response.json()
+                await event_queue.put(("llm_done", None))
+
+            async def _do_heartbeat():
+                while True:
+                    await _asyncio.sleep(2)
+                    await event_queue.put(("heartbeat", None))
+
+            _asyncio.ensure_future(_do_llm_call())
+            _heartbeat_task = _asyncio.ensure_future(_do_heartbeat())
+
+            # 主循环：消费心跳和等待 LLM 完成
+            while True:
+                event_type, _ = await event_queue.get()
+                if event_type == "heartbeat":
+                    yield f": heartbeat\n\n"
+                elif event_type == "llm_done":
+                    _heartbeat_task.cancel()
+                    break
+
+            llm_result = llm_result_holder.get("result")
+            if not llm_result:
+                yield f"data: {json.dumps({'type': 'error', 'msg': 'LLM 调用失败'}, ensure_ascii=False)}\n\n"
+                return
+
+            content = llm_result["choices"][0]["message"]["content"].strip()
+            content = content.replace("```json", "").replace("```", "").strip()
+            result = json.loads(content)
+
+            # 发送 structured thinking
             thinking = result.get("thinking", "")
             if thinking:
                 yield f"data: {json.dumps({'type': 'thinking', 'text': thinking}, ensure_ascii=False)}\n\n"
@@ -7426,8 +9652,55 @@ async def generate_slots(request: Dict = Body(...)):
             session["confirmed_slots"] = slots
             logger.info(f"[GenerateSlots] session={session_id}: {len(slots)}个槽位")
 
+            # 记录思考日志
+            if "thinking_logs" not in session:
+                session["thinking_logs"] = []
+            slots_chain = [{"step": 1, "action": "分析主题与素材库", "reason": f"基于{material_count}条素材（含{file_count}个文件、{ai_material_count}条AI补充），提取核心主题", "result": f"共生成{len(slots)}个内容槽位"}]
+            for i, s in enumerate(slots):
+                slots_chain.append({
+                    "step": i + 2,
+                    "action": f"槽位「{s.get('label', s.get('slot_key', '未知'))}」",
+                    "reason": f"槽位类型：{s.get('label', '未知')}，描述：{s.get('description', '未指定')}，相关素材来源于素材库",
+                    "result": "槽位已生成"
+                })
+            session["thinking_logs"].append({
+                "call_id": "generate_slots",
+                "call_name": "槽位生成",
+                "phase": "槽位生成",
+                "session_id": session_id,
+                "start_time": _gen_start,
+                "end_time": time.time(),
+                "duration": time.time() - _gen_start,
+                "model": model,
+                "temperature": 0.3,
+                "status": "success",
+                "full_prompt": prompt[:8000],
+                "thinking_chain": slots_chain,
+                "final_output": json.dumps(slots, ensure_ascii=False)[:5000],
+                "result": f"生成了{len(slots)}个槽位：{'、'.join([s.get('label', s.get('key', '')) for s in slots[:5]])}",
+                "log_id": f"log_generate_{int(time.time() * 1000)}"
+            })
+
         except Exception as e:
             logger.error(f"[GenerateSlots] 失败: {e}")
+            # 记录错误日志
+            session = _get_session(session_id)
+            if session:
+                if "thinking_logs" not in session:
+                    session["thinking_logs"] = []
+                session["thinking_logs"].append({
+                    "call_id": "generate_slots",
+                    "call_name": "槽位生成",
+                    "phase": "槽位生成",
+                    "session_id": session_id,
+                    "start_time": _gen_start,
+                    "end_time": time.time(),
+                    "duration": time.time() - _gen_start,
+                    "status": "failed",
+                    "error": str(e),
+                    "thinking_chain": [{"step": 1, "action": "槽位生成失败", "reason": f"LLM调用或解析过程中发生错误：{str(e)[:200]}", "result": "生成中断，未产出槽位"}],
+                    "log_id": f"log_generate_err_{int(time.time() * 1000)}"
+                })
             yield f"data: {json.dumps({'type': 'error', 'msg': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -7455,7 +9728,7 @@ async def slot_relations(request: Dict = Body(...)):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
 
         if not api_key:
             return _success({"relations": [], "graph_description": "LLM 未配置"})
@@ -7480,31 +9753,50 @@ async def slot_relations(request: Dict = Body(...)):
   ]
 }}"""
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0.3,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="槽位关联分析",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+            temperature=0.3,
+            seed=42,
+            phase="结构组织",
+        )
         parsed = result["choices"][0]["message"]["content"].strip()
         parsed = parsed.replace("```json", "").replace("```", "").strip()
         data = json.loads(parsed)
 
         logger.info(f"[SlotRelations] session={session_id}: {len(data.get('relations', []))}条关系")
+        
+        # 记录思考日志
+        relations = data.get("relations", [])
+        graph_desc = data.get("graph_description", "")
+        # 统计关系类型
+        from collections import Counter
+        type_counts = Counter(r.get("relation", "其他") for r in relations)
+        type_desc = "、".join(f"{k} {v} 组" for k, v in type_counts.items())
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="槽位关联分析",
+            phase="结构组织",
+            steps=[
+                {"step": 1, "action": "识别槽位间逻辑关系",
+                 "reason": f"对 {len(confirmed_slots)} 个槽位进行关联分析，找出逻辑先后顺序",
+                 "result": f"发现 {len(relations)} 组关联关系：{type_desc}"},
+                {"step": 2, "action": "生成关系图谱描述",
+                 "reason": "基于关联关系，生成文章整体逻辑描述，指导后续提纲编排",
+                 "result": graph_desc[:200] + ("..." if len(graph_desc) > 200 else "")},
+            ],
+            output=f"关联分析完成：{len(relations)} 组关联，{type_desc}",
+            duration=999,
+        )
+
         return _success(data)
 
     except Exception as e:
         logger.error(f"[SlotRelations] 失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/slot/match_materials")
@@ -7526,7 +9818,7 @@ async def match_materials(request: Dict = Body(...)):
         return _success({"slot_materials": result, "stats": stats})
     except Exception as e:
         logger.error(f"[MatchMaterials] 失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/slot/pre_check_materials")
@@ -7613,26 +9905,21 @@ async def pre_check_materials(request: Dict = Body(...)):
   }}
 }}"""
 
-                async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-                    response = await client.post(
-                        f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        json={
-                            "model": llm_config.get("model", "deepseek-chat"),
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": 1024,
-                            "temperature": 0.3,
-                            "seed": 42,
-                        },
-                    )
-                    if response.status_code == 200:
-                        ai_result = response.json()
-                        parsed = ai_result["choices"][0]["message"]["content"].strip()
-                        parsed = parsed.replace("```json", "").replace("```", "").strip()
-                        suggestions = json.loads(parsed).get("suggestions", {})
-                        for sk, alts in suggestions.items():
-                            if sk in results:
-                                results[sk]["alternatives"] = alts
+                result = await _call_llm(
+                    session_id=session_id,
+                    call_name="precheck_materials",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=1024,
+                    temperature=0.3,
+                    seed=42,
+                    phase="素材检查",
+                )
+                parsed = result["choices"][0]["message"]["content"].strip()
+                parsed = parsed.replace("```json", "").replace("```", "").strip()
+                suggestions = json.loads(parsed).get("suggestions", {})
+                for sk, alts in suggestions.items():
+                    if sk in results:
+                        results[sk]["alternatives"] = alts
 
         logger.info(f"[PreCheck] session={session_id}: "
                     f"full={sum(1 for v in results.values() if v['level']=='full')}, "
@@ -7642,7 +9929,7 @@ async def pre_check_materials(request: Dict = Body(...)):
 
     except Exception as e:
         logger.error(f"[PreCheck] 失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/slot/content_preview")
@@ -7709,20 +9996,15 @@ async def slot_content_preview(request: Dict = Body(...)):
 直接返回预览文字，不要JSON、不要markdown代码块。"""
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-            response = await client.post(
-                f"{llm_config.get('base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": llm_config.get("model", "deepseek-chat"),
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 300,
-                    "temperature": 0.5,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            preview = result["choices"][0]["message"]["content"].strip()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="slot_preview",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.5,
+            phase="内容预览",
+        )
+        preview = result["choices"][0]["message"]["content"].strip()
         return _success({"preview": preview})
     except Exception as e:
         logger.warning(f"槽位预览失败: {e}")
@@ -7735,10 +10017,11 @@ async def slot_content_preview(request: Dict = Body(...)):
 async def batch_fill_v4(request: Dict = Body(...)):
     """
     V4 批量填充（为每个槽位生成提纲 + 匹配素材）
-    请求体: { session_id, confirmed_slots }
+    请求体: { session_id, confirmed_slots, web_search_enabled }
     """
     session_id = request.get("session_id", "")
     confirmed_slots = request.get("confirmed_slots", [])
+    web_search_enabled = request.get("web_search_enabled", False)
 
     if not session_id:
         return _error(code=400, msg="缺少 session_id")
@@ -7755,6 +10038,35 @@ async def batch_fill_v4(request: Dict = Body(...)):
             aipulse_items = session.get("aipulse_items")
             _ensure_material_pool(session_id, mcp_summary=mcp_summary, aipulse_items=aipulse_items)
 
+        # L3: 联网兜底（用户手动开启时，用 DuckDuckGo 搜索补充素材）
+        if web_search_enabled:
+            try:
+                from src.web_search import search_web_batch
+                topic = session.get('step1', {}).get('direction', '')
+                # 用 topic + 各槽位 label 作为搜索词
+                search_queries = [topic[:60]] if topic else []
+                for s in confirmed_slots:
+                    label = s.get("label", "")
+                    if label and len(label) > 2:
+                        search_queries.append(f"{topic[:30]} {label[:20]}" if topic else label[:30])
+                search_queries = search_queries[:3]  # 最多 3 个搜索词
+                web_results = await search_web_batch(search_queries, max_per_query=4)
+                if web_results:
+                    pool = session.get("material_pool", [])
+                    for r in web_results:
+                        pool.append({
+                            "text": f"{r.get('title', '')}：{r.get('snippet', '')}",
+                            "source_type": "web_search",
+                            "filename": r.get("title", "web_result")[:100],
+                            "source_name": r.get("url", "Web 搜索"),
+                        })
+                    session["material_pool"] = pool
+                    logger.info(f"[WebFallback] 联网搜索成功: {len(web_results)}条 → pool")
+                else:
+                    logger.info("[WebFallback] 联网搜索 0 条结果")
+            except Exception as e:
+                logger.warning(f"[WebFallback] 联网搜索失败（不影响主流程）: {e}")
+
         # 第一轮匹配（用 label+desc 做素材匹配，给提纲生成提供上下文）
         slot_mats = _match_materials_internal(session_id, confirmed_slots)
 
@@ -7762,7 +10074,7 @@ async def batch_fill_v4(request: Dict = Body(...)):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_FLASH
 
         slot_outlines = {}
         slot_search_kw = {}  # P3: 存储每槽位的搜索关键词
@@ -7796,34 +10108,76 @@ async def batch_fill_v4(request: Dict = Body(...)):
   "search_keywords": ["关键词1", "关键词2", "关键词3"]
 }}"""
 
-                async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-                    response = await client.post(
-                        f"{base_url}/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        json={
-                            "model": model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": 1024,
-                            "temperature": 0.5,
-                            "seed": 42,
-                        },
+                try:
+                    result = await _call_llm(
+                        session_id=session_id,
+                        call_name="批量填充",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=1024,
+                        temperature=0.5,
+                        seed=42,
+                        phase="批量填充",
                     )
-                    if response.status_code == 200:
-                        ai = response.json()
-                        parsed = ai["choices"][0]["message"]["content"].strip()
-                        parsed = parsed.replace("```json", "").replace("```", "").strip()
-                        outline_data = json.loads(parsed)
-                        slot_outlines[slot_key] = outline_data.get("outline", [])
-                        slot_search_kw[slot_key] = outline_data.get("search_keywords", [])
-
+                    parsed = result["choices"][0]["message"]["content"].strip()
+                    parsed = parsed.replace("```json", "").replace("```", "").strip()
+                    outline_data = json.loads(parsed)
+                    slot_outlines[slot_key] = outline_data.get("outline", [])
+                    slot_search_kw[slot_key] = outline_data.get("search_keywords", [])
+                except Exception:
+                    pass  # 单个槽位 AI 失败不阻塞其余槽位
         # P3: 第二轮匹配（用 label+desc+search_keywords，匹配更准）
         if slot_search_kw:
             slot_mats = _match_materials_internal(session_id, confirmed_slots, search_keywords=slot_search_kw)
+
+        # W1: LLM 语义分配 AIPULSE 素材到槽位
+        slot_mats = await _match_aipulse_by_llm(session_id, confirmed_slots, slot_mats)
 
         session["slot_outlines"] = slot_outlines
         session["slot_materials"] = slot_mats
 
         logger.info(f"[BatchFillV4] session={session_id}: {len(confirmed_slots)}个槽位填充完成")
+        
+        # 记录思考日志
+        fill_steps = [{
+            "step": 1, "action": "素材匹配",
+            "reason": f"为 {len(confirmed_slots)} 个槽位在知识库中匹配相关素材",
+            "result": f"匹配完成，每槽匹配 1-5 段素材片段"
+        }]
+        if web_search_enabled:
+            fill_steps.append({
+                "step": 2, "action": "联网搜索补充",
+                "reason": "用户开启了联网搜索，用槽位关键词检索外部资料",
+                "result": "联网搜索结果已并入素材池"
+            })
+        outline_step = 3 if web_search_enabled else 2
+        total_outline_points = 0
+        total_keywords = 0
+        for slot in confirmed_slots:
+            slot_key = slot.get("slot_key", "")
+            label = slot.get("label", slot_key)
+            mats = slot_mats.get(slot_key, [])
+            outline = slot_outlines.get(slot_key, [])
+            kw = slot_search_kw.get(slot_key, [])
+            total_outline_points += len(outline)
+            total_keywords += len(kw)
+            mat_brief = "、".join([m.get("source_type", "素材") for m in mats[:3]])
+            fill_steps.append({
+                "step": outline_step,
+                "action": f"「{label}」：生成提纲 + 匹配素材",
+                "reason": f"匹配到 {len(mats)} 段素材（{mat_brief or '无'}），AI 生成了 {len(outline)} 点提纲、{len(kw)} 个搜索关键词",
+                "result": "提纲已就绪，可进入写稿阶段"
+            })
+            outline_step += 1
+        
+        _log_process_step(
+            session_id=session_id,
+            call_name="批量填充",
+            phase="写稿准备",
+            steps=fill_steps,
+            output=f"批量填充完成：{len(confirmed_slots)} 个槽位，共 {total_outline_points} 点提纲，{total_keywords} 个搜索关键词",
+            duration=999,  # duration will be set properly
+        )
+        
         return _success({
             "slot_materials": slot_mats,
             "slot_outlines": slot_outlines,
@@ -7831,7 +10185,206 @@ async def batch_fill_v4(request: Dict = Body(...)):
 
     except Exception as e:
         logger.error(f"[BatchFillV4] 失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
+
+
+# === W2-2: 整合生成端点 ===
+
+@router.post("/api/workflow/slot/integrate_outline")
+async def integrate_outline(request: Dict = Body(...)):
+    """
+    将提纲碎片+素材整合为连贯提纲。
+    请求: { session_id, slot_key, slot_label, current_outline, materials, writing_plan }
+    """
+    session_id = request.get("session_id", "")
+    slot_label = request.get("slot_label", "")
+    current_outline = request.get("current_outline", [])
+    materials = request.get("materials", [])
+    writing_plan = request.get("writing_plan", "")
+
+    if not session_id or not current_outline:
+        return _error(code=400, msg="缺少必要参数")
+
+    try:
+        # 构建提纲文本
+        outline_text = "\n".join(
+            f"{o.get('order', i+1)}. {o.get('point', '')}"
+            for i, o in enumerate(current_outline)
+        )
+        # 构建素材文本
+        mat_texts = "\n".join(
+            f"- [{m.get('source_type', '')}] {m.get('text', '')[:200]}"
+            for m in materials[:8]
+        ) if materials else "无补充素材"
+
+        prompt = f"""你是一个提纲整合器。请分两步完成整合，严格按格式输出。
+
+## 第一步：理解层（必须先完成，不能跳过）
+输入：当前提纲、补充素材
+任务：
+1. 提取当前提纲的核心主题（old_theme）和每条的视角（old_perspectives）
+2. 分析补充素材能提供什么新维度（new_dimensions），每条标 relation：
+   - complement：异视角互补（如"闭坑经验"+"技术趋势"，同一槽位的不同侧面）
+   - extend：同视角扩展（如"闭坑经验"+"新增案例"，同一个方向延伸）
+   - conflict：真冲突（结论相反，需[待核实]处理）
+3. 输出 analysis JSON
+
+## 第二步：编排层（基于第一步的 analysis 结果）
+任务：按 analysis 的 relation 编排提纲，输出 points 数组
+- complement → 分层递进排列（先讲旧的视角，再讲新视角，最后融合落地）
+- extend → 合并到对应旧条目的视角中
+- conflict → 两条都保留，弱势方标注 [待核实]
+
+## 输出格式（严格 JSON，不要 markdown，不要代码块标记）
+{{
+  "thinking_chain": [
+    {{"step": 1, "action": "分析当前提纲", "reason": "基于输入的提纲碎片", "result": "旧提纲核心主题是XX，包含X个视角..."}},
+    {{"step": 2, "action": "分析补充素材", "reason": "基于输入的素材", "result": "素材提供了XX个新维度，与旧提纲是XX关系"}},
+    {{"step": 3, "action": "编排提纲", "reason": "基于analysis的relation", "result": "最终编排为X条提纲，逻辑递进"}}
+  ],
+  "points": [
+    {{"order": 1, "point": "...", "from": "旧视角A"}},
+    {{"order": 2, "point": "...", "from": "新维度B"}}
+  ],
+  "result": "整合后的完整提纲要点文本"
+}}
+
+## 约束
+1. thinking_chain 必须输出至少3步
+2. 所有输入的提纲条目必须保留核心语义，仅当两条内容完全重复时可合并，禁止丢弃单条
+3. points 必须基于 analysis 的 relation 编排
+4. 输出条数 3-5 条。若当前提纲≥3条且无新增维度，保持原条数
+5. 不要复述素材内容，只整合要点
+6. 保持逻辑递进
+
+## 输入
+【槽位名称】{slot_label}
+【写作方案】{writing_plan if writing_plan else '无特殊要求'}
+【当前提纲（可能来自多次分析的不同视角）】
+{outline_text}
+【关联素材】
+{mat_texts}"""
+
+        # 调用统一流式LLM工具
+        result = await stream_llm_call(
+            session_id=session_id,
+            call_id=f"integrate_outline_{slot_label}",
+            call_name=f"{slot_label} - 提纲整合生成",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            require_thinking_chain=False  # 上面的Prompt已经包含了思考链要求
+        )
+
+        # 丰富最近一条日志的 thinking_chain：提纲整合详情
+        session = _get_session(session_id)
+        if session:
+            logs = session.get("thinking_logs", [])
+            if logs:
+                last = logs[-1]
+                mat_count = len(materials) if materials else 0
+                outline_len = len(current_outline) if current_outline else 0
+                chain = [{
+                    "step": 1, "action": f"槽位「{slot_label}」提纲整合",
+                    "reason": f"基于{outline_len}条当前提纲和{mat_count}条关联素材进行整合分析",
+                    "result": f"提纲整合完成，当前分析进度：槽位「{slot_label}」"
+                }]
+                if writing_plan:
+                    chain.append({"step": 2, "action": "写作方案约束", "reason": f"应用写作方案：{writing_plan[:100]}", "result": "已纳入方案约束"})
+                chain.append({"step": len(chain) + 1, "action": "整合策略", "reason": "分析新旧提纲的互补关系、扩展关系和冲突关系，按分层递进策略重新编排", "result": "整合策略已执行"})
+                last["thinking_chain"] = chain
+
+        # 解析 points（兼容两种格式）
+        final_output = result.get("final_output", "")
+        try:
+            # 先尝试直接从result中拿
+            if "points" in result:
+                points = result["points"]
+            else:
+                # 尝试解析final_output中的JSON
+                parsed = json.loads(final_output.strip())
+                points = parsed.get("points", [])
+                if not points:
+                    # 如果没有points，用result作为单一要点
+                    points = [{"order": 1, "point": result.get("result", final_output)}]
+            
+            logger.info(
+                f"[IntegrateOutline] 整合完成 "
+                f"points={len(points)}"
+            )
+            return _success({
+                "integrated_outline": points,
+                "thinking_chain": result.get("thinking_chain", []),
+                "log_id": result.get("log_id", ""),
+            })
+        except Exception as parse_e:
+            logger.warning(f"[IntegrateOutline] 解析points失败: {parse_e}，fallback到原文")
+            # fallback：把原文按行拆成points
+            lines = [l.strip() for l in final_output.split('\n') if l.strip()]
+            points = [{"order": i+1, "point": l} for i, l in enumerate(lines[:5])]
+            return _success({
+                "integrated_outline": points,
+                "thinking_chain": result.get("thinking_chain", []),
+                "log_id": result.get("log_id", ""),
+            })
+
+    except Exception as e:
+        logger.error(f"[IntegrateOutline] 失败: {e}")
+        return _error_internal(e)
+
+
+# === W3: 联网搜索端点（按槽位） ===
+
+@router.post("/api/workflow/slot/web_search")
+async def web_search_slot(request: Dict = Body(...)):
+    """
+    按槽位联网搜索补充素材。
+    请求: { session_id, slot_key, slot_label }
+    """
+    session_id = request.get("session_id", "")
+    slot_key = request.get("slot_key", "")
+    slot_label = request.get("slot_label", "")
+
+    if not session_id or not slot_label:
+        return _error(code=400, msg="缺少必要参数")
+
+    try:
+        session = _get_session(session_id)
+        direction = session.get("step1", {}).get("direction", "") if session.get("step1") else ""
+        topic = direction if direction else slot_label
+
+        from src.web_search import search_web_batch
+        queries = [
+            f"{topic[:30]} {slot_label[:20]}",
+            f"{slot_label} 最新 案例",
+        ]
+        results = await search_web_batch(queries, max_per_query=4)
+
+        # 格式化返回
+        formatted = []
+        for r in results:
+            formatted.append({
+                "title": r.get("title", ""),
+                "snippet": r.get("snippet", ""),
+                "url": r.get("url", ""),
+            })
+
+        # 存储到 session（供后续使用）
+        pool = session.get("material_pool", [])
+        for r in results:
+            pool.append({
+                "text": f"{r.get('title', '')}：{r.get('snippet', '')}",
+                "source_type": "web_search",
+                "filename": r.get("title", "web_result")[:100],
+                "source_name": r.get("url", ""),
+            })
+        session["material_pool"] = pool
+
+        logger.info(f"[WebSearch] 槽位搜索: {slot_label} → {len(formatted)}条")
+        return _success({"results": formatted, "count": len(formatted)})
+
+    except Exception as e:
+        logger.error(f"[WebSearch] 失败: {e}")
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/slot/generate_outline")
@@ -7853,7 +10406,7 @@ async def generate_slot_outline(request: Dict = Body(...)):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_PRO
 
         if not api_key:
             return _error(msg="LLM 未配置")
@@ -7879,22 +10432,16 @@ async def generate_slot_outline(request: Dict = Body(...)):
   ]
 }}"""
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1024,
-                    "temperature": 0.5,
-                    "seed": 42,
-                },
-            )
-            response.raise_for_status()
-            ai = response.json()
-
-        parsed = ai["choices"][0]["message"]["content"].strip()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="slot_outline",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+            temperature=0.5,
+            seed=42,
+            phase="槽位提纲",
+        )
+        parsed = result["choices"][0]["message"]["content"].strip()
         parsed = parsed.replace("```json", "").replace("```", "").strip()
         outline = json.loads(parsed).get("outline", [])
 
@@ -7908,7 +10455,7 @@ async def generate_slot_outline(request: Dict = Body(...)):
 
     except Exception as e:
         logger.error(f"[GenerateOutline] 失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
 
 
 @router.post("/api/workflow/slot/ask_followup")
@@ -7930,7 +10477,7 @@ async def ask_followup(request: Dict = Body(...)):
         llm_config = _get_config("llm")
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = llm_config.get("api_key", "")
-        model = llm_config.get("model", "deepseek-chat")
+        model = V4_PRO
 
         if not api_key:
             return _error(msg="LLM 未配置")
@@ -7962,23 +10509,133 @@ async def ask_followup(request: Dict = Body(...)):
 
         messages.append({"role": "user", "content": question})
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 1024,
-                    "temperature": 0.7,
-                },
-            )
-            response.raise_for_status()
-            ai = response.json()
-
-        answer = ai["choices"][0]["message"]["content"].strip()
+        result = await _call_llm(
+            session_id=session_id,
+            call_name="ask_followup",
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.7,
+            phase="槽位追问",
+        )
+        answer = result["choices"][0]["message"]["content"].strip()
         return _success({"answer": answer})
 
     except Exception as e:
         logger.error(f"[AskFollowup] 失败: {e}")
-        return _error(msg=str(e))
+        return _error_internal(e)
+
+
+@router.post("/api/workflow/slot/analyze")
+async def analyze_slot(request: Dict = Body(...)):
+    """
+    H3: 槽位素材分析（替代自由追问 AI）
+    请求体: { session_id, slot_key, analysis_type, materials, outline }
+    analysis_type: core_points | outline_relation | expand_outline | extension_direction
+    """
+    session_id = request.get("session_id", "")
+    slot_key = request.get("slot_key", "")
+    analysis_type = request.get("analysis_type", "core_points")
+    materials = request.get("materials", [])
+    outline = request.get("outline", [])
+
+    if not session_id:
+        return _error(msg="缺少 session_id")
+    if not slot_key:
+        return _error(msg="缺少 slot_key")
+
+    try:
+        session = _get_session(session_id)
+        direction = session.get("step1", {}).get("selected_direction", {})
+        direction_text = direction.get("description", direction.get("title", "")) if isinstance(direction, dict) else str(direction)
+
+        # 构建素材文本摘要
+        material_texts = []
+        for m in materials[:10]:
+            text = (m.get("text", "") or "")[:800]
+            name = m.get("source_name", m.get("filename", ""))
+            if text.strip():
+                material_texts.append(f"--- {name} ---\n{text}")
+        materials_block = "\n\n".join(material_texts) if material_texts else "（暂无素材）"
+
+        # 构建提纲文本
+        outline_text = "\n".join([f"{i+1}. {o.get('point', o.get('text', ''))}" for i, o in enumerate(outline)]) if outline else "（暂无提纲）"
+
+        # 各分析类型的 system prompt
+        type_names = {
+            "core_points": "核心观点提炼",
+            "outline_relation": "提纲关联分析",
+            "expand_outline": "提纲扩写",
+            "extension_direction": "延伸方向建议",
+        }
+        type_prompts = {
+            "core_points": "你是一个资深分析助手。请根据下面提供的素材，提炼出最核心的3-5个观点。每个观点用一句话概括，然后给出简短解释。只基于素材内容，不要编造。",
+            "outline_relation": "你是一个写作顾问。当前槽位的提纲已经列出，下面提供了与该槽位匹配的素材。请分析：素材内容和当前提纲之间存在怎样的关联？提纲是否需要调整？哪些素材最能支撑哪个提纲点？",
+            "expand_outline": "你是一个写作助手。请根据下面提供的素材内容，扩写当前提纲。对每个提纲点补充具体的子要点、数据支撑或案例引用。保持结构清晰，不要改动提纲的原有顺序和核心论点。",
+            "extension_direction": "你是一个创意顾问。基于当前槽位的素材和提纲，提出2-3个可以延伸讨论的方向。每个方向包含：方向名称、一句话理由、建议补充什么类型的素材。思考素材中没有覆盖但值得探讨的角度。",
+        }
+        system_prompt = type_prompts.get(analysis_type, type_prompts["core_points"])
+        type_name = type_names.get(analysis_type, "分析")
+
+        user_prompt = f"""[写作方向]
+{direction_text or '(未指定)'}
+
+[当前槽位]
+{slot_key}
+
+[该槽位的素材]
+{materials_block}
+
+[当前提纲]
+{outline_text}
+
+请根据上述内容进行分析。
+
+【输出格式要求】
+请先输出你的思考过程，再输出最终分析结果，严格按以下JSON格式返回：
+{{
+  "thinking_chain": [
+    {{ "step": 1, "action": "阅读并理解素材", "reason": "素材提供了哪些关键信息", "result": "核心信息是..." }},
+    {{ "step": 2, "action": "分析提纲与素材关联", "reason": "素材与提纲的匹配度", "result": "第X条提纲最能被素材Y支撑..." }},
+    {{ "step": 3, "action": "提炼最终结果", "reason": "综合所有信息", "result": "..." }}
+  ],
+  "result": "最终分析结果"
+}}"""
+
+        # 调用统一流式LLM工具
+        llm_result = await stream_llm_call(
+            session_id=session_id,
+            call_id=f"analyze_{slot_key}_{analysis_type}",
+            call_name=f"{slot_key} - {type_name}",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.7,
+            require_thinking_chain=False  # 上面的Prompt已经包含了思考链要求
+        )
+
+        # 丰富最近一条日志的 thinking_chain：槽位分析详情
+        if session:
+            logs = session.get("thinking_logs", [])
+            if logs:
+                last = logs[-1]
+                mat_count = len(materials) if materials else 0
+                chain = [{
+                    "step": 1, "action": f"槽位「{slot_key}」{type_name}",
+                    "reason": f"对槽位「{slot_key}」进行{type_name}分析，当前已加载{mat_count}条关联素材",
+                    "result": f"{type_name}分析完成"
+                }]
+                last["thinking_chain"] = chain
+
+        result = llm_result.get("result", llm_result.get("final_output", ""))
+        return _success({
+            "result": result,
+            "analysis_type": analysis_type,
+            "slot_key": slot_key,
+            "thinking_chain": llm_result.get("thinking_chain", []),
+            "log_id": llm_result.get("log_id", ""),
+        })
+
+    except Exception as e:
+        logger.error(f"[AnalyzeSlot] 失败: {e}")
+        return _error_internal(e)

@@ -2,7 +2,7 @@ import { ref, reactive, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useSession } from './useSession'
 import { fillFrameworkSlot, checkCoherence, uploadSlotSource, batchFillFrameworkSlots } from '../utils/api'
-import { generateSlots, getSlotRelations, matchMaterials, generateSlotOutline, batchFillV4, askFollowup, preCheckMaterials } from '../utils/api'
+import { generateSlots, getSlotRelations, matchMaterials, generateSlotOutline, batchFillV4, askFollowup, preCheckMaterials, analyzeSlot, integrateOutline, searchWebForSlot } from '../utils/api'
 
 // ==================== 模块级单例状态 ====================
 const { sessionId } = useSession()
@@ -40,9 +40,15 @@ const slotRelations = ref(null)          // 槽位关系图谱 { relations, grap
 const editingSlot = ref('')             // 当前打开的编辑面板槽位
 const showEditPanel = ref(false)         // 编辑面板是否展示
 const followupHistory = ref([])          // 追问历史 [{q, a}]
+// H3: 快速分析状态
+const analyzeResult = ref('')            // 当前分析结果文本
+const analyzeLoadingType = ref('')       // 正在加载的分析类型
+const analyzeError = ref(false)          // 分析是否失败
+const analyzeTypeLabel = ref('')         // 分析类型中文标签
 const streamAbortController = ref(null)  // SSE 流中断控制器
 const preCheckResults = ref({})          // 素材预检结果 { slot_key: { count, level, alternatives } }
 const preCheckRunning = ref(false)        // 预检是否进行中
+const webSearchEnabled = ref(false)       // L3: 联网兜底开关
 
 // ==================== Computed ====================
 const completedSlots = computed(() => {
@@ -357,7 +363,7 @@ async function confirmAndFill() {
   batchFilling.value = true
 
   try {
-    const res = await batchFillV4(sessionId.value, confirmedSlots.value)
+    const res = await batchFillV4(sessionId.value, confirmedSlots.value, webSearchEnabled.value)
     if (res.data?.code === 0) {
       const data = res.data.data
       const mats = data.slot_materials || {}
@@ -450,6 +456,79 @@ async function askFollowupQuestion(context, slotKey, question) {
     Message.error('追问失败: ' + e.message)
   }
   return null
+}
+
+// H3: 槽位素材分析
+const typeLabels = { core_points: '核心观点', outline_relation: '提纲关联', expand_outline: '扩写提纲', extension_direction: '扩展方向' }
+
+async function handleAnalyzeSlot(slotKey, analysisType) {
+  try {
+    const matList = slotMaterials[slotKey] || []
+    const outlineList = slotOutlines[slotKey] || []
+    
+    analyzeLoadingType.value = analysisType
+    analyzeError.value = false
+    analyzeResult.value = ''
+    analyzeTypeLabel.value = typeLabels[analysisType] || analysisType
+
+    const res = await analyzeSlot(sessionId.value, slotKey, analysisType, matList, outlineList)
+    if (res.data?.code === 0) {
+      analyzeResult.value = res.data.data.result
+      analyzeLoadingType.value = ''
+    } else {
+      analyzeError.value = true
+      analyzeLoadingType.value = ''
+      Message.error('分析失败: ' + (res.data?.msg || '未知错误'))
+    }
+  } catch (e) {
+    analyzeError.value = true
+    analyzeLoadingType.value = ''
+    Message.error('分析请求失败: ' + e.message)
+  }
+}
+
+// W2-2: 整合生成提纲
+async function handleIntegrateOutline(data) {
+  const { slotKey, slotLabel, outline, materials, writingPlan } = data
+  try {
+    const res = await integrateOutline(sessionId.value, slotKey, slotLabel, outline, materials, writingPlan)
+    if (res.data?.code === 0) {
+      const result = res.data.data.integrated_outline || []
+      return result
+    } else {
+      Message.error('整合生成失败: ' + (res.data?.msg || ''))
+    }
+  } catch (e) {
+    Message.error('整合生成请求失败')
+  }
+  return null
+}
+
+// W3: 联网搜索槽位素材
+async function handleWebSearchSlot(data) {
+  const { slotKey, slotLabel } = data
+  try {
+    const res = await searchWebForSlot(sessionId.value, slotKey, slotLabel)
+    if (res.data?.code === 0) {
+      const results = res.data.data.results || []
+      Message.success(`搜索到 ${results.length} 条素材`)
+      return results
+    } else {
+      Message.error('联网搜索失败')
+    }
+  } catch (e) {
+    Message.error('联网搜索请求失败')
+  }
+  return null
+}
+
+// W4: 确认所有槽位
+function handleConfirmAllSlots() {
+  const allSK = confirmedSlots.value.map(s => s.slot_key)
+  for (const sk of allSK) {
+    slotConfirmed[sk] = true
+  }
+  Message.success(`已确认 ${allSK.length} 个槽位`)
 }
 
 /** 素材可行性预检 */
@@ -551,6 +630,24 @@ export function useStep3Workbench() {
     preCheckResults,
     preCheckRunning,
     runPreCheck,
+    webSearchEnabled,
     adoptAlternative,
+    // H3: 快速分析
+    analyzeResult,
+    analyzeLoadingType,
+    analyzeError,
+    analyzeTypeLabel,
+    handleAnalyzeSlot,
+    // W2-2 + W3 + W4
+    handleIntegrateOutline,
+    handleWebSearchSlot,
+    handleConfirmAllSlots,
   }
+
+}
+
+// 单例模式：确保跨组件共享同一个 useStep3Workbench 实例
+const _instance = useStep3Workbench()
+export function getStep3Workbench() {
+  return _instance
 }

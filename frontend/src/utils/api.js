@@ -373,7 +373,7 @@ export function recommendAngles({ sessionId, topic, mcpSummary, materialSummary 
   })
 }
 
-// 框架填充（C 步骤）
+// 框架填充（C 步骤）-- 已废弃，v4 使用 batch_fill_v4
 export function fillFramework(sessionId, frameworkKey, frameworkName, direction, supplement2, mcpSummary) {
   return api.post('/workflow/framework/fill', {
     session_id: sessionId,
@@ -838,10 +838,11 @@ export function generateSlotOutline(sessionId, slotKey, topic, materials, writin
 /**
  * V4 批量填充（素材+提纲并行）
  */
-export function batchFillV4(sessionId, confirmedSlots) {
+export function batchFillV4(sessionId, confirmedSlots, webSearchEnabled = false) {
   return api.post('/workflow/slot/batch_fill_v4', {
     session_id: sessionId,
     confirmed_slots: confirmedSlots,
+    web_search_enabled: webSearchEnabled,
   })
 }
 
@@ -880,3 +881,45 @@ export function buildMaterialPool(sessionId, mcpSummary = '', mcpFiles = []) {
 }
 
 export default api
+
+// H2: 查询 AIPULSE 预拉取状态
+export function getAipulseStatus(sessionId) {
+  return api.get(`/workflow/aipulse_status/${sessionId}`)
+}
+
+// H3: 槽位素材分析（替代自由追问 AI）
+export function analyzeSlot(sessionId, slotKey, analysisType, materials, outline) {
+  return api.post('/workflow/slot/analyze', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    analysis_type: analysisType,
+    materials: materials || [],
+    outline: outline || [],
+  })
+}
+
+// W2-2: 整合提纲碎片+素材为连贯提纲
+export function integrateOutline(sessionId, slotKey, slotLabel, currentOutline, materials, writingPlan) {
+  return api.post('/workflow/slot/integrate_outline', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    slot_label: slotLabel,
+    current_outline: currentOutline || [],
+    materials: materials || [],
+    writing_plan: writingPlan || '',
+  })
+}
+
+// W3: 按槽位联网搜索补充素材
+export function searchWebForSlot(sessionId, slotKey, slotLabel) {
+  return api.post('/workflow/slot/web_search', {
+    session_id: sessionId,
+    slot_key: slotKey,
+    slot_label: slotLabel,
+  })
+}
+
+// ---- AI 思考日志 ----
+export function getThinkingLogs(sessionId, since = 0) {
+  return api.get('/workflow/thinking/logs', { params: { session_id: sessionId, since } })
+}

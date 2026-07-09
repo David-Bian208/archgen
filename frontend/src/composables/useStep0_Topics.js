@@ -56,6 +56,7 @@ async function loadTopics() {
     }
 
     const res = await apiMcpSuggest({
+      session_id: sessionId.value,
       topic: _route?.query?.topic || '',
       folders,
       categories: _route?.query?.categories ? JSON.parse(_route.query.categories) : [],

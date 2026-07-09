@@ -276,7 +276,7 @@ class LLMPipeline:
 
         base_url = self.llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = self.llm_config.get("api_key", "")
-        model = self.llm_config.get("model", "deepseek-chat")
+        model = self.llm_config.get("model", "deepseek-v4-flash")
         timeout = self.llm_config.get("timeout", 60)
 
         async with httpx.AsyncClient(timeout=timeout) as client:

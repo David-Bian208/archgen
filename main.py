@@ -25,18 +25,52 @@ async def lifespan(app: FastAPI):
     await tracker.init_db()
     logging.info("埋点数据库初始化完成")
     
+    # 后台任务跟踪（用于优雅停机）
+    bg_tasks = set()
+    
     # 启动后自动解析身份定位文件（六维模型）
     try:
         from api import auto_parse_persona
-        # 在后台任务中解析，不阻塞启动
-        asyncio.create_task(auto_parse_persona(app))
+        task = asyncio.create_task(auto_parse_persona(app))
+        bg_tasks.add(task)
+        task.add_done_callback(bg_tasks.discard)
         logging.info("已启动身份定位自动解析任务")
     except Exception as e:
         logging.warning(f"身份定位自动解析启动失败: {e}")
-    
+
+    # 启动后加载向量索引（Phase 1.5）
+    try:
+        from api import load_vectors
+        load_vectors()
+        logging.info("向量索引加载完成")
+        # 后台预加载 MiniLM 模型（线程，不阻塞事件循环）
+        import threading
+        t = threading.Thread(target=_preload_model_sync, daemon=True)
+        t.start()
+    except Exception as e:
+        logging.warning(f"向量索引加载失败（非致命）: {e}")
+
     logging.info("ArchGen 启动完成")
     yield
     logging.info("ArchGen 关闭中...")
+    # 优雅停机：取消所有未完成的后台任务
+    for task in bg_tasks:
+        task.cancel()
+    await asyncio.gather(*bg_tasks, return_exceptions=True)
+    logging.info("ArchGen 已关闭")
+
+
+def _preload_model_sync():
+    """后台线程预加载 MiniLM 模型，避免第一次向量召回请求超时"""
+    try:
+        from api import get_embedding_model
+        import time
+        t0 = time.time()
+        model = get_embedding_model()
+        if model:
+            logging.info(f"MiniLM 模型后台预加载完成 ({time.time()-t0:.0f}s)")
+    except Exception as e:
+        logging.warning(f"MiniLM 模型预加载失败（非致命）: {e}")
 
 
 def load_config() -> dict:
@@ -168,6 +202,24 @@ def create_app() -> FastAPI:
     import api
     api.set_app(app)
     app.include_router(api.router)
+
+    # 挂载前端构建产物（直连模式，无需 vite 代理）
+    from fastapi.responses import FileResponse
+    frontend_dist = Path(__file__).parent / "frontend" / "dist"
+    if frontend_dist.exists():
+        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="frontend_assets")
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            """SPA fallback: 非 API/非静态文件路由返回 index.html"""
+            if full_path.startswith("api/") or full_path.startswith("output/"):
+                from fastapi import HTTPException as _HTTPException
+                raise _HTTPException(status_code=404)
+            index_path = frontend_dist / "index.html"
+            if index_path.exists():
+                return FileResponse(str(index_path))
+            from fastapi import HTTPException as _HTTPException
+            raise _HTTPException(status_code=404)
 
     return app
 

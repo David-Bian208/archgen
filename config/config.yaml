@@ -1,12 +1,12 @@
 ai_pulse:
-  base_url: http://8.130.148.166:8887
+  base_url: ${AI_PULSE_HOST:-http://8.130.148.166:8887}
   enabled: true
   timeout: 10
 app:
   debug: false
   host: 0.0.0.0
   name: ArchGen
-  port: 8939
+  port: 8960
   version: 0.1.0
 cors:
   allow_origins:
@@ -24,6 +24,7 @@ cors:
   - http://localhost:3025
   - http://localhost:3026
   - http://localhost:8926
+  - http://localhost:8948
 database:
   path: data/archgen.db
   type: sqlite
@@ -39,37 +40,18 @@ llm:
   api_key: ${DEEPSEEK_API_KEY}
   base_url: https://api.deepseek.com/v1
   max_tokens: 4096
-  model: deepseek-chat
+  model: deepseek-v4-flash
   provider: deepseek
   retry_delay: 2
   retry_times: 3
   temperature: 0.1
-  timeout: 30
+  timeout: 120
 logging:
   file: logs/archgen.log
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   level: INFO
-paths:
-  desktop: ${DESKTOP_FOLDER:-./data/desktop}
-  knowledge_base: ${KB_PATH:-./knowledge_base}
 persona:
   file_path: /home/admin/Desktop/AI 博主/01-定位与策略/身份核心摘要.md
-screenshot:
-  browser: chromium
-  default_height: 800
-  default_width: 1200
-  font_timeout: 5000
-  headless: true
-  wait_for_fonts: true
-source_tag:
-  strict_mode: false
-  valid_prefixes:
-  - 'local:'
-  - 'ai_pulse:'
-  - 'user_input:'
-  - 'ai_inferred:'
 storage:
-  cleanup_after_hours: 24
-  max_file_size_mb: 10
   output_dir: output
   temp_dir: data/temp

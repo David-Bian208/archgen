@@ -29,6 +29,14 @@
 
 import logging
 from typing import Dict, List, Optional
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config.model_config import get_model_for_scene, V4_FLASH
 
 logger = logging.getLogger(__name__)
 
@@ -511,12 +519,16 @@ class DegradationChain:
         return knowledge_level in ["L0", "L1"]
 
     async def _call_llm(self, system_prompt: str, prompt: str) -> Dict:
-        """调用 LLM"""
+        """调用 LLM
+        [V4] 有意保持独立 _call_llm（非 api._call_llm）：
+        原因：避免循环导入（api.py 导入本模块），且降级链无需 session 思考日志
+        已通过 get_model_for_scene("degradation_generate") 使用 V4-Flash
+        """
         import httpx
 
         base_url = self.llm_config.get("base_url", "https://api.deepseek.com/v1")
         api_key = self.llm_config.get("api_key", "")
-        model = self.llm_config.get("model", "deepseek-chat")
+        model = get_model_for_scene("degradation_generate")
         timeout = self.llm_config.get("timeout", 60)
 
         try:
