@@ -128,7 +128,9 @@ def _resolve_env_vars(value):
             if default is not None:
                 return default
             return m.group(0)
-        return re.sub(r'\$\{([^}:]+)(?::([^}]*))?\}', replace_match, value)
+        # 支持 ${VAR} / ${VAR:default} / ${VAR:-default} 三种语法
+        # 第二组匹配可选的 '-'（bash 的 :- 语法），第三组匹配默认值
+        return re.sub(r'\$\{([^}:]+)(?::-?([^}]*))?\}', replace_match, value)
     elif isinstance(value, dict):
         return {k: _resolve_env_vars(v) for k, v in value.items()}
     elif isinstance(value, list):

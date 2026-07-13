@@ -15,6 +15,7 @@ ArchGen 向量索引构建器
 import os
 import glob
 import argparse
+import json
 import numpy as np
 import pickle
 import sys
@@ -97,6 +98,10 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     np.save(os.path.join(output_dir, "vectors.npy"), vectors)
+    # 主输出：JSON（安全，无反序列化风险）
+    with open(os.path.join(output_dir, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    # 向后兼容：同时输出 pkl（旧版读取）
     with open(os.path.join(output_dir, "metadata.pkl"), "wb") as f:
         pickle.dump(metadata, f)
 

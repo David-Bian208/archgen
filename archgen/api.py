@@ -9,9 +9,11 @@ import re
 import asyncio
 import threading
 import httpx
+import ipaddress
 from pathlib import Path
 from typing import Optional, Dict, List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
+from urllib.parse import urlparse
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Body, Depends, Header
 from config.model_config import get_model_for_scene, get_default_max_tokens, V4_FLASH, V4_PRO
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -74,6 +76,153 @@ def _error_internal(e: Exception = None, default_msg="内部错误，请重试")
     if e:
         logger.error(f"内部错误: {e}", exc_info=True)
     return _error(msg=default_msg)
+
+
+# ===== 安全世界工具（路径遍历 / SSRF / 认证） =====
+
+# LLM base_url 主机白名单（防 SSRF）— 仅允许公网 LLM 服务
+_ALLOWED_LLM_HOSTS = {"api.deepseek.com", "api.openai.com"}
+
+# 敏感文件扩展名黑名单（即便在白名单目录内也禁止读取/写入）
+_FORBIDDEN_EXTENSIONS = {".py", ".pyc", ".so", ".dll", ".exe", ".sh", ".bash",
+                         ".env", ".pem", ".key", ".crt", ".p12", ".pfx",
+                         ".yaml", ".yml", ".conf", ".ini", ".toml"}
+
+
+def _validate_path_within_base(file_path: str, base_dir) -> bool:
+    """检查 file_path 解析后是否在 base_dir 内（防路径遍历）。
+
+    file_path 可以是相对路径（相对于 base_dir）或绝对路径。
+    含 .. 跨目录跳转、符号链接逃逸均会返回 False。
+    """
+    try:
+        base = Path(base_dir).resolve()
+        p = Path(file_path)
+        target = p.resolve() if p.is_absolute() else (base / file_path).resolve()
+        return target == base or base in target.parents
+    except Exception:
+        return False
+
+
+def _validate_path_in_allowed_bases(file_path: str, allowed_bases: list) -> bool:
+    """检查绝对路径是否在任一允许的基础目录内。"""
+    try:
+        target = Path(file_path).resolve()
+        for base in allowed_bases:
+            base_resolved = Path(base).resolve()
+            if target == base_resolved or base_resolved in target.parents:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _has_forbidden_extension(file_path: str) -> bool:
+    """检查文件扩展名是否在敏感黑名单内。"""
+    return Path(file_path).suffix.lower() in _FORBIDDEN_EXTENSIONS
+
+
+def _get_allowed_read_bases() -> list:
+    """获取允许读取文件的基础目录白名单。"""
+    bases = []
+    kb_cfg = _get_config("knowledge_base")
+    kb_root = kb_cfg.get("root_path", "knowledge_base")
+    bases.append(kb_root)
+    storage_cfg = _get_config("storage")
+    bases.append(storage_cfg.get("output_dir", "output"))
+    bases.append(Path(__file__).parent / "config")
+    bases.append(Path(__file__).parent / "knowledge_base")
+    # persona 文件所在目录（用户配置）
+    try:
+        persona_path = _get_persona_path()
+        if persona_path:
+            bases.append(Path(persona_path).parent)
+    except Exception:
+        pass
+    return bases
+
+
+# 敏感系统目录前缀（/api/folders/verify 和 /api/folders/list 禁止访问）
+_SENSITIVE_SYSTEM_PREFIXES = (
+    "/etc", "/root", "/var", "/proc", "/sys", "/dev", "/boot", "/sbin",
+    "/bin", "/usr/sbin", "/usr/bin", "/lib", "/lib64", "/run", "/srv",
+    "/.ssh", "/.gnupg",
+)
+
+
+def _is_sensitive_system_path(path_str: str) -> bool:
+    """检查路径是否为敏感系统目录（用于 folder browse 端点的轻量防护）。"""
+    try:
+        resolved = str(Path(path_str).resolve())
+        for prefix in _SENSITIVE_SYSTEM_PREFIXES:
+            if resolved == prefix or resolved.startswith(prefix + "/"):
+                return True
+        return False
+    except Exception:
+        return True
+
+
+def _validate_llm_base_url(base_url: str) -> bool:
+    """校验 LLM base_url 防 SSRF。
+
+    白名单优先：api.deepseek.com, api.openai.com
+    黑名单：localhost / 127.0.0.0/8 / 10.0.0.0/8 / 172.16.0.0/12 / 192.168.0.0/16 / 169.254.0.0/16 / ::1
+    其他公网 host 默认拒绝（严格模式）。
+    """
+    if not base_url:
+        return False
+    try:
+        parsed = urlparse(base_url)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False
+        if host in _ALLOWED_LLM_HOSTS:
+            return True
+        # 检查是否为 IP
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        except ValueError:
+            if host in {"localhost", "localhost.localdomain"}:
+                return False
+        # 默认拒绝（白名单严格模式）
+        return False
+    except Exception:
+        return False
+
+
+def _get_app_api_key() -> str:
+    """读取服务间认证 API Key。未配置则返回空（关闭认证，向后兼容）。"""
+    cfg = _get_config("app")
+    return cfg.get("api_key", "") or os.environ.get("ARCHGEN_API_KEY", "")
+
+
+def verify_api_key(x_api_key: str = Header(default="", alias="X-API-Key")):
+    """FastAPI 依赖：校验 X-API-Key 请求头。
+
+    未配置 ARCHGEN_API_KEY 时跳过认证（默认开放，向后兼容）。
+    配置后所有加了 Depends(verify_api_key) 的端点都需要带 X-API-Key 头。
+    """
+    expected = _get_app_api_key()
+    if not expected:
+        return True
+    if x_api_key and x_api_key == expected:
+        return True
+    raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+
+def _apply_infographic_hard_constraints(html: str) -> str:
+    """零容忍约束硬替换：强制修正 LLM 不遵守 Prompt 的布局参数。
+
+    1. 内容区高度必须为 h-[calc(100%-100px)]，任何其他数值一律归一化
+    2. 序号徽章统一为 w-3.5 h-3.5 rounded-full（禁止 w-5/w-4/w-3）
+    """
+    # 用 regex 匹配任意数值的 h-[calc(100%-Npx)]，统一替换为 100px
+    html = re.sub(r'h-\[calc\(100%-\d+px\)\]', 'h-[calc(100%-100px)]', html)
+    # 徽章尺寸归一化
+    html = re.sub(r'w-[345]\s+h-[345]\s+rounded-full', 'w-3.5 h-3.5 rounded-full', html)
+    return html
 
 
 def _extract_json(text: str) -> str:
@@ -298,6 +447,10 @@ async def _call_llm(
         base_url = llm_config.get("base_url", "https://api.deepseek.com/v1")
     if not api_key:
         api_key = llm_config.get("api_key", "")
+    # SSRF 防护：校验 base_url 是否在白名单内
+    if not _validate_llm_base_url(base_url):
+        logger.error(f"[Security] LLM base_url 校验失败，疑似 SSRF: {base_url}")
+        raise HTTPException(status_code=503, detail="LLM 服务地址不可用")
     if not model:
         # V4 迁移：根据业务场景自动选择 Pro / Flash
         model = get_model_for_scene(call_name)
@@ -693,6 +846,29 @@ def _set_active_index(folder_hash: str):
         _ACTIVE_FOLDER_HASH = None
 
 
+def _load_vector_metadata(meta_path: str):
+    """安全加载向量索引元数据。
+
+    优先读 metadata.json（安全）；如果只有 metadata.pkl（旧索引），
+    则用 pickle.load 但仅限本地构建产物（不含用户输入，风险可接受）。
+    新版 build_index.py 默认产出 JSON。
+    """
+    json_path = meta_path
+    if json_path.endswith(".pkl"):
+        json_path = json_path[:-4] + ".json"
+    # 优先 JSON
+    if os.path.exists(json_path):
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # 向后兼容：读取旧 pkl 文件
+    if os.path.exists(meta_path) and meta_path.endswith(".pkl"):
+        logger.warning(f"[Security] 加载旧版 pickle 元数据（建议重新构建索引以转 JSON）: {meta_path}")
+        import pickle
+        with open(meta_path, "rb") as f:
+            return pickle.load(f)
+    raise FileNotFoundError(f"元数据文件不存在: {meta_path}")
+
+
 def load_vectors(folders=None):
     """加载向量索引（启动时或选题时调用）。
 
@@ -707,14 +883,14 @@ def load_vectors(folders=None):
         return
 
     vec_path = os.path.join(vec_dir, "vectors.npy")
-    meta_path = os.path.join(vec_dir, "metadata.pkl")
+    meta_pkl = os.path.join(vec_dir, "metadata.pkl")
+    meta_json = os.path.join(vec_dir, "metadata.json")
+    meta_path = meta_json if os.path.exists(meta_json) else meta_pkl
 
     if os.path.exists(vec_path) and os.path.exists(meta_path):
         try:
             vecs = np.load(vec_path)
-            import pickle
-            with open(meta_path, "rb") as f:
-                meta = pickle.load(f)
+            meta = _load_vector_metadata(meta_path)
             _VECTORS_MAP[h] = {"vectors": vecs, "meta": meta}
             _set_active_index(h)
             logger.info(f"[Vector] 加载 {h}: {vecs.shape[0]} vectors, dim={vecs.shape[1]}")
@@ -764,10 +940,8 @@ def ensure_index_load(folders: list):
         if result.returncode == 0:
             logger.info(f"[Vector] 索引构建完成: {vec_dir}")
             vecs = np.load(vec_path)
-            import pickle
-            meta_path = os.path.join(vec_dir, "metadata.pkl")
-            with open(meta_path, "rb") as f:
-                meta = pickle.load(f)
+            meta_path = os.path.join(vec_dir, "metadata.json")
+            meta = _load_vector_metadata(meta_path)
             _VECTORS_MAP[h] = {"vectors": vecs, "meta": meta}
             _set_active_index(h)
             logger.info(f"[Vector] 已加载: {vecs.shape[0]} vectors")
@@ -2175,13 +2349,21 @@ async def get_kb_files(category: Optional[str] = None):
 
 
 @router.post("/api/kb/read")
-async def read_kb_file(request: Dict = Body(...)):
+async def read_kb_file(request: Dict = Body(...), _auth=Depends(verify_api_key)):
     """读取知识库文件内容"""
     file_path = request.get("file_path")
     if not file_path:
         return _error(code=400, msg="缺少 file_path 参数")
+    # 路径遍历防护：file_path 必须解析后在知识库根目录内
+    kb_cfg = _get_config("knowledge_base")
+    kb_root = kb_cfg.get("root_path", "knowledge_base")
+    if not _validate_path_within_base(file_path, kb_root):
+        logger.warning(f"[Security] KB 路径遍历拦截: {file_path}")
+        return _error(code=403, msg="文件路径越界，禁止访问")
+    if _has_forbidden_extension(file_path):
+        return _error(code=403, msg="禁止读取该类型文件")
     try:
-        kb = KnowledgeBaseReader(_get_config("knowledge_base"))
+        kb = KnowledgeBaseReader(kb_cfg)
         content = kb.read_file(file_path)
         if content is None:
             return _error(code=404, msg="文件不存在或无法读取")
@@ -2198,11 +2380,14 @@ TEXT_EXTENSIONS = {".md", ".txt", ".markdown"}
 
 
 @router.post("/api/folders/verify")
-async def verify_folder(request: Dict = Body(...)):
+async def verify_folder(request: Dict = Body(...), _auth=Depends(verify_api_key)):
     """验证文件夹是否存在并可读取"""
     folder_path = request.get("path", "")
     if not folder_path:
         return _error(code=400, msg="缺少 path 参数")
+    if _is_sensitive_system_path(folder_path):
+        logger.warning(f"[Security] 敏感系统路径拦截: {folder_path}")
+        return _error(code=403, msg="禁止访问该系统路径")
     try:
         path = Path(folder_path)
         if not path.exists():
@@ -2271,11 +2456,14 @@ def _build_folder_tree(path: Path, base_path: Path, max_depth: int = 5, current_
 
 
 @router.post("/api/folders/list")
-async def list_folder_files(request: Dict = Body(...)):
+async def list_folder_files(request: Dict = Body(...), _auth=Depends(verify_api_key)):
     """列出文件夹结构（返回树形结构，包含子文件夹）"""
     folder_path = request.get("path", "")
     if not folder_path:
         return _error(code=400, msg="缺少 path 参数")
+    if _is_sensitive_system_path(folder_path):
+        logger.warning(f"[Security] 敏感系统路径拦截: {folder_path}")
+        return _error(code=403, msg="禁止访问该系统路径")
     try:
         path = Path(folder_path)
         if not path.exists() or not path.is_dir():
@@ -2290,14 +2478,27 @@ async def list_folder_files(request: Dict = Body(...)):
 
 
 @router.post("/api/folders/read")
-async def read_folder_file(request: Dict = Body(...)):
+async def read_folder_file(request: Dict = Body(...), _auth=Depends(verify_api_key)):
     """读取文件夹中的文件内容"""
     folder_path = request.get("folder_path", "")
     file_path = request.get("file_path", "")
     if not folder_path or not file_path:
         return _error(code=400, msg="缺少 folder_path 或 file_path 参数")
+    # 路径遍历防护：folder_path 本身必须在允许的基础目录白名单内（防 folder_path=/etc）
+    allowed_bases = _get_allowed_read_bases()
+    if not _validate_path_in_allowed_bases(folder_path, allowed_bases):
+        logger.warning(f"[Security] folder_path 越界拦截: folder={folder_path}")
+        return _error(code=403, msg="文件夹路径越界，禁止访问")
+    # 路径遍历防护：file_path 必须解析后在 folder_path 内
+    if not _validate_path_within_base(file_path, folder_path):
+        logger.warning(f"[Security] 路径遍历拦截: folder={folder_path}, file={file_path}")
+        return _error(code=403, msg="文件路径越界，禁止访问")
+    # 敏感扩展名黑名单
+    if _has_forbidden_extension(file_path):
+        logger.warning(f"[Security] 敏感扩展名拦截: {file_path}")
+        return _error(code=403, msg="禁止读取该类型文件")
     try:
-        full_path = Path(folder_path) / file_path
+        full_path = (Path(folder_path).resolve() / file_path).resolve()
         if not full_path.exists():
             return _error(code=404, msg="文件不存在")
         content = full_path.read_text(encoding="utf-8")
@@ -2639,6 +2840,7 @@ async def generate_diagram(
     text: str = Form(...),
     style: str = Form("minimal"),
     size: str = Form("default"),
+    _auth=Depends(verify_api_key),
 ):
     """生成架构图"""
     try:
@@ -2663,10 +2865,11 @@ async def generate_diagram(
         return FileResponse(str(output_path), media_type="image/png", filename="diagram.png")
 
     except NotImplementedError as e:
-        raise HTTPException(status_code=501, detail=f"功能未实现: {str(e)}")
+        logger.warning(f"功能未实现: {e}")
+        raise HTTPException(status_code=501, detail="该框架暂未实现，请尝试其他框架")
     except Exception as e:
-        logger.error(f"生成失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+        logger.error(f"生成失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="生成失败，请稍后重试或检查输入参数")
 
 
 @router.post("/api/generate/preview")
@@ -2705,13 +2908,26 @@ async def generate_preview(request: Dict = Body(...)):
 @router.post("/api/generate/async")
 async def generate_diagram_async(
     background_tasks: BackgroundTasks,
-    framework_key: str = Form(...),
-    text: str = Form(...),
-    style: str = Form("minimal"),
-    size: str = Form("default"),
-    session_id: str = Form(""),
+    request: Dict = Body(default={}),
 ):
-    """异步生成架构图"""
+    """异步生成架构图
+
+    Schema 兼容（与 /api/generate/infographic 对齐）：
+      - framework_key | framework_name  （二选一，前者优先）
+      - text | article_content           （二选一，前者优先）
+      - style, size, session_id          （可选）
+    """
+    framework_key = request.get("framework_key") or request.get("framework_name", "")
+    text = request.get("text") or request.get("article_content", "")
+    style = request.get("style", "minimal")
+    size = request.get("size", "default")
+    session_id = request.get("session_id", "")
+
+    if not framework_key:
+        return _error(code=400, msg="缺少 framework_key / framework_name 参数")
+    if not text:
+        return _error(code=400, msg="缺少 text / article_content 参数")
+
     task_id = str(uuid.uuid4())
     async_tasks[task_id] = {"status": "pending", "progress": 0}
     background_tasks.add_task(_process_async, task_id, framework_key, text, style, size)
@@ -2738,6 +2954,306 @@ async def get_task_status(task_id: str):
     if task_id not in async_tasks:
         raise HTTPException(status_code=404, detail="任务不存在")
     return _success(async_tasks[task_id])
+
+
+# ===== 配图生成（信息图：LLM 直出 HTML） =====
+
+_INFOGRAPHIC_SIZE_STRATEGY = {
+    "9:16": "纵向堆叠，每个模块占满宽度，模块间用分隔线或间距区分，适合滑动浏览。每模块高度约六分之一。",
+    "2.35:1": "横向宽幅，模块必须水平排列，使用 grid-cols-3 或 grid-cols-4。每个模块高度固定，宽度自适应。绝对禁止纵向堆叠。",
+    "default": "灵活混合布局，重要模块全宽，次要模块 2-3 列 grid。",
+}
+
+
+def _get_size_strategy(width: int, height: int) -> str:
+    """根据宽高比返回布局策略文本"""
+    if height <= 0:
+        return _INFOGRAPHIC_SIZE_STRATEGY["default"]
+    ratio = width / height
+    if ratio <= 0.6:
+        return _INFOGRAPHIC_SIZE_STRATEGY["9:16"]
+    elif ratio >= 2.0:
+        return _INFOGRAPHIC_SIZE_STRATEGY["2.35:1"]
+    else:
+        return _INFOGRAPHIC_SIZE_STRATEGY["default"]
+
+
+@router.post("/api/generate/infographic")
+async def generate_infographic(request: Dict = Body(...), _auth=Depends(verify_api_key)):
+    """生成信息图 HTML。LLM 根据文章内容 + 框架 + 尺寸直接输出 Tailwind HTML。
+    
+    请求体:
+        framework_name: 框架名（如"SWOT分析"）
+        article_content: 文章全文（Markdown）
+        width: 画布宽度（默认1080）
+        height: 画布高度（默认1920）
+        persona_context: 可选，人设上下文
+    """
+    framework_name = request.get("framework_name", "通用分析")
+    article_content = request.get("article_content", "")
+    width = request.get("width", 1080)
+    height = request.get("height", 1920)
+    persona_context = request.get("persona_context", "")
+    composition_hint = request.get("composition_hint", "")
+
+    if not article_content.strip():
+        return _error(code=400, msg="缺少 article_content 参数")
+
+    layout_strategy = _get_size_strategy(width, height)
+    hint_section = f"\n## 额外构图指令（需严格遵守）\n{composition_hint}\n" if composition_hint.strip() else ""
+
+    prompt = f"""# Role: 资深前端工程师 & 信息密度优化专家
+## 任务：将以下内容转化为信息图海报（{width}×{height}px）
+
+## 一、零容忍约束（只要违反任何一条，直接视为输出不合格）
+
+> 以下代码片段必须原封不动出现在输出中，不允许任何字符修改：
+> 
+> 内容区容器：`<div class="h-[calc(100%-100px)] overflow-hidden p-3 flex flex-col gap-2">`
+> 序号徽章：`<span class="w-3.5 h-3.5 rounded-full bg-gradient-to-r from-primary to-secondary text-white text-[7px] font-bold flex items-center justify-center shrink-0">`
+
+1. **内容区空间预算公式写死**：必须是 `h-[calc(100%-100px)]`，不允许 72、88、96、98、102 等任何其他数值
+2. **序号徽章尺寸写死**：所有模块的序号圆形徽章必须是 `w-3.5 h-3.5`，不允许 w-3、w-4、w-5 等任何其他尺寸
+
+## 二、硬性约束（违反即报废）
+
+### 1. 画布与容器
+- 外层容器：必须使用 `aspect-[3/4]`（方图）或对应比例的 Tailwind 原生类，搭配 `max-w-md` 限制宽度
+- **严禁使用 `style="aspect-ratio"` 内联样式，违反即报废**
+- 背景：浅色系 `bg-white`，卡片用 `bg-gray-50`
+- **顶部标题栏固定**：`h-10 bg-gradient-to-r from-primary/5 to-secondary/5 px-4 py-2`，居中或左对齐标题，文字 10px font-semibold
+- 底部标注栏固定 `h-10`（文字 8px text-gray-500），完整渐变背景 `from-primary to-secondary text-white`
+- **严禁内容被底栏截断**。如果 6 个模块高度超出，允许增加到 7-8 个更薄的模块，或压缩行高，或减少每个模块的要点行数，但绝不允许最后一个模块被裁切
+
+### 2. 字号层级（五级锁死，禁止浮动 — 违反即报废）
+- 顶栏标题：10px font-semibold — 仅顶部标题栏使用
+- 模块标题：11px font-semibold — 模块1标题用 `text-primary`，其余模块标题用 `text-gray-800`（体现视觉层级差异）
+- 正文要点：9px text-gray-700 leading-tight — 模块内容列表
+- 副文说明：8px text-gray-600 — 次要描述文字
+- 辅助标签：7px text-gray-500 — 技术细节、节点标注、角标
+- **违规判定：任何模块正文使用 ≥10px 视为违反约束**
+
+### 3. 色彩系统（含使用位置规则）
+自定义颜色（通过 tailwind.config 注入）：
+- primary: #165DFF（品牌蓝）— 仅用于模块标题、Font Awesome 图标、圆形序号徽章、渐变端点
+- secondary: #36CFFB（辅助蓝）— 仅作为渐变的另一端，与 primary 搭配
+
+透明度梯度（严格遵守）：
+- from-primary/5 to-secondary/5 → 顶栏背景（微妙，几乎不可见）
+- from-primary/10 to-secondary/10 → 模块1背景（略可见，突出但不刺眼）
+- from-primary to-secondary → 圆形徽章、底栏（完整渐变，视觉锚点）
+
+禁止规则：
+- 禁止在正文 (gray-700) 中使用 primary 色（太刺眼）
+- 禁止在非渐变场景使用 secondary 色
+- 禁止使用 #165DFF 和 #36CFFB 以外的蓝色
+- 渐变透明度不允许超过 10%（模块1背景为唯一例外）
+
+### 4. 布局规则
+- 模块间距：gap-2，模块内边距：p-3
+- **所有卡片统一使用 rounded-xl（≈12-16px 圆角）**，严禁小圆角
+- 内容少的模块：使用 `grid-cols-2` 或 `w-1/2` 并列，节省纵向空间
+- 内容多的模块：`grid-cols-1` 全宽 + `leading-tight` 压缩行高
+- **流程类模块**：水平 `flex` + `w-1/5` 节点 + **图标在上文字在下垂直堆叠** + 箭头 `fa-chevron-right` 水平穿于节点之间
+- **每个模块的高度应自然适配其内容量**。内容多的模块自然高一些，内容少的自然矮一些
+- **禁止在模块最外层容器使用 `flex-1`**（它会导致所有模块强制等高）。模块内部子元素可以自由使用 flex-1
+
+### 5. 代码规范
+- 必须包含：
+  `<script src="https://cdn.tailwindcss.com"></script>`
+  `<link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">`
+  `<script>tailwind.config = {{ theme: {{ extend: {{ colors: {{ primary: '#165DFF', secondary: '#36CFFB' }} }} }} }}</script>`
+- 必须定义卡片阴影工具类：
+  `<style type="text/tailwindcss">@layer utilities {{ .card-shadow {{ box-shadow: 0 1px 6px rgba(22, 93, 255, 0.06); }} }}</style>`
+- 禁止使用 `style` 属性，所有样式必须通过 Tailwind 类名实现
+- HTML 结构必须完整闭合，每个标签都有对应闭合标签
+
+### 6. 模块视觉层级（行交替 + 核心亮点）
+
+#### 6.1 行交替配色
+- 整体采用**行交替节奏**：同行模块共享一种底色，不同行交替变化，形成视觉呼吸感
+- 渐变行：`bg-gradient-to-r from-primary/10 to-secondary/5 rounded-xl`
+- 纯白行：`bg-white card-shadow rounded-xl`
+- 交替模式示例：第1行渐变 → 第2行纯白 → 第3行渐变 → ...
+- **由 LLM 根据实际布局自行决定第几行用哪种底色，不写死**
+
+#### 6.2 核心亮点色块
+- 整张图中选 **1 个语义上最核心的模块**（不一定是第一个模块，由内容重要性决定），附带**结论色块**
+- 结论色块格式：`bg-gradient-to-r from-primary to-secondary text-white px-3 py-1.5 rounded-lg text-center font-bold`，内容为文章最核心的数字或结论（如"3天上线"、"98%准确率"）
+- 结论色块嵌入该模块内部（网格右侧/底部/标题旁），与文字紧凑排列，**禁止孤立悬浮造成大面积留白**
+
+#### 6.3 内容密度
+- **每个子模块至少包含 3-4 行要点**，宁可文字小一点、行高低一点，也要保证信息量充足
+
+### 7. 模块结构
+- **模块数量完全由文章语义决定，自适应范围 4-9 个**。信息密度高、主题多 → 拆细为 7-9 个；内容精简、主题少 → 4-6 个。**禁止为了凑数而强行拆分，也禁止合并语义不同的子主题**
+- 每个模块 `data-module-id="01"/"02"...`
+- 每个模块包含：**左侧独立序号圆形徽章**（必须是 `w-3.5 h-3.5`，尺寸写死，不允许放大或缩小，`rounded-full bg-gradient-to-r from-primary to-secondary text-white text-[7px] font-bold flex items-center justify-center shrink-0`）+ 标题行 + 要点列表
+- **序号徽章必须与标题文字水平排列，完全独立**，不是标题的一部分
+- 每个要点必须有前置 Font Awesome 图标，按以下语义选择：
+  - fa-star → AI 亮点、核心功能
+  - fa-code → 技术架构、开发流程
+  - fa-rocket → 部署、上线、发布
+  - fa-database → 数据、存储方案
+  - fa-check-circle → 验证、去重、合规
+  - fa-clock-o → 定时任务、时效
+  - fa-handshake-o → 协作、需求对齐
+  - fa-filter → 筛选、过滤规则
+  - fa-cogs → 系统配置、引擎
+
+## 二、执行步骤（必须按顺序思考）
+
+### Step 1: 内容蒸馏（最关键）
+- 阅读输入素材，提取不超过 6 个核心信息点
+- **严禁使用完整句子，必须压缩为短语/关键词**
+- 示例："双LLM降本策略，简单任务用DeepSeek V3.2，复杂推理用V4 Pro" → 蒸馏为「双LLM降本：V3.2 轻量 / V4 Pro 复杂」
+
+### Step 2: 空间意识
+以下为引导性思考，帮助建立"空间有限"的认知（非精确计算，用 CSS 公式实现）：
+- 内容区总高度 ≈ 容器高度 - 48px（顶栏+底栏）
+- 若 6 个模块用 `flex-1` + `space-y-1.5` 可自动均分
+- 若某模块要点超过 4 条，考虑用 `grid-cols-2` 双列排列以节省纵向空间
+- 若某模块要点超过 5 条，必须精简内容
+
+### Step 3: 代码生成
+根据蒸馏后的内容和布局约束，生成完整的 HTML。
+
+## 三、框架与风格
+- 框架：{framework_name}
+- 画布策略：{layout_strategy}
+{hint_section}
+## 四、输入素材
+{article_content[:8000]}
+
+## 输出要求
+直接输出 `<!DOCTYPE html>` 开头的完整 HTML 代码。不要 markdown 代码块标记（不要 ```html 或 ```），不要解释文字。"""
+
+    try:
+        result = await _call_llm(
+            call_name="infographic_generate",
+            messages=[
+                {"role": "system", "content": "你是一个严格遵守工程约束的前端开发工程师。你输出的是可运行的 HTML 代码，不是设计稿。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=16384,
+        )
+        raw_html = result["choices"][0]["message"]["content"]
+        # 清理可能的 markdown 包裹
+        cleaned = raw_html.strip()
+        # 零容忍约束硬替换（LLM 可能不遵守 Prompt 约束，这里强制修正）
+        cleaned = _apply_infographic_hard_constraints(cleaned)
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:cleaned.rfind("```")].strip()
+        # 确认以 <!DOCTYPE 或 <html 开头
+        if not (cleaned.lower().startswith("<!doctype") or cleaned.lower().startswith("<html")):
+            # 尝试从回复中提取 HTML 片段
+            html_start = cleaned.find("<!DO")
+            if html_start == -1:
+                html_start = cleaned.find("<html")
+            if html_start == -1:
+                html_start = cleaned.find("<div")
+            if html_start >= 0:
+                cleaned = cleaned[html_start:]
+            else:
+                return _error(code=1, msg="LLM 未返回有效 HTML，请重试")
+
+        return _success({"html": cleaned})
+    except Exception as e:
+        logger.error(f"信息图生成失败: {e}")
+        return _error_internal(e, "配图生成失败，请重试")
+
+
+@router.post("/api/generate/infographic/revise")
+async def revise_infographic(request: Dict = Body(...)):
+    """根据用户反馈修改信息图 HTML。遵循最小变更原则——只修改目标模块。
+    
+    请求体:
+        current_html: 当前的 HTML 代码
+        instruction: 用户的修改指令（自然语言）
+        framework_name: 框架名（可选）
+        article_content: 文章内容（可选）
+        target_module_id: 可选，指定要修改的模块 ID（如"03"），不指定则由 LLM 自动判断
+    """
+    current_html = request.get("current_html", "")
+    instruction = request.get("instruction", "")
+    framework_name = request.get("framework_name", "")
+    article_content = request.get("article_content", "")
+    target_module_id = request.get("target_module_id", "")
+
+    if not current_html.strip():
+        return _error(code=400, msg="缺少 current_html 参数")
+    if not instruction.strip():
+        return _error(code=400, msg="缺少 instruction 参数")
+
+    # 构建模块定位约束
+    module_constraint = ""
+    if target_module_id:
+        module_constraint = f"""**关键约束：** 你只能修改 data-module-id="{target_module_id}" 对应的 <div> 块。
+其他所有模块的 HTML 必须保持逐字符不变（包括空格、换行、属性顺序）。
+这是硬性要求，违反则视为失败。"""
+    else:
+        module_constraint = "**约束：** 尽可能只修改与用户指令相关的模块，其余模块保持原样不变。"
+
+    prompt = f"""你是信息图修改专家。根据用户指令，精确修改指定的模块。
+
+{module_constraint}
+
+**用户指令：** {instruction}
+
+**技术约束：**
+- 保持 Tailwind CDN + Font Awesome CDN 引用不变
+- 保持容器尺寸（width/height）不变
+- 保持 data-module-id 属性不变（数量和值都不得变）
+- 保持字号系统和颜色方案的连贯性
+- 你的修改必须与当前视觉风格融合，不引入不相称的设计元素
+
+{"**框架上下文：** " + framework_name if framework_name else ""}
+{"**原文参考：** " + article_content[:1000] if article_content else ""}
+
+**当前 HTML：**
+{current_html}
+
+**输出要求：**
+- 只输出完整 HTML 代码（从 <!DOCTYPE html> 开始）
+- 不添加 markdown 代码块标记
+- 不添加任何解释说明文字"""
+
+    try:
+        result = await _call_llm(
+            call_name="infographic_revise",
+            messages=[
+                {"role": "system", "content": "你是信息图修改专家，严格按最小变更原则修改 HTML。只输出完整 HTML，不解释。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=16384,
+        )
+        raw_html = result["choices"][0]["message"]["content"]
+        cleaned = raw_html.strip()
+        # 零容忍约束硬替换（与 generate_infographic 保持一致）
+        cleaned = _apply_infographic_hard_constraints(cleaned)
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:cleaned.rfind("```")].strip()
+        if not (cleaned.lower().startswith("<!doctype") or cleaned.lower().startswith("<html")):
+            html_start = cleaned.find("<!DO")
+            if html_start == -1:
+                html_start = cleaned.find("<html")
+            if html_start == -1:
+                html_start = cleaned.find("<div")
+            if html_start >= 0:
+                cleaned = cleaned[html_start:]
+            else:
+                return _error(code=1, msg="LLM 未返回有效 HTML，请重试")
+
+        return _success({"html": cleaned})
+    except Exception as e:
+        logger.error(f"信息图修改失败: {e}")
+        return _error_internal(e, "配图修改失败，请重试")
 
 
 # ===== 辅助接口 =====
@@ -4250,7 +4766,7 @@ def _get_persona_summary():
     return raw[:500] if raw else ""
 
 @router.post("/api/persona/parse")
-async def parse_persona(request: Dict = Body(default={})):
+async def parse_persona(request: Dict = Body(default={}), _auth=Depends(verify_api_key)):
     """
     解析身份定位文件，提取六维结构化信息（AI推理）
     使用 LLM 将非结构化身份文件解析为六维动态行为模型
@@ -4259,6 +4775,12 @@ async def parse_persona(request: Dict = Body(default={})):
     content = ""
     file_path = request.get("file_path", "")
     if file_path:
+        # 路径遍历防护：file_path 必须在允许的白名单目录内
+        if not _validate_path_in_allowed_bases(file_path, _get_allowed_read_bases()):
+            logger.warning(f"[Security] persona/parse 路径越界: {file_path}")
+            return _error(code=403, msg="文件路径越界，禁止访问")
+        if _has_forbidden_extension(file_path):
+            return _error(code=403, msg="禁止读取该类型文件")
         try:
             from pathlib import Path as PathLib
             if PathLib(file_path).exists():
@@ -4577,7 +5099,11 @@ async def auto_parse_persona(app=None):
 
 @router.get("/api/persona/info")
 async def get_persona_info():
-    """获取身份定位信息：文件路径 + 内容 + 解析后的结构化信息（六维模型）"""
+    """获取身份定位信息：文件路径 + 内容 + 解析后的结构化信息（六维模型）
+
+    注意：GET 接口不触发 LLM 解析（避免 50s+ 阻塞）。
+    若缓存不可用，返回 parsed=null，前端可通过 POST /api/persona/parse 主动触发解析。
+    """
     file_path = _get_persona_path()
     content = ""
     exists = False
@@ -4586,14 +5112,11 @@ async def get_persona_info():
         if Path(file_path).exists():
             content = Path(file_path).read_text(encoding="utf-8")
             exists = True
-            # 优先使用缓存的六维解析结果
+            # 仅返回缓存结果，不主动触发 LLM 解析（防 GET 阻塞）
             parsed = _get_persona_parsed()
-            if not parsed and content:
-                # 如果没有缓存，使用 LLM 解析六维模型
-                parsed = await _parse_persona_sync(content)
     except Exception as e:
         logger.warning(f"读取身份定位文件失败: {e}")
-    
+
     return _success({
         "file_path": file_path,
         "content": content,
@@ -4602,16 +5125,23 @@ async def get_persona_info():
     })
 
 @router.post("/api/persona/set_path")
-async def set_persona_path(request: Dict = Body(...)):
+async def set_persona_path(request: Dict = Body(...), _auth=Depends(verify_api_key)):
     """设置身份定位文件路径（同时持久化到 config.yaml）"""
     global _persona_file_path
     file_path = request.get("file_path", "")
     if not file_path:
         return _error(code=400, msg="缺少 file_path 参数")
-    
+
+    # 路径安全校验：必须是 .md/.txt 且在用户主目录或知识库内
+    if _has_forbidden_extension(file_path):
+        return _error(code=403, msg="禁止设置该类型文件")
+    suffix = Path(file_path).suffix.lower()
+    if suffix not in {".md", ".txt", ".markdown"}:
+        return _error(code=403, msg="仅支持 .md / .txt 文件")
+
     if not Path(file_path).exists():
         return _error(code=400, msg="文件不存在")
-    
+
     _persona_file_path = file_path
     
     # 持久化到 config.yaml
@@ -4631,17 +5161,25 @@ async def set_persona_path(request: Dict = Body(...)):
     return _success({"file_path": file_path})
 
 @router.post("/api/persona/save")
-async def save_persona(request: Dict = Body(...)):
+async def save_persona(request: Dict = Body(...), _auth=Depends(verify_api_key)):
     """保存身份定位内容到文件"""
     content = request.get("content", "")
     file_path = _get_persona_path()
-    
+
+    # 写入前再次校验路径合法性（防 set_path 后被篡改）
+    if not file_path or _has_forbidden_extension(file_path):
+        return _error(code=403, msg="目标文件路径不合法")
+    suffix = Path(file_path).suffix.lower()
+    if suffix not in {".md", ".txt", ".markdown"}:
+        return _error(code=403, msg="仅支持写入 .md / .txt 文件")
+
     try:
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         Path(file_path).write_text(content, encoding="utf-8")
         return _success({"file_path": file_path})
     except Exception as e:
-        return _error(msg=f"保存失败: {e}")
+        logger.error(f"保存身份定位失败: {e}", exc_info=True)
+        return _error_internal(e, default_msg="保存失败，请检查文件路径和权限")
 
 
 # ===== MCP 检索接口 =====
@@ -6857,6 +7395,7 @@ async def analyze_directions_v2(request: Dict = Body(...)):
 async def evaluate_user_direction(request: Dict = Body(...)):
     """评估用户自定义方向（根据 MCP 素材 + 补充素材打分）"""
     import time
+    start_time = time.time()
     
     session_id = request.get("session_id", "")
     custom_direction = request.get("direction", "").strip()
@@ -7732,6 +8271,7 @@ async def get_thinking_logs(session_id: str, since: float = 0.0):
 async def match_frameworks_v2(request: Dict = Body(...)):
     """推荐分析框架(v2: 双评分+降级兜底+业务化warning)"""
     import time
+    start_time = time.time()
     
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
@@ -8860,6 +9400,7 @@ async def fix_direction_issue(request: Dict = Body(...)):
 async def recommend_structures(request: Dict = Body(...)):
     """推荐内容结构"""
     import time
+    start_time = time.time()
     
     session_id = request.get("session_id", "")
     direction = request.get("direction", "")
@@ -9159,6 +9700,7 @@ async def supplement_draft(request: Dict = Body(...)):
 async def generate_outline_v2(request: Dict = Body(...)):
     """生成写作提纲（基于所有补充信息）"""
     import time
+    start_time = time.time()
     
     session_id = request.get("session_id", "")
     session = _get_session(session_id)
@@ -9661,9 +10203,8 @@ async def generate_full_article(request: Dict = Body(...)):
             phase="文章润色",
         )
         content_raw = result["choices"][0]["message"]["content"].strip()
-        content_raw = content_raw.strip()
-        if content_raw.startswith("```"):
-            content_raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', content_raw, flags=re.MULTILINE).strip()
+        # 使用 _extract_json 智能提取 JSON（兼容 LLM 前后附加说明文字）
+        content_raw = _extract_json(content_raw)
         article = json.loads(content_raw)
         return article
 
@@ -11006,11 +11547,12 @@ async def generate_slots(request: Dict = Body(...)):
                 return
 
             content = llm_result["choices"][0]["message"]["content"].strip()
-            content = content.replace("```json", "").replace("```", "").strip()
+            # 使用 _extract_json 智能提取 JSON（兼容 LLM 前后附加说明文字）
+            cleaned = _extract_json(content)
             try:
-                result = json.loads(content)
+                result = json.loads(cleaned)
             except (json.JSONDecodeError, ValueError):
-                result = _safe_json_parse(content, "slots")
+                result = _safe_json_parse(cleaned, "slots")
 
             # 发送 structured thinking
             thinking = result.get("thinking", "")
@@ -11019,6 +11561,12 @@ async def generate_slots(request: Dict = Body(...)):
 
             # 逐槽位发送
             slots = result.get("slots", [])
+            
+            # 0 个槽位：抛 error，不是静默 done
+            if not slots or len(slots) == 0:
+                yield f"data: {json.dumps({'type': 'error', 'msg': 'AI 未能识别有效槽位，请重试或手动补充素材'}, ensure_ascii=False)}\n\n"
+                return
+
             yield f"data: {json.dumps({'type': 'done', 'slots': slots}, ensure_ascii=False)}\n\n"
 
             # 保存到 session
