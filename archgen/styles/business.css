@@ -1,0 +1,21 @@
+/* 商务风格样式 - 待开发 */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+}
+
+.diagram-container {
+    width: 1200px;
+    padding: 60px;
+    margin: 0 auto;
+}
+
+/* 待完善 */

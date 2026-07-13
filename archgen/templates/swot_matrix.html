@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - SWOT 分析</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="swot-matrix">
+            <div class="quadrant strengths">
+                <div class="quadrant-header">
+                    <span class="icon">💪</span>
+                    <h2>Strengths 优势</h2>
+                </div>
+                <ul class="items">
+                    {% for item in strengths %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="quadrant weaknesses">
+                <div class="quadrant-header">
+                    <span class="icon">⚠️</span>
+                    <h2>Weaknesses 劣势</h2>
+                </div>
+                <ul class="items">
+                    {% for item in weaknesses %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="quadrant opportunities">
+                <div class="quadrant-header">
+                    <span class="icon">🚀</span>
+                    <h2>Opportunities 机会</h2>
+                </div>
+                <ul class="items">
+                    {% for item in opportunities %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            
+            <div class="quadrant threats">
+                <div class="quadrant-header">
+                    <span class="icon">⚡</span>
+                    <h2>Threats 威胁</h2>
+                </div>
+                <ul class="items">
+                    {% for item in threats %}
+                    <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        
+        {% if summary %}
+        <div class="summary">
+            <h3>总结建议</h3>
+            <p>{{ summary }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

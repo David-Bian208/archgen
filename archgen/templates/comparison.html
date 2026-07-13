@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 对比型架构图</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>维度</th>
+                    {% for item in items %}
+                    <th>{{ item.name }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for dim in dimensions %}
+                <tr>
+                    <td class="dimension">{{ dim }}</td>
+                    {% for item in items %}
+                    <td>{{ item.scores[loop.index0] }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

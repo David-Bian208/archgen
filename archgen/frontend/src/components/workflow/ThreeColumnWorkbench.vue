@@ -1,0 +1,1031 @@
+<template>
+  <div class="three-col-workbench">
+    <!-- 顶部信息栏 -->
+    <div class="workbench-header">
+      <span class="workbench-title">Step 3/5 三列分析工作台</span>
+      <a-space>
+        <a-tag v-if="phase === 'selecting_angle'" color="arcoblue">选择写作角度</a-tag>
+        <a-tag v-if="phase === 'streaming'" color="blue">AI 分析中...</a-tag>
+        <a-tag v-else-if="phase === 'editing_slots'" color="orange">调整槽位</a-tag>
+        <a-tag v-else-if="phase === 'filling'" color="purple">填充内容中...</a-tag>
+        <a-tag v-else-if="phase === 'done'" color="green">内容就绪</a-tag>
+      </a-space>
+    </div>
+
+    <!-- 写作角度选择 -->
+    <div v-if="phase === 'selecting_angle'" class="angle-selector">
+      <div class="angle-intro">
+        <h3>选择写作角度</h3>
+        <p>同一个选题可以从不同角度切入，请选择你想要的写作方式：</p>
+        <p v-if="angleLoading" class="angle-loading-hint">⏳ AI 正在分析推荐角度（当前为默认选项，可随时点击使用）</p>
+      </div>
+
+      <div>
+        <!-- 素材驱动角度 -->
+        <div v-if="availableAngles.length > 0" class="angle-group">
+          <div class="angle-group-title">📦 素材推荐 — 基于你的素材库</div>
+          <div class="angle-grid">
+            <div
+              v-for="(angle, idx) in availableAngles"
+              :key="'material-' + idx"
+              class="angle-card"
+              :class="{ selected: selectedAngle === angle }"
+              @click="selectAngle(angle)"
+            >
+              <div class="angle-card-header">
+                <span class="angle-label">{{ angle.name }}</span>
+                <span class="angle-coverage" :class="coverageClass(angle.coverage)">
+                  素材覆盖 {{ Math.round((angle.coverage || 0) * 100) }}%
+                </span>
+              </div>
+              <p class="angle-desc">{{ angle.description }}</p>
+              <div v-if="angle.gaps && angle.gaps.length > 0" class="angle-gaps">
+                <div v-for="(gap, gi) in angle.gaps.slice(0, 3)" :key="gi" class="gap-item">
+                  ⚠️ {{ typeof gap === 'string' ? gap : gap.item || gap }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 题目驱动角度 -->
+        <div v-if="topicAngles.length > 0" class="angle-group">
+          <div class="angle-group-title">🎯 题目推荐 — 这个题目最适合的角度</div>
+          <div class="angle-grid">
+            <div
+              v-for="(angle, idx) in topicAngles"
+              :key="'topic-' + idx"
+              class="angle-card angle-card-topic"
+              :class="{ selected: selectedAngle === angle }"
+              @click="selectAngle(angle)"
+            >
+              <div class="angle-card-header">
+                <span class="angle-label">{{ angle.name }}</span>
+                <span class="angle-coverage" :class="coverageClass(angle.coverage)">
+                  素材满足 {{ Math.round((angle.coverage || 0) * 100) }}%
+                </span>
+              </div>
+              <p class="angle-desc">{{ angle.description }}</p>
+              <div v-if="angle.gap" class="angle-gaps">
+                <div class="gap-item">⚠️ {{ angle.gap }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="availableAngles.length === 0 && topicAngles.length === 0 && !angleLoading" class="angle-empty">
+          暂无推荐角度，请
+          <a-button type="primary" size="small" @click="refreshAngles">重新加载</a-button>
+        </div>
+    </div>
+
+      <!-- 换一批 -->
+      <div v-if="availableAngles.length > 0" style="text-align: center; margin-top: 12px">
+        <a-button size="small" :loading="angleLoading" @click="refreshAngles">
+          <IconRefresh style="margin-right: 4px" /> 换一批角度
+        </a-button>
+      </div>
+
+      <!-- 自定义角度入口 -->
+      <div class="angle-group" style="margin-top: 20px">
+        <div class="angle-group-title">✏️ 自定义角度</div>
+        <div class="custom-angle-card">
+          <div class="custom-angle-row">
+            <label class="custom-angle-label">角度名称</label>
+            <a-input
+              v-model="customAngleText"
+              placeholder="输入自定义写作角度，如：成本导向的AI选型矩阵"
+              class="custom-angle-input"
+              size="small"
+              @press-enter="evaluateCustomAngle"
+            />
+            <a-button type="primary" size="small" :loading="customAngleLoading" @click="evaluateCustomAngle" class="custom-angle-btn">
+              <template #icon><IconSearch /></template>
+              AI 评估
+            </a-button>
+          </div>
+          <div class="custom-angle-row">
+            <label class="custom-angle-label">角度描述</label>
+            <a-textarea
+              v-model="customAngleDesc"
+              placeholder="补充描述该角度的核心关注点、目标读者、写作风格等（可选）"
+              class="custom-angle-textarea"
+              :auto-size="{ minRows: 2, maxRows: 4 }"
+              size="small"
+            />
+          </div>
+          <!-- 自定义角度评估结果 -->
+          <div v-if="customAngleResult" class="custom-angle-result">
+            <div class="custom-angle-header">
+              <span class="feasibility-badge" :class="'feas-' + customAngleResult.feasibility">
+                {{ feasibilityLabel(customAngleResult.feasibility) }}
+              </span>
+              <span class="coverage-text">
+                📊 覆盖度 {{ Math.round((customAngleResult.coverage || 0) * 100) }}%
+              </span>
+              <a-button size="mini" type="primary" @click="useCustomAngle" style="margin-left: auto">选择此角度</a-button>
+            </div>
+            <div v-if="customAngleResult.dimensions && customAngleResult.dimensions.length > 0" class="dimension-list" style="margin-top: 8px">
+              <div v-for="(dim, di) in customAngleResult.dimensions" :key="di" class="dimension-item">
+                <span v-if="dim.hit_count > 0" style="color: #00b42a">✅</span>
+                <span v-else style="color: #f53f3f">⚠️</span>
+                {{ dim.name }}
+                <span style="color: #86909c; font-size: 11px">（命中 {{ dim.hit_count || 0 }} 篇）</span>
+              </div>
+            </div>
+            <div v-if="customAngleResult.suggestions && customAngleResult.suggestions.length > 0" class="suggestions" style="margin-top: 6px">
+              <div v-for="(sug, si) in customAngleResult.suggestions.slice(0, 3)" :key="si" class="suggestion-item">
+                💡 {{ sug }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 流式推理 + 槽位编辑区 -->
+    <StreamSlotsPanel
+      v-if="phase === 'streaming' || phase === 'editing_slots'"
+      :phase="phase"
+      :streaming-text="streamingThinking"
+      :stream-done="streamDone"
+      :slots="confirmedSlots"
+      :slot-relations="slotRelationsData"
+      :pre-check-results="preCheckResults"
+      :pre-check-running="preCheckRunning"
+      :slot-outlines="slotOutlines"
+      :slot-materials="slotMaterials"
+      :session-id="sessionId"
+      :topic="topic"
+      :selected-direction="selectedDirection"
+      :slot-suggestions="slotSuggestions"
+      :target-word-count="targetWordCount"
+      @update-slot="onUpdateSlot"
+      @remove-slot="onRemoveSlot"
+      @add-slot="onAddSlot"
+      @confirm-slots="onConfirmSlots"
+      @stop-stream="onStopStream"
+      @add-material-to-slot="(slotKey, text, name, sourceType) => $emit('add-material', slotKey, text, name, sourceType)"
+      @run-pre-check="onRunPreCheck"
+      @adopt-alternative="onAdoptAlternative"
+      @update-outline="(sk, ol) => $emit('update-outline', sk, ol)"
+    />
+
+    <!-- 三列表格（填充完成后显示） -->
+    <div v-if="phase === 'filling' || phase === 'done'" class="slot-table">
+      <a-spin v-if="phase === 'filling'" tip="正在填充三列内容..." class="table-loading" />
+
+      <!-- L3 联网兜底开关 -->
+      <div v-if="phase === 'done'" class="web-search-bar">
+        <a-switch :model-value="webSearchEnabled" size="small" @update:model-value="$emit('update-web-search', $event)" />
+        <span class="web-search-label">联网兜底</span>
+        <a-tooltip content="开启后，通过 DuckDuckGo 联网搜索补充素材，适合时效性话题">
+          <icon-question-circle style="color: #86909c; cursor: help" />
+        </a-tooltip>
+      </div>
+
+      <!-- H1: 素材来源统计条 -->
+      <div v-if="phase === 'done'" class="source-stats-bar">
+        <span class="source-item kb">📄 本地 KB {{ sourceStats.knowledge_base }} 条</span>
+        <span class="source-item aipulse" v-if="sourceStats.aipulse > 0">📡 AI-Pulse {{ sourceStats.aipulse }} 条</span>
+        <span class="source-item web" v-if="sourceStats.web_search > 0">🌐 联网搜索 {{ sourceStats.web_search }} 条</span>
+      </div>
+
+      <!-- 槽位状态汇总条 -->
+      <div v-if="phase === 'done'" class="slot-summary-bar">
+        <span class="summary-item full">🟢 {{ fullCount }} 个充足</span>
+        <span class="summary-item partial" v-if="partialCount > 0">🟡 {{ partialCount }} 个偏少</span>
+        <span class="summary-item empty" v-if="emptyCount > 0">🔴 {{ emptyCount }} 个为空</span>
+      </div>
+
+      <table class="three-col-table" v-if="confirmedSlots.length">
+        <thead>
+          <tr>
+            <th class="col-status">状态</th>
+            <th class="col-slot">槽位</th>
+            <th class="col-outline">提纲内容</th>
+            <th class="col-actions">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="(slot, idx) in confirmedSlots" :key="slot.slot_key">
+            <!-- 行1：状态 + 槽位名 + 提纲 + 操作 -->
+            <tr :class="rowClass(slot.slot_key)">
+              <td class="col-status">
+                <span class="status-dot" :class="statusClass(slot.slot_key)"></span>
+                <span v-if="isSlotConfirmed(slot.slot_key)" class="status-check">√</span>
+              </td>
+              <td class="col-slot">
+                <div class="slot-name">{{ slot.label }}</div>
+                <div class="slot-desc" v-if="slot.description">{{ slot.description }}</div>
+              </td>
+              <td class="col-outline">
+                <div v-if="getSlotOutline(slot.slot_key).length === 0 && phase === 'done'" class="empty-hint">
+                  待生成提纲
+                </div>
+                <div v-for="(ol, oi) in getSlotOutline(slot.slot_key)" :key="oi" class="outline-item">
+                  <span class="outline-order">{{ ol.order || oi + 1 }}.</span>
+                  <span class="outline-point">{{ ol.point }}</span>
+                </div>
+              </td>
+              <td class="col-actions">
+                <a-space direction="vertical" size="mini">
+                  <a-button type="text" size="mini" @click="onOpenEdit(slot.slot_key)">✏️ 编辑</a-button>
+                </a-space>
+              </td>
+            </tr>
+            <!-- 行2：素材（可展开/收起） -->
+            <tr v-if="phase === 'done'" :class="['materials-row', rowClass(slot.slot_key)]">
+              <td colspan="4" class="col-materials-cell">
+                <div class="materials-header" @click="expandedSlots[slot.slot_key] = !expandedSlots[slot.slot_key]">
+                  <span class="materials-toggle">{{ expandedSlots[slot.slot_key] ? '▾' : '▸' }}</span>
+                  <span class="materials-count">素材 {{ getSlotMats(slot.slot_key).length }} 条</span>
+                  <span v-if="!expandedSlots[slot.slot_key]" class="materials-preview">
+                    <template v-for="(mat, mi) in getSlotMats(slot.slot_key).slice(0, 3)" :key="mi">
+                      <span class="source-tag mini" :class="'src-' + (mat.source_type || 'unknown')">{{ sourceIcon(mat.source_type) }}</span>
+                      <span class="mat-filename-mini">{{ mat.source_name || mat.filename || '未知' }}； </span>
+                    </template>
+                  </span>
+                </div>
+                <div v-if="expandedSlots[slot.slot_key]" class="materials-body">
+                  <div v-if="getSlotMats(slot.slot_key).length === 0" class="empty-hint">
+                    暂无匹配素材
+                    <a-button type="text" size="mini" @click="onOpenEdit(slot.slot_key)">手动补充</a-button>
+                    <a-button
+                      v-if="!webSearchEnabled"
+                      type="text"
+                      size="mini"
+                      style="color: #f59e0b"
+                      @click="$emit('update-web-search', true)"
+                    >
+                      💡 开启联网兜底
+                    </a-button>
+                  </div>
+                  <div v-for="(mat, mi) in getSlotMats(slot.slot_key)" :key="mi" class="material-item">
+                    <div class="material-line">
+                      <span class="source-tag" :class="'src-' + (mat.source_type || 'unknown')">
+                        {{ sourceIcon(mat.source_type) }}
+                      </span>
+                      <span class="material-file" @click="toggleMaterialPreview(slot.slot_key, mi)">
+                        {{ mat.source_name || mat.filename || '未知文件' }}
+                      </span>
+                      <!-- 匹配得分 -->
+                      <span class="match-score" :class="scoreClass(mat.score)">
+                        {{ mat.score || 0 }}分
+                      </span>
+                      <!-- 去重提示 -->
+                      <span v-if="mat.is_duplicate" class="dup-tag">⏺️ 相似</span>
+                    </div>
+                    <!-- 素材正文全文展示 -->
+                    <div class="material-full-text">{{ mat.text || mat.match_snippet || '暂无文本' }}</div>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <!-- 生成全文按钮 -->
+      <div v-if="phase === 'done'" class="workbench-footer">
+        <div class="footer-left">
+          <span style="font-size: 13px; color: var(--color-text-2); margin-right: 8px">目标字数：</span>
+          <a-select
+            :model-value="isCustomMode ? 'custom' : targetWordCount"
+            size="small"
+            style="width: 120px"
+            @update:model-value="onWordCountSelect"
+          >
+            <a-option :value="2000">2000 字</a-option>
+            <a-option :value="3000">3000 字</a-option>
+            <a-option :value="5000">5000 字</a-option>
+            <a-option value="custom">自定义</a-option>
+          </a-select>
+          <a-input-number
+            v-if="isCustomMode"
+            :model-value="customWordCount"
+            size="small"
+            :min="500"
+            :max="20000"
+            :step="500"
+            style="width: 120px; margin-left: 8px"
+            @update:model-value="onCustomInput"
+          />
+          <span class="time-estimate">
+            预计 {{ estimatedMinutes }} 分钟
+          </span>
+        </div>
+        <div class="footer-right">
+          <a-button
+            v-if="!allSlotsConfirmed"
+            type="outline"
+            size="large"
+            @click="$emit('confirm-all-slots')"
+          >
+            ✅ 确认所有槽位内容
+          </a-button>
+          <a-button type="primary" size="large" :disabled="!allSlotsConfirmed" @click="$emit('proceed-to-article')">
+            📝 生成全文
+          </a-button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 编辑面板（滑出） -->
+    <EditPanel
+      v-if="showEditPanel && editingSlot"
+      :slot-key="editingSlot"
+      :slot-label="getSlotLabel(editingSlot)"
+      :materials="getSlotMats(editingSlot)"
+      :outline="getSlotOutline(editingSlot)"
+      :writing-plan="writingPlans[editingSlot] || ''"
+      :analyze-result="analyzeResult"
+      :analyze-loading="analyzeLoading"
+      :analyze-error="analyzeError"
+      :analyze-type-label="analyzeTypeLabel"
+      @close="$emit('close-edit-panel')"
+      @save-plan="(plan) => $emit('save-plan', props.editingSlot, plan)"
+      @add-material="(text, filename) => $emit('add-material', props.editingSlot, text, filename)"
+      @update-outline="(ol) => $emit('update-outline', props.editingSlot, ol)"
+      @analyze-slot="(type) => onAnalyzeSlot(type)"
+      @integrate-outline="(data) => onIntegrateOutline(data)"
+      @web-search-slot="(data) => onWebSearchSlot(data)"
+      ref="editPanelRef"
+    />
+  </div>
+</template>
+
+<script setup>
+import { ref, computed } from 'vue'
+import { IconEdit, IconRefresh, IconSearch, IconQuestionCircle } from '@arco-design/web-vue/es/icon'
+import StreamSlotsPanel from './StreamSlotsPanel.vue'
+import EditPanel from './EditPanel.vue'
+
+const props = defineProps({
+  phase: { type: String, default: 'init' },
+  streamingThinking: { type: String, default: '' },
+  streamDone: { type: Boolean, default: false },
+  confirmedSlots: { type: Array, default: () => [] },
+  slotMaterials: { type: Object, default: () => ({}) },
+  slotOutlines: { type: Object, default: () => ({}) },
+  slotConfirmed: { type: Object, default: () => ({}) },
+  writingPlans: { type: Object, default: () => ({}) },
+  slotRelationsData: { type: Object, default: null },
+  editingSlot: { type: String, default: '' },
+  showEditPanel: { type: Boolean, default: false },
+  followupHistory: { type: Array, default: () => [] },
+  allSlotsConfirmed: { type: Boolean, default: false },
+  preCheckResults: { type: Object, default: () => ({}) },
+  preCheckRunning: { type: Boolean, default: false },
+  availableAngles: { type: Array, default: () => [] },
+  topicAngles: { type: Array, default: () => [] },
+  angleLoading: { type: Boolean, default: false },
+  sessionId: { type: String, default: '' },
+  topic: { type: String, default: '' },
+  selectedDirection: { type: Object, default: null },
+  slotSuggestions: { type: Object, default: () => ({}) },
+  webSearchEnabled: { type: Boolean, default: false },
+  targetWordCount: { type: Number, default: 2000 },
+  // H3: 快速分析（由父组件传入）
+  analyzeResult: { type: String, default: '' },
+  analyzeLoading: { type: String, default: '' },
+  analyzeError: { type: Boolean, default: false },
+  analyzeTypeLabel: { type: String, default: '' },
+})
+
+const emit = defineEmits([
+  'update-slot', 'remove-slot', 'add-slot', 'confirm-slots',
+  'stop-stream', 'open-edit-panel', 'close-edit-panel',
+  'save-plan', 'add-material', 'update-outline',
+  'ask-followup', 'confirm-slot', 'proceed-to-article',
+  'run-pre-check', 'adopt-alternative',
+  'select-angle', 'refresh-angles', 'evaluate-angle', 'use-custom-angle',
+  'update-outline', 'update-web-search', 'update-target-word-count',
+  'analyze-slot', 'apply-analyze',
+  'integrate-outline', 'web-search-slot',
+  'confirm-all-slots',
+])
+
+const customWordCount = ref(3000)
+const isCustomMode = ref(false)
+
+function onWordCountSelect(val) {
+  if (val === 'custom') {
+    isCustomMode.value = true
+    emit('update-target-word-count', customWordCount.value)
+  } else {
+    isCustomMode.value = false
+    emit('update-target-word-count', val)
+  }
+}
+
+function onCustomInput(val) {
+  const num = parseInt(val, 10)
+  if (num && num > 0) {
+    customWordCount.value = num
+    emit('update-target-word-count', num)
+  }
+}
+
+// 预计耗时：每 1000 字约 1 分钟
+const estimatedMinutes = computed(() => {
+  const w = isCustomMode.value ? customWordCount.value : props.targetWordCount
+  return Math.max(1, Math.round(w / 1000))
+})
+
+// 槽位素材覆盖统计
+const fullCount = computed(() => props.confirmedSlots.filter(s => {
+  const mats = getSlotMats(s.slot_key)
+  return mats.length >= 3
+}).length)
+
+const partialCount = computed(() => props.confirmedSlots.filter(s => {
+  const mats = getSlotMats(s.slot_key)
+  return mats.length > 0 && mats.length < 3
+}).length)
+
+const emptyCount = computed(() => props.confirmedSlots.filter(s => {
+  return getSlotMats(s.slot_key).length === 0
+}).length)
+
+// H1: 素材来源统计
+const sourceStats = computed(() => {
+  const counts = { knowledge_base: 0, aipulse: 0, web_search: 0, other: 0 }
+  for (const slot of props.confirmedSlots) {
+    const mats = slot.matched_materials || []
+    for (const m of mats) {
+      const st = m.source_type || 'other'
+      if (st === 'aipulse') counts.aipulse++
+      else if (st === 'web_search') counts.web_search++
+      else if (st === 'knowledge_base' || st === 'mcp_summary') counts.knowledge_base++
+      else counts.other++
+    }
+  }
+  return counts
+})
+
+const selectedAngle = ref(null)
+const customAngleText = ref('')
+const customAngleDesc = ref('')
+const customAngleLoading = ref(false)
+const customAngleResult = ref(null)
+
+function feasibilityLabel(f) {
+  const map = { green: '🟢 素材充足', yellow: '🟡 基本可行', red: '🔴 素材不足' }
+  return map[f] || '🟡 基本可行'
+}
+const expandedMaterials = ref({})  // 展开的素材 { `${slot_key}-${index}`: true }
+const expandedSlots = ref({})      // 展开的槽位素材列表 { slot_key: true }
+
+function onAnalyzeSlot(type) {
+  emit('analyze-slot', props.editingSlot, type)
+}
+
+const editPanelRef = ref(null)
+
+function onIntegrateOutline(data) {
+  emit('integrate-outline', data)
+}
+
+function onWebSearchSlot(data) {
+  emit('web-search-slot', data)
+}
+
+// 暴露方法供父组件调用
+function setEditPanelIntegratedOutline(result) {
+  editPanelRef.value?.setIntegratedOutline(result)
+}
+function setEditPanelWebResults(results) {
+  editPanelRef.value?.setWebResults(results)
+}
+defineExpose({ setEditPanelIntegratedOutline, setEditPanelWebResults })
+
+function selectAngle(angle) {
+  selectedAngle.value = angle
+  emit('select-angle', angle)
+}
+
+function refreshAngles() {
+  customAngleText.value = ''
+  customAngleResult.value = null  
+  emit('refresh-angles')
+}
+
+async function evaluateCustomAngle() {
+  if (!customAngleText.value.trim()) return
+  customAngleLoading.value = true
+  customAngleResult.value = null
+  emit('evaluate-angle', customAngleText.value, customAngleDesc.value, (result) => {
+    customAngleResult.value = result
+    customAngleLoading.value = false
+  })
+}
+
+function useCustomAngle() {
+  if (!customAngleResult.value) return
+  const result = customAngleResult.value
+  const angle = {
+    name: customAngleText.value,
+    description: customAngleDesc.value || (result.suggestions && result.suggestions[0]) || '',
+    coverage: result.coverage || 0.5,
+    feasibility: result.feasibility || 'yellow',
+    gaps: result.gaps || [],
+    dimensions: result.dimensions || [],
+    source: 'custom',
+  }
+  emit('use-custom-angle', angle)
+}
+
+function coverageClass(coverage) {
+  const v = coverage || 0
+  if (v >= 0.7) return 'cov-high'
+  if (v >= 0.4) return 'cov-mid'
+  return 'cov-low'
+}
+
+function sourceIcon(type) {
+  const map = {
+    knowledge_base: '📄', mcp_summary: '📋', mcp_file: '📄',
+    aipulse: '📡', ai_inferred: '🤖', web_search: '🌐',
+    user_input: '✏️', unknown: '📎',
+  }
+  return map[type] || '📎'
+}
+
+function scoreClass(score) {
+  if (!score || score < 5) return 'score-low'
+  if (score < 15) return 'score-mid'
+  return 'score-high'
+}
+
+function getSlotMats(sk) { return props.slotMaterials[sk] || [] }
+function getSlotOutline(sk) { return props.slotOutlines[sk] || [] }
+function getSlotLabel(sk) {
+  const s = props.confirmedSlots.find(s => s.slot_key === sk)
+  return s?.label || sk
+}
+
+function statusClass(sk) {
+  const mats = getSlotMats(sk)
+  const outline = getSlotOutline(sk)
+  if (mats.length === 0 && outline.length === 0) return 'empty'
+  if (mats.length === 0 || outline.length === 0) return 'partial'
+  return 'full'
+}
+
+function rowClass(sk) {
+  return statusClass(sk)
+}
+
+function isSlotConfirmed(sk) {
+  return props.slotConfirmed ? props.slotConfirmed[sk] : false
+}
+
+function toggleMaterialPreview(sk, idx) {
+  const key = `${sk}-${idx}`
+  expandedMaterials.value[key] = !expandedMaterials.value[key]
+}
+
+function onUpdateSlot(key, updates) { emit('update-slot', key, updates) }
+function onRemoveSlot(key) { emit('remove-slot', key) }
+function onAddSlot(label, desc) { emit('add-slot', label, desc) }
+function onConfirmSlots() { emit('confirm-slots') }
+
+function onStopStream() { emit('stop-stream') }
+function onOpenEdit(sk) { emit('open-edit-panel', sk) }
+function onConfirmSlot(sk) { emit('confirm-slot', sk) }
+function onAskFollowup(context, slotKey, question) { emit('ask-followup', context, slotKey, question) }
+function onRunPreCheck(slots) { emit('run-pre-check', slots) }
+function onAdoptAlternative(slotKey, alt) { emit('adopt-alternative', slotKey, alt) }
+</script>
+
+<style scoped>
+.three-col-workbench {
+  width: 100%;
+  position: relative;
+}
+.workbench-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border-2);
+  background: var(--color-bg-1);
+}
+.workbench-title { font-size: 16px; font-weight: 600; }
+
+/* ===== 自定义角度入口 ===== */
+.custom-angle-card {
+  background: linear-gradient(135deg, #f0f5ff 0%, #e6f7ff 100%);
+  border: 1px solid #b3d8ff;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+.custom-angle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.custom-angle-row:last-child {
+  margin-bottom: 0;
+  align-items: flex-start;
+}
+.custom-angle-label {
+  font-size: 13px;
+  color: #4e5969;
+  white-space: nowrap;
+  min-width: 60px;
+  line-height: 28px;
+}
+.custom-angle-input {
+  flex: 1;
+  min-width: 300px;
+}
+.custom-angle-textarea {
+  flex: 1;
+  min-width: 300px;
+}
+.custom-angle-btn {
+  white-space: nowrap;
+}
+.custom-angle-result {
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 10px;
+  border: 1px solid #e5e6eb;
+}
+.custom-angle-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.feasibility-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.feas-green { background: #e8f7ed; color: #00b42a; }
+.feas-yellow { background: #fff7e6; color: #f7ba1e; }
+.feas-red { background: #ffece8; color: #f53f3f; }
+.coverage-text {
+  font-size: 13px;
+  color: #4e5969;
+}
+.dimension-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.dimension-item {
+  font-size: 12px;
+  color: #1d2129;
+}
+.suggestions {
+  border-top: 1px solid #f0f0f0;
+  padding-top: 6px;
+}
+.suggestion-item {
+  font-size: 12px;
+  color: #86909c;
+  line-height: 1.6;
+}
+
+/* ===== 角度分组 ===== */
+.angle-group {
+  margin-bottom: 24px;
+}
+.angle-group-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e5e6eb;
+}
+.angle-card-topic {
+  border-left: 3px solid #f7ba1e;
+}
+.mini-score {
+  font-size: 12px;
+  color: #4e5969;
+  padding: 4px 0;
+}
+
+/* ===== 写作角度选择 ===== */
+.angle-selector {
+  padding: 24px;
+}
+.angle-spin { display: block; min-height: 120px; }
+.angle-intro { margin-bottom: 20px; }
+.angle-intro h3 { margin: 0 0 6px; font-size: 18px; }
+.angle-intro p { margin: 0; font-size: 14px; color: var(--color-text-3); }
+.angle-loading-hint { color: #165DFF !important; font-size: 13px !important; margin-top: 4px !important; }
+.angle-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.angle-card {
+  border: 2px solid var(--color-border-2);
+  border-radius: 10px;
+  padding: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--color-bg-1);
+}
+.angle-card:hover {
+  border-color: var(--color-primary-light-3);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.angle-card.selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 12px rgba(var(--primary-6), 0.2);
+  background: var(--color-primary-light-1);
+}
+.angle-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.angle-label {
+  font-size: 16px;
+  font-weight: 600;
+}
+.angle-coverage {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.angle-coverage.cov-high { background: #dcfce7; color: #15803d; }
+.angle-coverage.cov-mid { background: #fef3c7; color: #a16207; }
+.angle-coverage.cov-low { background: #fee2e2; color: #b91c1c; }
+.angle-desc {
+  font-size: 13px;
+  color: var(--color-text-2);
+  line-height: 1.6;
+  margin: 0 0 10px;
+}
+.angle-gaps { margin-bottom: 8px; }
+.gap-item {
+  font-size: 12px;
+  color: #b91c1c;
+  padding: 2px 0;
+}
+.angle-missing { display: flex; flex-direction: column; gap: 4px; }
+.missing-item {
+  font-size: 12px;
+  color: var(--color-text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.missing-severity {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+}
+.sev-high { background: #fee2e2; color: #b91c1c; }
+.sev-medium { background: #fef3c7; color: #a16207; }
+.sev-low { background: #dcfce7; color: #15803d; }
+.angle-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--color-text-3);
+  font-size: 14px;
+}
+
+/* ===== 三列表格 ===== */
+.slot-table { position: relative; min-height: 200px; }
+.slot-summary-bar {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--color-border-2);
+  margin-bottom: 4px;
+}
+.summary-item { font-weight: 500; }
+.summary-item.full { color: #22c55e; }
+.summary-item.partial { color: #f59e0b; }
+.summary-item.empty { color: #ef4444; }
+
+/* H1: 素材来源统计条 */
+.source-stats-bar {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0 8px;
+  font-size: 12px;
+}
+.source-item {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.source-item.kb { background: #f0f6ff; color: #165dff; }
+.source-item.aipulse { background: #f0fdf4; color: #15803d; }
+.source-item.web { background: #fefce8; color: #a16207; }
+
+.table-loading { display: flex; justify-content: center; padding: 60px 0; }
+.three-col-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.three-col-table th, .three-col-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-2);
+  vertical-align: top;
+}
+.three-col-table th { font-weight: 600; background: var(--color-bg-2); font-size: 13px; }
+.col-status { width: 60px; text-align: center; }
+.col-slot { width: 15%; min-width: 120px; }
+.col-outline { width: 55%; }
+.col-actions { width: 100px; text-align: center; }
+.status-dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+}
+.status-dot.full { background: #22c55e; }
+.status-dot.partial { background: #f59e0b; }
+.status-dot.empty { background: #ef4444; }
+.status-check { margin-left: 4px; color: #22c55e; font-weight: bold; }
+tr.full .col-slot { border-left: 3px solid #22c55e; }
+tr.partial .col-slot { border-left: 3px solid #f59e0b; }
+tr.empty .col-slot { border-left: 3px solid #ef4444; }
+.slot-name { font-weight: 600; }
+.slot-desc { font-size: 12px; color: var(--color-text-3); margin-top: 2px; }
+.material-item {
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.material-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.match-score {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+.score-low { background: #fef3c7; color: #a16207; }
+.score-mid { background: #dbeafe; color: #1d4ed8; }
+.score-high { background: #dcfce7; color: #15803d; }
+.dup-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+.material-snippet {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin: 3px 0 2px 24px;
+  padding: 4px 8px;
+  background: var(--color-bg-2);
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.5;
+  border-left: 2px solid var(--color-border-2);
+  max-height: 60px;
+  overflow: hidden;
+}
+.material-snippet:hover { background: var(--color-bg-3); }
+.material-snippet.hint { color: var(--color-text-4); font-style: italic; border-left-color: transparent; }
+.source-tag {
+  display: inline-block;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-right: 4px;
+}
+.src-knowledge_base { background: #dbeafe; color: #1d4ed8; }
+.src-user_input { background: #dcfce7; color: #15803d; }
+.src-web_search { background: #e0f2fe; color: #0284c7; }
+.src-ai_inferred { background: #f3e8ff; color: #7c3aed; }
+.src-aipulse { background: #ccfbf1; color: #0d9488; }
+
+/* 素材行（行2） */
+.materials-row .col-materials-cell {
+  padding: 0 12px 8px 60px;
+  border-bottom: 1px solid var(--color-border-2);
+}
+.materials-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+.materials-header:hover { color: var(--color-primary); }
+.materials-toggle { font-size: 11px; width: 14px; flex-shrink: 0; }
+.materials-count { font-weight: 600; font-size: 12px; white-space: nowrap; }
+.materials-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+.source-tag.mini {
+  font-size: 10px;
+  padding: 0 3px;
+  margin-right: 2px;
+}
+.mat-filename-mini {
+  margin-right: 6px;
+}
+.materials-body {
+  padding: 4px 0 8px 20px;
+}
+
+/* L3 联网兜底开关 */
+.web-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+.web-search-label {
+  margin-left: 2px;
+  user-select: none;
+}
+
+.material-text { color: var(--color-text-2); }
+.material-file {
+  color: var(--color-primary, #165dff);
+  cursor: pointer;
+  font-size: 12px;
+  word-break: break-all;
+}
+.material-file:hover { text-decoration: underline; }
+.material-preview {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.material-full-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #4e5969;
+}
+.more-hint { font-size: 12px; color: var(--color-text-3); margin-top: 4px; }
+.outline-item { margin-bottom: 6px; font-size: 13px; }
+.outline-order { color: var(--color-primary); margin-right: 4px; font-weight: 500; }
+.outline-point { color: var(--color-text-1); }
+.empty-hint { font-size: 13px; color: var(--color-text-3); font-style: italic; }
+.workbench-footer {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.time-estimate {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin-left: 12px;
+}
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.footer-hint { font-size: 13px; color: var(--color-text-3); }
+</style>

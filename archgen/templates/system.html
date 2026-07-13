@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 系统型架构图</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="overview">{{ overview }}</div>
+        
+        <div class="modules">
+            {% for module in modules %}
+            <div class="module">
+                <h3 class="module-name">{{ module.name }}</h3>
+                <p class="module-role">{{ module.role }}</p>
+                {% if module.connections %}
+                <div class="connections">
+                    <strong>连接:</strong>
+                    <ul>
+                    {% for conn in module.connections %}
+                        <li>{{ conn }}</li>
+                    {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 因果型架构图</title>
+    <style>
+        {{ css }}
+    </style>
+</head>
+<body>
+    <div class="diagram-container">
+        <h1 class="title">{{ title }}</h1>
+        
+        <div class="root-cause">根因: {{ root_cause }}</div>
+        
+        <div class="chain">
+            {% for link in chain %}
+            <div class="chain-link">
+                <div class="cause">原因: {{ link.cause }}</div>
+                <div class="arrow">→</div>
+                <div class="effect">结果: {{ link.effect }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div class="final-effect">最终结果: {{ final_effect }}</div>
+    </div>
+</body>
+</html>

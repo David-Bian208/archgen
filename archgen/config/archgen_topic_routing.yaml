@@ -1,0 +1,246 @@
+# ArchGen Semantic Router Configuration
+# 三元组路由：topic_type × voice × format
+# 动态默认值 + 独立选择 + 置灰解释
+
+# ==========================================
+# 话题类型定义
+# ==========================================
+types:
+  practice:
+    label: "🎯 实战 / 复盘 / 案例驱动"
+    detect_hints: ["上线周期", "踩坑", "成本降幅", "操作步骤", "配置", "项目复盘", "量化结果", "上线", "成本", "操作", "项目", "量化", "案例"]
+    default_voice: "spoken"
+    default_format: "article"
+    allowed_formats: ["article", "report"]
+    format_reason:
+      article: "实战内容最适合长文，口语/书面均可"
+      report: "实战复盘也适合写成报告"
+    min_bars:
+      anchors_min: 3
+      cases_min: 1
+      quantified_min: 2
+    allow_derived: true
+    forbid_invented: true
+
+  theory:
+    label: "📚 理论 / 原理 / 框架解读"
+    detect_hints: ["定义", "原理", "架构", "模型", "框架", "维度", "分类", "概念", "方法论", "体系"]
+    default_voice: "written"
+    default_format: "article"
+    allowed_formats: ["article", "report"]
+    format_reason:
+      article: "理论内容适合长文深度呈现"
+      report: "理论也可以写成报告形式"
+    min_bars:
+      anchors_min: 1
+      cases_min: 0
+      quantified_min: 1
+    allow_derived: true
+    forbid_invented: true
+
+  opinion:
+    label: "💡 观点 / 趋势 / 争议"
+    detect_hints: ["认为", "趋势", "未来", "争议", "立场", "取代", "预测", "判断", "看法"]
+    default_voice: "spoken"
+    default_format: "article"
+    allowed_formats: ["article", "report"]
+    format_reason:
+      article: "争议性观点适合长文，口语/书面均可"
+      report: "行业观点也适合写成报告"
+    min_bars:
+      anchors_min: 1
+      cases_min: 0
+      quantified_min: 0
+    allow_derived: true
+    forbid_invented: false
+
+  tutorial:
+    label: "📖 教程 / 指南 / 步骤说明"
+    detect_hints: ["安装", "步骤", "命令", "截图", "运行", "配置", "教程", "指南", "部署", "搭建"]
+    default_voice: "written"
+    default_format: "article"
+    allowed_formats: ["article", "report"]
+    format_reason:
+      article: "教程适合长文呈现，口语/书面均可"
+      report: "教程也可以写成报告格式"
+    min_bars:
+      anchors_min: 1
+      cases_min: 0
+      quantified_min: 1
+    allow_derived: true
+    forbid_invented: true
+
+
+# ==========================================
+# 表达媒介层（Voice / Medium）
+# 决定语法与语气规则
+# ==========================================
+voice:
+  spoken:
+    label: "🎙️ 口播 / 说出来的"
+    rules:
+      - "一律第一人称（我/我跟你说/你）"
+      - "短句，口语连接词（'然后''但是''关键是'）"
+      - "允许停顿标记（'...''——'）"
+      - "禁止'综上所述''如下图所示''首先其次最后'"
+      - "凤头-猪肚-豹尾时间盒结构"
+    prompt_suffix: |
+      【表达规则（口播模式）】
+      - 一律使用第一人称（我、我跟你说、你可能会问）
+      - 使用短句和口语连接词（然后、但是、关键是、说实话）
+      - 允许停顿标记（...、——）
+      - 禁止书面化表述（综上所述、如下图所示、首先其次最后）
+      - 结构遵循凤头（30秒抓注意力）→ 猪肚（核心模块）→ 豹尾（行动号召）
+
+  written:
+    label: "📄 书面 / 写下来的"
+    rules:
+      - "第三人称/机构视角可选"
+      - "章节号化（1.1, 1.2, 2.1）"
+      - "引用来源标注"
+      - "证据链优先"
+      - "禁止'我跟你说''你知道吗'"
+    prompt_suffix: |
+      【表达规则（书面模式）】
+      - 可使用第三人称或机构视角
+      - 使用章节号结构（1.1, 1.2, 2.1）
+      - 引用来源需要标注
+      - 证据链优先，数据>案例>观点
+      - 禁止口语化表述（我跟你说、你知道吗、说实话）
+
+
+# ==========================================
+# 产出形态层（Format / Shell）
+# 决定结构模板 + 长度 + 传播钩子位置
+# ==========================================
+formats:
+  script:
+    label: "📜 口播脚本"
+    description: "凤头-猪肚-豹尾结构，适合中视频/直播"
+    structure:
+      - "hook": "凤头（30秒，3秒抓注意力）"
+      - "module_1": "核心模块1（60秒）"
+      - "module_2": "核心模块2（60秒）"
+      - "module_3": "核心模块3（60秒，可选）"
+      - "tail": "豹尾（30秒，行动号召）"
+    word_count_range: [1200, 1800]
+    target_duration_minutes: [3, 7]
+    reading_speed_wpm: 220
+
+  report:
+    label: "📋 复盘报告"
+    description: "执行摘要+发现+建议+附录，适合高管/内部"
+    structure:
+      - "exec_summary": "执行摘要"
+      - "findings": "关键发现"
+      - "recommendations": "建议与行动计划"
+      - "appendix": "附录（数据/案例/配置）"
+    word_count_range: [1500, 3000]
+    target_duration_minutes: null
+    reading_speed_wpm: 250
+
+  article:
+    label: "📝 长文 / 专栏"
+    description: "引言+H2章节+小节+结语，适合公域发布"
+    structure:
+      - "intro": "引言"
+      - "h2_section_1": "核心章节1"
+      - "h2_section_2": "核心章节2"
+      - "h2_section_3": "核心章节3"
+      - "conclusion": "结语"
+    word_count_range: [2500, 5000]
+    target_duration_minutes: null
+    reading_speed_wpm: 250
+
+  post:
+    label: "📱 社媒帖 / 短章"
+    description: "钩子+3 bullet+CTA，适合社媒传播"
+    structure:
+      - "hook": "钩子（1句话）"
+      - "bullets": "3个核心要点"
+      - "cta": "行动号召"
+    word_count_range: [300, 800]
+    target_duration_minutes: null
+    reading_speed_wpm: 200
+
+
+# ==========================================
+# 有效组合（开放模式 — 所有话题×所有语音×所有格式）
+# ==========================================
+valid_combinations:
+  # practice × spoken/written × article/report
+  - topic_type: "practice"
+    voice: "spoken"
+    format: "article"
+    priority: "P0"
+  - topic_type: "practice"
+    voice: "spoken"
+    format: "report"
+    priority: "P1"
+  - topic_type: "practice"
+    voice: "written"
+    format: "article"
+    priority: "P1"
+  - topic_type: "practice"
+    voice: "written"
+    format: "report"
+    priority: "P0"
+
+  # theory × spoken/written × article/report
+  - topic_type: "theory"
+    voice: "spoken"
+    format: "article"
+    priority: "P1"
+  - topic_type: "theory"
+    voice: "spoken"
+    format: "report"
+    priority: "P2"
+  - topic_type: "theory"
+    voice: "written"
+    format: "article"
+    priority: "P0"
+  - topic_type: "theory"
+    voice: "written"
+    format: "report"
+    priority: "P1"
+
+  # opinion × spoken/written × article/report
+  - topic_type: "opinion"
+    voice: "spoken"
+    format: "article"
+    priority: "P0"
+  - topic_type: "opinion"
+    voice: "spoken"
+    format: "report"
+    priority: "P2"
+  - topic_type: "opinion"
+    voice: "written"
+    format: "article"
+    priority: "P1"
+  - topic_type: "opinion"
+    voice: "written"
+    format: "report"
+    priority: "P2"
+
+  # tutorial × spoken/written × article/report
+  - topic_type: "tutorial"
+    voice: "spoken"
+    format: "article"
+    priority: "P2"
+  - topic_type: "tutorial"
+    voice: "spoken"
+    format: "report"
+    priority: "P2"
+  - topic_type: "tutorial"
+    voice: "written"
+    format: "article"
+    priority: "P1"
+  - topic_type: "tutorial"
+    voice: "written"
+    format: "report"
+    priority: "P0"
+
+  - topic_type: "practice"
+    voice: "written"
+    format: "article"
+    priority: "P2"

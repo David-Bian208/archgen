@@ -1,0 +1,22 @@
+/* 科技风格样式 - 待开发 */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+    color: #00ff88;
+    min-height: 100vh;
+}
+
+.diagram-container {
+    width: 1200px;
+    padding: 60px;
+    margin: 0 auto;
+}
+
+/* 待完善 */
