@@ -192,6 +192,7 @@ archgen/
 | 项目骨架 + FastAPI + SQLite | ✅ | 2026-05 |
 | MCP 检索引擎 (LocalFolderReader) | ✅ | 2026-05-28 |
 | 框架匹配与配图系统 (V1) | ✅ | 2026-05 |
+| 配图系统 v3.0 (两阶段管线) | ✅ | 2026-07-15 |
 | 内容补充架构 v2.0 (L0-L4) | ✅ | 2026-06-18 |
 | 透明推理规范 v1.1 | ✅ | 2026-06-18 |
 | 降级链 (Chain) | ✅ | 2026-06 |
@@ -208,6 +209,7 @@ archgen/
 
 | 模块 | 优先级 | 说明 |
 |------|--------|------|
+| 配图系统 v4.0 (三站接力) | P0 | 见 `docs/IMAGE_GENERATION_SPEC.md` v4.0 |
 | 文章风格克隆 | P1 | 学习历史文章语气/结构 |
 | 多模态 KB (PDF/网页) | P1 | 扩展知识库格式 |
 | 一键分发 | P2 | 多平台格式适配 |
@@ -367,12 +369,14 @@ score = info_density × log(max(word_count, 1)) × 0.9^years_since_mtime
 |------|------|------|
 | `/api/workflow/thinking/logs` | GET | 获取 AI 思考日志（支持增量拉取） |
 
-#### 配图系统
+#### 配图系统 v4.0
+
+> 架构：三站接力（拆卡片→排格子→印海报），见 `docs/IMAGE_GENERATION_SPEC.md` v4.0
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/framework/suggest-from-slots` | POST | 从槽位推荐配图框架 |
-| `/api/generate` | POST | 生成配图 |
+| `/api/generate/infographic` | POST | 生成信息图（v4.0 三站接力） |
 | `/api/generate/preview` | POST | 预览 HTML |
 | `/api/generate/async` | POST | 异步生成 |
 | `/api/task/{task_id}` | GET | 查询异步任务 |
@@ -440,7 +444,7 @@ useStep2_Framework.js ← 框架业务逻辑
 useStep3_Workbench.js ← 槽位工作台业务逻辑
 useStep4_Outline.js   ← 提纲业务逻辑
 useStep5_Article.js   ← 文章业务逻辑
-useStep7_Images.js    ← 配图业务逻辑
+useStep7_Images.js    ← 配图业务逻辑 (v4.0 三站接力)
 ```
 
 ---
