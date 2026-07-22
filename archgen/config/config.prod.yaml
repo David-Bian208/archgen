@@ -1,0 +1,58 @@
+# ArchGen 生产环境配置
+# 部署到阿里云时，复制为 config.yaml 或通过环境变量覆盖
+
+app:
+  api_key: ${ARCHGEN_API_KEY:-}
+  debug: false
+  host: 0.0.0.0
+  name: ArchGen
+  port: ${ARCHGEN_PORT:-8972}
+  version: 0.1.0
+
+cors:
+  allow_origins:
+  - "http://你的阿里云IP或域名"
+  - "http://localhost:8972"
+  - "http://127.0.0.1:8972"
+
+database:
+  path: data/archgen.db
+  type: sqlite
+
+logging:
+  file: logs/archgen.log
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  level: WARNING
+
+llm:
+  api_key: ${DEEPSEEK_API_KEY}
+  base_url: https://api.deepseek.com/v1
+  max_tokens: 4096
+  model: deepseek-v4-flash
+  provider: deepseek
+  retry_delay: 2
+  retry_times: 3
+  temperature: 0.1
+  timeout: 120
+
+persona:
+  file_path: ""
+  project_root: ""
+
+storage:
+  output_dir: output
+  temp_dir: data/temp
+
+ai_pulse:
+  base_url: ${AI_PULSE_HOST:-}
+  enabled: false
+  timeout: 10
+
+knowledge_base:
+  allowed_extensions:
+  - .md
+  - .txt
+  - .json
+  - .yaml
+  mode: local
+  root_path: knowledge_base
