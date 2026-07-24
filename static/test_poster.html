@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>海报生成测试 v4 — 三站接力</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23165DFF'/><text x='4' y='12' font-size='10' fill='white'>P</text></svg>">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f0f2f5; color: #1f2937; min-height: 100vh;
+    }
+    header {
+        background: linear-gradient(135deg, #165DFF, #36CFFB);
+        color: white; padding: 14px 24px; display: flex; align-items: center; gap: 12px;
+    }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header span.badge {
+        background: rgba(255,255,255,0.25); padding: 2px 10px; border-radius: 10px;
+        font-size: 12px; font-weight: 500;
+    }
+    .step-bar {
+        display: flex; background: white; border-bottom: 1px solid #e5e7eb;
+        padding: 0 24px;
+    }
+    .step {
+        padding: 12px 20px; font-size: 13px; color: #9ca3af; cursor: pointer;
+        border-bottom: 2px solid transparent; transition: .2s;
+        display: flex; align-items: center; gap: 6px;
+    }
+    .step.active { color: #165DFF; border-bottom-color: #165DFF; font-weight: 600; }
+    .step.done { color: #059669; }
+    .step .num { width: 20px; height: 20px; border-radius: 50%; display: flex;
+        align-items: center; justify-content: center; font-size: 11px; font-weight: 700;
+        background: #e5e7eb; color: #6b7280;
+    }
+    .step.active .num { background: #165DFF; color: white; }
+    .step.done .num { background: #059669; color: white; }
+
+    .main { display: flex; gap: 16px; padding: 16px 24px; height: calc(100vh - 110px); }
+    .panel { background: white; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        display: flex; flex-direction: column; overflow: hidden;
+    }
+    .panel-header {
+        padding: 12px 16px; font-size: 14px; font-weight: 600;
+        border-bottom: 1px solid #f3f4f6; display: flex; align-items: center; gap: 8px;
+        flex-shrink: 0;
+    }
+    .panel-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+
+    /* Left panel: input */
+    .panel-left { width: 30%; }
+    .panel-left textarea {
+        width: 100%; height: 100%; min-height: 200px; border: 1px solid #e5e7eb;
+        border-radius: 6px; padding: 10px; font-size: 13px; line-height: 1.6;
+        resize: vertical; font-family: inherit; color: #374151;
+    }
+    .panel-left textarea:focus { outline: none; border-color: #165DFF; box-shadow: 0 0 0 2px rgba(22,93,255,0.1); }
+
+    /* Middle panel: cards */
+    .panel-mid { width: 30%; }
+    .card-item {
+        background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px;
+        padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: .15s;
+        font-size: 12px;
+    }
+    .card-item:hover { border-color: #165DFF; background: #f0f7ff; }
+    .card-item.selected { border-color: #165DFF; background: #eff6ff; box-shadow: 0 0 0 1px #165DFF; }
+    .card-item .card-title {
+        font-weight: 600; font-size: 13px; margin-bottom: 4px; color: #1f2937;
+    }
+    .card-item .card-meta {
+        display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;
+    }
+    .card-item .card-meta span {
+        padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 500;
+    }
+    .meta-density-high { background: #fef3c7; color: #92400e; }
+    .meta-density-medium { background: #dbeafe; color: #1e40af; }
+    .meta-density-low { background: #f3f4f6; color: #6b7280; }
+    .meta-shape { background: #ede9fe; color: #6d28d9; }
+    .meta-weight { background: #fce7f3; color: #9d174d; }
+    .card-item .card-items { color: #6b7280; line-height: 1.5; }
+    .card-item .card-items li { list-style: disc inside; }
+
+    /* Card edit controls */
+    .card-edit {
+        background: #f0f7ff; border: 1px solid #bdd7ee; border-radius: 6px;
+        padding: 8px 10px; margin: 6px 0;
+    }
+    .edit-row {
+        display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+    }
+    .edit-row:last-child { margin-bottom: 0; }
+    .edit-row label { font-size: 11px; color: #6b7280; white-space: nowrap; }
+    .edit-row select {
+        padding: 3px 6px; border: 1px solid #d1d5db; border-radius: 4px;
+        font-size: 11px; background: white; color: #374151; cursor: pointer;
+    }
+    .edit-row select:focus { outline: none; border-color: #165DFF; }
+
+    /* Icon picker */
+    .icon-trigger {
+        display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
+        border: 1px solid #d1d5db; border-radius: 4px; background: white;
+        font-size: 11px; cursor: pointer; color: #374151; min-width: 80px;
+    }
+    .icon-trigger:hover { border-color: #165DFF; }
+    .icon-popup {
+        display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.3); z-index: 999; justify-content: center; align-items: center;
+    }
+    .icon-popup.show { display: flex; }
+    .icon-popup-inner {
+        background: white; border-radius: 10px; padding: 16px; max-width: 480px;
+        width: 90%; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+    .icon-popup-title {
+        font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex;
+        justify-content: space-between; align-items: center;
+    }
+    .icon-popup-close {
+        background: none; border: none; font-size: 18px; cursor: pointer;
+        color: #9ca3af; padding: 0 4px;
+    }
+    .icon-popup-close:hover { color: #374151; }
+    .icon-grid {
+        display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px;
+    }
+    .icon-cell {
+        display: flex; flex-direction: column; align-items: center; padding: 8px 4px;
+        border: 1px solid #e5e7eb; border-radius: 6px; cursor: pointer; transition: .15s;
+    }
+    .icon-cell:hover { border-color: #165DFF; background: #eff6ff; }
+    .icon-cell.selected { border-color: #165DFF; background: #eff6ff; box-shadow: 0 0 0 1px #165DFF; }
+    .icon-cell .emoji { font-size: 18px; margin-bottom: 2px; }
+    .icon-cell .iname { font-size: 10px; color: #6b7280; }
+
+    /* Mini preview */
+    .mini-preview {
+        background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px;
+        padding: 10px 12px; margin-bottom: 8px;
+    }
+    .mini-preview .mp-header {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+        font-size: 13px; font-weight: 600; color: #1f2937;
+    }
+    .mini-preview .mp-num {
+        width: 20px; height: 20px; border-radius: 50%; background: #165DFF;
+        color: white; font-size: 11px; font-weight: 700; display: flex;
+        align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .mini-preview .mp-body { font-size: 10px; color: #4b5563; }
+    .mini-preview .mp-info {
+        margin-top: 8px; display: flex; align-items: center; gap: 8px;
+        font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 6px;
+    }
+    .mini-preview .mp-item {
+        display: flex; align-items: center; gap: 4px; margin-bottom: 3px;
+    }
+    .mini-preview .mp-item:last-child { margin-bottom: 0; }
+    .mini-preview .mp-box {
+        background: white; border: 1px solid #e5e7eb; border-radius: 3px;
+        padding: 3px 6px; font-size: 9px; text-align: center;
+    }
+    .mini-preview .mp-arrow { color: #165DFF; font-weight: 700; }
+    .mini-preview .mp-vs {
+        background: linear-gradient(135deg,#165DFF,#36CFFB); color: white;
+        border-radius: 50%; padding: 2px 5px; font-size: 8px; font-weight: 700;
+    }
+    .mini-preview .mp-hint { color: #059669; font-weight: 500; }
+    .mp-flow-row { display: flex; align-items: center; gap: 4px; overflow-x: auto; }
+    .mp-grid-row { display: flex; gap: 4px; }
+    .mp-grid-cell {
+        flex: 1; background: white; border: 1px solid #e5e7eb; border-radius: 4px;
+        padding: 4px 5px; text-align: center; min-width: 0;
+    }
+    .mp-grid-cell .title { font-size: 9px; font-weight: 600; color: #374151; margin-bottom: 2px; }
+    .mp-grid-cell .desc { font-size: 8px; color: #9ca3af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mp-compare-row { display: flex; align-items: stretch; gap: 4px; }
+    .mp-compare-col {
+        flex: 1; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;
+        padding: 4px 5px;
+    }
+    .mp-highlight-box {
+        display: flex; gap: 6px;
+    }
+    .mp-highlight-left { flex: 1; min-width: 0; }
+    .mp-highlight-badge {
+        width: 36px; background: linear-gradient(180deg,#165DFF,#36CFFB); border-radius: 3px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; font-size: 8px; font-weight: 700; text-align: center;
+        writing-mode: vertical-rl; flex-shrink: 0;
+    }
+
+    /* Right panel: preview */
+    .panel-right { width: 40%; }
+    .size-selector { display: flex; gap: 8px; margin-bottom: 12px; }
+    .size-btn {
+        flex: 1; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px;
+        background: white; cursor: pointer; font-size: 13px; text-align: center; transition: .15s;
+    }
+    .size-btn:hover { border-color: #165DFF; }
+    .size-btn.active { border-color: #165DFF; background: #eff6ff; color: #165DFF; font-weight: 600; }
+    .preview-box { flex: 1; overflow: hidden; border: 1px solid #e5e7eb; border-radius: 6px;
+        background: #f9fafb; position: relative; min-height: 200px; }
+    .preview-box iframe { width: 100%; height: 100%; border: none; }
+    .preview-box .placeholder {
+        position: absolute; inset: 0; display: flex; align-items: center;
+        justify-content: center; color: #d1d5db; font-size: 14px;
+    }
+
+    /* Buttons */
+    .btn {
+        padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px;
+        cursor: pointer; font-weight: 500; transition: .15s; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn-primary { background: #165DFF; color: white; }
+    .btn-primary:hover { background: #1452e0; }
+    .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+    .btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb; }
+    .btn-secondary:hover { background: #e5e7eb; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+    .status-bar {
+        padding: 8px 16px; font-size: 12px; border-radius: 6px; margin-bottom: 8px; display: none;
+    }
+    .status-bar.show { display: block; }
+    .status-ok { background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; }
+    .status-err { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .status-info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+
+    .guide-toggle {
+        font-size: 12px; color: #6b7280; cursor: pointer; margin-bottom: 8px;
+        display: flex; align-items: center; gap: 4px;
+    }
+    .guide-content {
+        background: #f0f7ff; border: 1px solid #bdd7ee; border-radius: 6px;
+        padding: 10px 14px; margin-bottom: 10px; font-size: 12px; display: none;
+    }
+    .guide-content.show { display: block; }
+    .guide-content ul { padding-left: 16px; margin: 4px 0; }
+    .guide-content li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<header>
+    <h1>海报生成测试</h1>
+    <span class="badge">v4 三站接力</span>
+    <span class="badge" id="llmBadge" style="background:rgba(255,255,255,0.15);">mock</span>
+</header>
+
+<div class="step-bar">
+    <div class="step active" id="step1">
+        <span class="num">1</span> 输入文章
+    </div>
+    <div class="step" id="step2">
+        <span class="num">2</span> 拆卡片
+    </div>
+    <div class="step" id="step3">
+        <span class="num">3</span> 确认调整
+    </div>
+    <div class="step" id="step4">
+        <span class="num">4</span> 生成海报
+    </div>
+</div>
+
+<div class="main">
+    <!-- Left: Input -->
+    <div class="panel panel-left">
+        <div class="panel-header">📝 文章内容</div>
+        <div class="panel-body">
+            <div class="guide-toggle" onclick="toggleGuide()">📐 内容参考指南 ▾</div>
+            <div class="guide-content" id="guide">
+                <b>✅ 最佳范围</b>
+                <ul>
+                    <li>章节数：<b>4-6 个</b>（用 ## 分隔）</li>
+                    <li>每章要点：<b>3-5 条</b>（用 - 开头）</li>
+                    <li>总字数：<b>300-800 字</b></li>
+                </ul>
+                <b>⚠️ 提示</b>
+                <ul>
+                    <li>内容 &lt;3章 → 自动宽松排版</li>
+                    <li>内容 &gt;7章 → 可能合并相邻模块</li>
+                </ul>
+            </div>
+            <div class="btn-row" style="margin-bottom:8px; display:flex; gap:6px;">
+                <button class="btn btn-sm btn-secondary" onclick="loadSample('ai_news')">📰 示例：AI新闻</button>
+                <button class="btn btn-sm btn-secondary" onclick="loadSample('team')">👥 示例：团队协作</button>
+                <button class="btn btn-sm btn-secondary" onclick="clearAll()">清空</button>
+            </div>
+            <textarea id="articleInput" placeholder="贴入 Markdown 文章...&#10;&#10;格式示例：&#10;# 标题&#10;## 章节一&#10;- 要点1&#10;- 要点2&#10;&#10;## 章节二&#10;- 要点3"></textarea>
+            <div style="margin-top:10px;">
+                <button class="btn btn-primary" id="extractBtn" onclick="extractCards()">🔍 分析拆卡片</button>
+            <div style="margin-top:8px; font-size:10px; color:#9ca3af;">v4.1 — 粘贴文本后点击上方按钮拆卡片</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Middle: Cards -->
+    <div class="panel panel-mid">
+        <div class="panel-header" style="gap:6px;">
+            🃏 卡片清单 <span id="cardCount" style="color:#9ca3af; font-weight:400;"></span>
+            <div style="display:flex;gap:3px;margin-left:auto;">
+                <button class="btn btn-sm btn-secondary detail-btn" data-level="compact" onclick="setDetailLevel('compact')" style="padding:2px 6px;font-size:10px;">简洁</button>
+                <button class="btn btn-sm btn-secondary detail-btn active" data-level="medium" onclick="setDetailLevel('medium')" style="padding:2px 6px;font-size:10px;">适中</button>
+                <button class="btn btn-sm btn-secondary detail-btn" data-level="detailed" onclick="setDetailLevel('detailed')" style="padding:2px 6px;font-size:10px;">详细</button>
+            </div>
+        </div>
+        <div class="panel-body" id="cardList">
+            <div style="color:#d1d5db; text-align:center; padding-top:40px; font-size:14px;">
+                尚未拆卡片<br><span style="font-size:12px;">输入文章后点"拆卡片"</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Preview -->
+    <div class="panel panel-right">
+        <div class="panel-header">📐 预览</div>
+        <div class="panel-body" style="display:flex; flex-direction:column;">
+            <div id="statusBar" class="status-bar"></div>
+            <div class="size-selector">
+                <button class="size-btn active" data-type="portrait" onclick="selectSize('portrait')">📱 竖版 3:4</button>
+                <button class="size-btn" data-type="landscape" onclick="selectSize('landscape')">🖥 横版 16:9</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:#6b7280;">
+                主题：<select id="themeSelect" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;background:white;color:#374151;">
+                    <option value="blue">🔵 蓝色</option>
+                    <option value="mono">⚫ 黑白灰</option>
+                    <option value="bake">🍞 烘焙黄</option>
+                </select>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                    <input type="checkbox" id="autoHeightCheck"> 自适应高度（消除底部空白）
+                </label>
+            </div>
+            <div style="margin-bottom:12px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#6b7280;margin-bottom:4px;">
+                    <span>内容详略</span>
+                    <span id="detailLabel">适中</span>
+                </div>
+                <div style="display:flex;gap:4px;">
+                    <button class="btn btn-sm btn-secondary detail-btn" data-level="compact" onclick="setDetailLevel('compact')" style="flex:1;padding:4px 8px;">简洁</button>
+                    <button class="btn btn-sm btn-secondary detail-btn active" data-level="medium" onclick="setDetailLevel('medium')" style="flex:1;padding:4px 8px;">适中</button>
+                    <button class="btn btn-sm btn-secondary detail-btn" data-level="detailed" onclick="setDetailLevel('detailed')" style="flex:1;padding:4px 8px;">详细</button>
+                </div>
+            </div>
+            <button class="btn btn-primary" id="generateBtn" onclick="generatePoster()" style="margin-bottom:10px;" disabled>
+                🚀 生成海报
+            </button>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+                <button class="btn btn-sm btn-secondary" id="downloadPngBtn" onclick="downloadPng()" style="display:none;">📥 下载 PNG</button>
+                <button class="btn btn-sm btn-secondary" id="downloadHtmlBtn" onclick="downloadHtml()" style="display:none;">📄 下载 HTML</button>
+            </div>
+            <div class="preview-box" id="previewBox">
+                <div class="placeholder" id="previewPlaceholder">预览区</div>
+                <iframe id="previewIframe" style="display:none;"></iframe>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Icon picker popup overlay -->
+<div class="icon-popup" id="iconPopup" onclick="closeIconPicker()">
+    <div class="icon-popup-inner" onclick="event.stopPropagation()">
+        <div class="icon-popup-title">
+            <span>选择图标</span>
+            <button class="icon-popup-close" onclick="closeIconPicker()">✕</button>
+        </div>
+        <div class="icon-grid" id="iconGrid"></div>
+    </div>
+</div>
+
+<script>
+// ========== State ==========
+let cards = [];
+let selectedSize = 'portrait';
+let headerText = '';
+let footerText = '';
+let currentFile = '';  // 当前生成的 HTML 文件名
+
+// ========== 可编辑属性选项 ==========
+const SHAPE_OPTIONS = [
+  { value: 'list', label: '列表' },
+  { value: 'flow', label: '流程' },
+  { value: 'grid', label: '网格' },
+  { value: 'compare', label: '对比' },
+];
+const DENSITY_OPTIONS = [
+  { value: 'low', label: '低密度' },
+  { value: 'medium', label: '中密度' },
+  { value: 'high', label: '高密度' },
+];
+const ICON_DATA = [
+  { en:'rocket', emoji:'🚀', zh:'火箭' },
+  { en:'architecture', emoji:'🏗️', zh:'架构' },
+  { en:'shield', emoji:'🛡️', zh:'盾牌' },
+  { en:'chart', emoji:'📊', zh:'图表' },
+  { en:'workflow', emoji:'🔄', zh:'流程' },
+  { en:'code', emoji:'💻', zh:'代码' },
+  { en:'cloud', emoji:'☁️', zh:'云' },
+  { en:'database', emoji:'🗄️', zh:'数据' },
+  { en:'team', emoji:'👥', zh:'团队' },
+  { en:'target', emoji:'🎯', zh:'目标' },
+  { en:'lightbulb', emoji:'💡', zh:'灵感' },
+  { en:'scale', emoji:'⚖️', zh:'对比' },
+  { en:'clock', emoji:'🕐', zh:'时间' },
+  { en:'puzzle', emoji:'🧩', zh:'模块' },
+  { en:'gear', emoji:'⚙️', zh:'设置' },
+  { en:'star', emoji:'⭐', zh:'星标' },
+  { en:'flag', emoji:'🏁', zh:'标志' },
+  { en:'layers', emoji:'📚', zh:'层叠' },
+  { en:'compare', emoji:'↔️', zh:'对照' },
+  { en:'network', emoji:'🌐', zh:'网络' },
+  { en:'file', emoji:'📄', zh:'文件' },
+  { en:'search', emoji:'🔍', zh:'搜索' },
+  { en:'check', emoji:'✅', zh:'确认' },
+  { en:'robot', emoji:'🤖', zh:'机器人' },
+  { en:'filter', emoji:'🗂️', zh:'过滤' },
+  { en:'download', emoji:'📥', zh:'下载' },
+  { en:'book', emoji:'📖', zh:'书本' },
+  { en:'newspaper', emoji:'📰', zh:'新闻' },
+  { en:'calendar', emoji:'📅', zh:'日历' },
+];
+function getIconInfo(name) { return ICON_DATA.find(d=>d.en===name) || ICON_DATA.find(d=>d.en==='star'); }
+
+// ========== Samples ==========
+const samples = {
+    ai_news: `# AI 新闻聚合引擎
+## 核心亮点 · Vibe Coding开发流程
+- 需求对齐：我+元宝+OpenClaw+Trae四方针全链路对齐规则
+- 文档落地：所有决策输出标准化开发文档，无信息差
+- 自动编码：Trae自动完成前后端全量代码编写
+- 上线部署：AI辅助测试+部署，全程仅需做决策
+
+## 产品定位
+- 通用聚合引擎，可自定义任意领域信源
+- 当前配置211个AI领域分级信源
+- 随时更换行业信源，完全私人定制
+- 零散资讯自动同步个人知识库
+
+## 核心价值
+- 境外源直连，无需梯子自动缓存全文
+- 5维智能评分，仅展示≥70分高价值内容
+- 每日8点生成行业动态，5分钟速览
+- 支持Markdown导出，同步Obsidian
+
+## 技术架构优势
+- 双LLM降本策略：简单任务用DeepSeek V3.2，复杂推理用V4 Pro，算力成本降低80%，响应速度提升40%
+- 双层内容去重：第一层URL匹配去重，第二层语义向量相似度校验，综合去重准确率达98%
+- 分级规则管控：信源分S/A/B三级阈值准入，完全规则驱动过滤，无LLM幻觉干扰，内容可信度100%可控
+
+## 全自动化内容生产流程
+- 每日8:00定时触发
+- 拉取200-300条信源内容
+- URL+语义双层去重预筛
+- 5维评分阈值判断
+- 优质内容入库自动生成日报
+
+## 多场景适配能力
+- 网页端多维度筛选、关键词搜索、自定义标签分类，一键导出Markdown格式笔记
+- 开放无鉴权API接口，可接入个人开发工具/AI Agent作为实时资讯源
+- 支持对接Claude、Cursor等AI工具，提供最新行业动态作为上下文，提升AI输出时效性`,
+    team: `# 团队协作工具
+## 核心功能
+- 实时多人协作编辑
+- 历史版本回溯
+- 评论与批注
+- 一键分享链接
+
+## 安全特性
+- 端到端加密
+- 细粒度权限控制
+- 操作日志审计
+- 异地容灾备份
+
+## 集成能力
+- 对接 Slack/Discord 消息推送
+- GitHub/GitLab 提交自动同步
+- 支持 Webhook 自定义触发
+- OpenAPI 完整覆盖
+`
+};
+
+function loadSample(key) {
+    document.getElementById('articleInput').value = samples[key];
+    updateStep(1);
+}
+
+function clearAll() {
+    document.getElementById('articleInput').value = '';
+    cards = [];
+    headerText = '';
+    footerText = '';
+    renderCards();
+    hidePreview();
+    updateStep(1);
+}
+
+function toggleGuide() {
+    document.getElementById('guide').classList.toggle('show');
+}
+
+// ========== Step navigation ==========
+function updateStep(n) {
+    for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById('step' + i);
+        el.classList.remove('active', 'done');
+        if (i < n) el.classList.add('done');
+        if (i === n) el.classList.add('active');
+    }
+}
+
+// ========== Status ==========
+function showStatus(msg, type) {
+    const bar = document.getElementById('statusBar');
+    bar.className = 'status-bar show status-' + type;
+    bar.textContent = msg;
+}
+
+// ========== API: extract cards ==========
+async function extractCards() {
+    const content = document.getElementById('articleInput').value.trim();
+    if (!content) { showStatus('请先输入文章内容', 'err'); return; }
+
+    const btn = document.getElementById('extractBtn');
+    btn.disabled = true;
+    btn.textContent = '分析中...';
+    const apiBase = location.protocol + '//' + location.host;
+    showStatus('⏳ 正在分析... API: ' + apiBase + '/api/extract', 'info');
+
+    try {
+        console.log('[extract] 发送请求，API:', apiBase + '/api/extract', '内容长度:', content.length, '详略:', selectedDetailLevel);
+        const resp = await fetch(apiBase + '/api/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, detail_level: selectedDetailLevel })
+        });
+        console.log('[extract] 响应状态:', resp.status, resp.statusText);
+        const text = await resp.text();
+        console.log('[extract] 原始响应:', text.substring(0, 300));
+        const result = JSON.parse(text);
+        console.log('[extract] 解析结果 success=', result.success, 'cards=', (result.cards||[]).length);
+        if (result.success) {
+            cards = result.cards || [];
+            headerText = result.header || '';
+            footerText = result.footer || '';
+            document.getElementById('llmBadge').textContent = result.llm || 'mock';
+            renderCards();
+            showStatus('✅ 拆出 ' + cards.length + ' 张卡片，请确认后生成海报', 'ok');
+            updateStep(3);
+            document.getElementById('generateBtn').disabled = false;
+        } else {
+            showStatus('❌ 服务器返回失败：' + (result.error || '未知错误'), 'err');
+            console.error('[extract] 失败:', result);
+        }
+    } catch (e) {
+        showStatus('❌ 请求失败：' + e.message + '（检查端口/网络）', 'err');
+        console.error('[extract] 异常:', e);
+    }
+    btn.disabled = false;
+    btn.textContent = '🔍 分析拆卡片';
+}
+
+// ========== Render card list ==========
+function renderCardPreview(c, idx) {
+    const shape = c.content_shape || 'list';
+    const density = DENSITY_OPTIONS.find(o=>o.value===c.density)?.label||'中密度';
+    const icon = getIconInfo(c.icon||'star');
+    const items = c.items || [];
+    const n = items.length;
+    const hint = shape==='flow'||shape==='grid'||shape==='compare'||c.density==='high'
+        ? '独占整行' : '可双列拼车';
+
+    let body = '';
+    if (shape === 'flow') {
+        // 流程：横向步骤 + 箭头
+        let steps = '';
+        for (let i=0; i<Math.min(n,5); i++) {
+            const it = items[i];
+            const label = (it?.bold||it?.text||'').slice(0,6);
+            steps += `<span class="mp-box">${label||(i+1)}</span>`;
+            if (i<Math.min(n,5)-1) steps += `<span class="mp-arrow">→</span>`;
+        }
+        body = `<div class="mp-flow-row">${steps}</div>`;
+    } else if (shape === 'grid') {
+        // 网格：3 个小格，显示 bold 标题 + text 描述
+        let cells = '';
+        for (let i=0; i<Math.min(n,3); i++) {
+            const it = items[i];
+            cells += `<div class="mp-grid-cell">
+                <div class="title">${icon.emoji} ${esc((it?.bold||'').slice(0,8))}</div>
+                <div class="desc">${esc(it?.text||it?.desc||'')}</div>
+            </div>`;
+        }
+        body = `<div class="mp-grid-row">${cells}</div>`;
+    } else if (shape === 'compare') {
+        // 对比：左右两栏 + VS
+        const mid = Math.ceil(n/2);
+        let left = '', right = '';
+        for (let i=0; i<Math.min(mid,3); i++) {
+            const it = items[i];
+            left += `<div class="mp-item">${icon.emoji} ${esc(it?.text||it?.desc||'')}</div>`;
+        }
+        for (let i=mid; i<Math.min(n, mid+3); i++) {
+            const it = items[i];
+            right += `<div class="mp-item">${icon.emoji} ${esc(it?.text||it?.desc||'')}</div>`;
+        }
+        body = `<div class="mp-compare-row">
+            <div class="mp-compare-col">${left||'&nbsp;'}</div>
+            <div style="display:flex;align-items:center;"><span class="mp-vs">VS</span></div>
+            <div class="mp-compare-col">${right||'&nbsp;'}</div>
+        </div>`;
+    } else if (c.density==='high' && c.badge) {
+        // 高亮：渐变背景感 + 左要点 + 右徽章
+        let leftItems = '';
+        for (let i=0; i<Math.min(n,3); i++) {
+            const it = items[i];
+            leftItems += `<div class="mp-item">${icon.emoji} ${esc(it?.text||it?.desc||'')}</div>`;
+        }
+        body = `<div class="mp-highlight-box">
+            <div class="mp-highlight-left">${leftItems}</div>
+            <div class="mp-highlight-badge">${esc((c.badge||'').slice(0,8))}</div>
+        </div>`;
+    } else {
+        // 列表：图标 + 文字纵向，最多显示 4 条
+        for (let i=0; i<Math.min(n,4); i++) {
+            const it = items[i];
+            body += `<div class="mp-item">${icon.emoji} ${esc(it?.text||it?.desc||'')}</div>`;
+        }
+    }
+
+    return `<div class="mini-preview">
+        <div class="mp-header">
+            <span class="mp-num">${String(idx+1).padStart(2,'0')}</span>
+            <span>${esc(c.title)}</span>
+        </div>
+        <div class="mp-body">${body}</div>
+        <div class="mp-info">
+            <span style="color:#165DFF;font-weight:600;">${SHAPE_OPTIONS.find(o=>o.value===shape)?.label}</span>
+            · ${density} · ${icon.emoji}${icon.zh}
+            <span class="mp-hint" style="margin-left:auto;">${hint}</span>
+        </div>
+    </div>`;
+}
+
+// Icon picker
+let _pickIconTarget = -1;
+function openIconPicker(i) {
+    _pickIconTarget = i;
+    const grid = document.getElementById('iconGrid');
+    const cur = cards[i].icon || 'star';
+    grid.innerHTML = ICON_DATA.map(d =>
+        `<div class="icon-cell ${d.en===cur?'selected':''}" onclick="pickIcon(${i},'${d.en}')">
+            <span class="emoji">${d.emoji}</span>
+            <span class="iname">${d.zh}</span>
+        </div>`
+    ).join('');
+    document.getElementById('iconPopup').classList.add('show');
+}
+function closeIconPicker() {
+    document.getElementById('iconPopup').classList.remove('show');
+}
+function pickIcon(i, name) {
+    cards[i].icon = name;
+    closeIconPicker();
+    renderCards();
+    // 保持编辑区展开
+    setTimeout(() => {
+        const el = document.getElementById('edit' + i);
+        if (el) el.style.display = 'block';
+    }, 0);
+}
+
+function renderCards() {
+    const container = document.getElementById('cardList');
+    document.getElementById('cardCount').textContent = cards.length ? '(' + cards.length + '张)' : '';
+
+    if (!cards.length) {
+        container.innerHTML = '<div style="color:#d1d5db; text-align:center; padding-top:40px; font-size:14px;">尚未拆卡片<br><span style="font-size:12px;">请先粘贴文章内容，再点击"分析拆卡片"按钮</span></div>';
+        return;
+    }
+
+    try {
+    container.innerHTML = cards.map((c, i) => {
+        const icon = getIconInfo(c.icon || 'star');
+        const badge = c.badge || '';
+        const badgeChecked = !!badge ? 'checked' : '';
+        const isFlow = c.content_shape === 'flow';
+        return `
+        <div class="card-item ${i === 0 ? 'selected' : ''}" id="card${i}">
+            <div class="card-title" onclick="toggleCardEdit(${i})">
+                ${String(i+1).padStart(2,'0')}. ${esc(c.title)}
+                <span style="float:right; font-size:10px; color:#9ca3af; font-weight:400;">▾ 编辑</span>
+            </div>
+            <div class="card-edit" id="edit${i}" style="display:none;">
+                ${renderCardPreview(c, i)}
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="font-size:11px;color:#6b7280;">性质</span>
+                        <select onchange="updateCardAndRefresh(${i},'content_shape',this.value)" style="padding:3px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;background:white;color:#374151;">
+                            ${SHAPE_OPTIONS.map(o => `<option value="${o.value}" ${c.content_shape===o.value?'selected':''}>${o.label}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="font-size:11px;color:#6b7280;">密度</span>
+                        <select onchange="updateCardAndRefresh(${i},'density',this.value)" style="padding:3px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;background:white;color:#374151;">
+                            ${DENSITY_OPTIONS.map(o => `<option value="${o.value}" ${c.density===o.value?'selected':''}>${o.label}</option>`).join('')}
+                        </select>
+                    </div>
+                    ${isFlow ? `<span style="font-size:10px;color:#9ca3af;">流程步骤自动匹配图标</span>` : `
+                    <div style="display:flex;align-items:center;gap:4px;">
+                        <span style="font-size:11px;color:#6b7280;">图标</span>
+                        <span class="icon-trigger" onclick="event.stopPropagation(); openIconPicker(${i})">${icon.emoji} ${icon.zh} ▾</span>
+                    </div>`}
+                </div>
+                <!-- 徽章 -->
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+                    <label style="font-size:11px;color:#6b7280;display:flex;align-items:center;gap:3px;cursor:pointer;" onclick="toggleBadge(${i})">
+                        <input type="checkbox" ${badgeChecked} onchange="event.stopPropagation(); toggleBadge(${i})"> 徽章
+                    </label>
+                    ${badge ? `<select onchange="updateCardAndRefresh(${i},'badge_mode',this.value)" style="padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:10px;background:white;color:#374151;">
+                        <option value="highlight" ${c.badge_mode!='float'?'selected':''}>大徽章（渐变背景）</option>
+                        <option value="float" ${c.badge_mode==='float'?'selected':''}>小浮标（右上角）</option>
+                    </select>` : ''}
+                    <input type="text" id="badgeInput${i}" value="${esc(badge)}"
+                        placeholder="输入徽章文字，留空取消"
+                        style="flex:1;padding:3px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;min-width:100px;"
+                        oninput="updateCard(${i},'badge',this.value||null)">
+                </div>
+                <!-- 内容详略（单卡片） -->
+                <div style="display:flex;align-items:center;gap:4px;margin-top:4px;">
+                    <span style="font-size:10px;color:#9ca3af;">详略</span>
+                    <button class="btn btn-sm btn-secondary" style="padding:1px 6px;font-size:10px;"
+                        onclick="event.stopPropagation(); enrichCardLevel(${i},'compact')">简洁</button>
+                    <button class="btn btn-sm btn-secondary" style="padding:1px 6px;font-size:10px;"
+                        onclick="event.stopPropagation(); enrichCardLevel(${i},'medium')">适中</button>
+                    <button class="btn btn-sm btn-secondary" style="padding:1px 6px;font-size:10px;"
+                        onclick="event.stopPropagation(); enrichCardLevel(${i},'detailed')">详细</button>
+                </div>
+            </div>
+            <div class="card-meta">
+                <span class="meta-shape">${SHAPE_OPTIONS.find(o=>o.value===c.content_shape)?.label||c.content_shape}</span>
+                <span class="meta-density-${c.density}">${DENSITY_OPTIONS.find(o=>o.value===c.density)?.label||c.density}</span>
+                <span style="background:#f0f7ff;color:#165DFF;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;">${icon.emoji} ${icon.zh}</span>
+                ${badge ? '<span style="background:#fce7f3; color:#9d174d;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;">🏷 '+esc(badge)+'</span>' : ''}
+            </div>
+            <ul class="card-items">
+                ${(c.items||[]).map(it => '<li>' + esc(it.text || it.desc || '') + '</li>').join('')}
+            </ul>
+        </div>`;
+    }).join('');
+    } catch (e) {
+        console.error('[renderCards] 渲染异常:', e);
+        container.innerHTML = '<div style="color:#dc2626; text-align:center; padding-top:20px;">渲染出错：' + e.message + '</div>';
+    }
+}
+
+function toggleCardEdit(i) {
+    const el = document.getElementById('edit' + i);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    selectCard(i);
+}
+
+function updateCard(i, field, value) {
+    cards[i][field] = value;
+    if (field === 'badge') {
+        const cb = document.querySelector(`#edit${i} input[type=checkbox]`);
+        if (cb) cb.checked = !!value;
+    }
+}
+
+function updateCardAndRefresh(i, field, value) {
+    cards[i][field] = value;
+    // flow 类型切换为 flow 时自动清除 icon（flow 用自动匹配图标）
+    if (field === 'content_shape' && value === 'flow') {
+        cards[i].icon = 'star';  // flow 不依赖卡片级 icon
+    }
+    renderCards();
+    // 保持编辑区展开
+    const el = document.getElementById('edit' + i);
+    if (el) el.style.display = 'block';
+}
+
+function toggleBadge(i) {
+    const input = document.getElementById('badgeInput' + i);
+    const cb = document.querySelector(`#edit${i} input[type=checkbox]`);
+    if (cb && !cb.checked) {
+        updateCard(i, 'badge', '');
+        cb.checked = true;
+        setTimeout(() => input.focus(), 50);
+    } else {
+        updateCard(i, 'badge', null);
+        if (cb) cb.checked = false;
+        if (input) input.value = '';
+    }
+    renderCards();
+    const el = document.getElementById('edit' + i);
+    if (el) el.style.display = 'block';
+}
+
+function selectCard(i) {
+    document.querySelectorAll('.card-item').forEach(el => el.classList.remove('selected'));
+    document.getElementById('card' + i)?.classList.add('selected');
+}
+
+function esc(s) { return (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ========== Size selection ==========
+function selectSize(type) {
+    selectedSize = type;
+    document.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('.size-btn[data-type="'+type+'"]').classList.add('active');
+}
+
+// ========== API: generate poster ==========
+async function generatePoster() {
+    if (!cards.length) { showStatus('请先拆卡片', 'err'); return; }
+
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.textContent = '生成中...';
+    const apiBase = location.protocol + '//' + location.host;
+    showStatus('⏳ 装箱 + 渲染中（' + (selectedSize==='portrait'?'竖版':'横版') + '）...', 'info');
+    updateStep(4);
+
+    try {
+        const autoHeight = document.getElementById('autoHeightCheck').checked;
+        const resp = await fetch(apiBase + '/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cards, canvas: selectedSize, header: headerText, footer: footerText, theme: document.getElementById('themeSelect').value, auto_height: autoHeight })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            showStatus('✅ 生成完成', 'ok');
+            currentFile = result.url;
+            showPreview(result.url);
+            document.getElementById('downloadPngBtn').style.display = 'inline-flex';
+            document.getElementById('downloadHtmlBtn').style.display = 'inline-flex';
+        } else {
+            showStatus('❌ 生成失败：' + result.error, 'err');
+        }
+    } catch (e) {
+        showStatus('❌ 请求失败：' + e.message, 'err');
+    }
+    btn.disabled = false;
+    btn.textContent = '🚀 生成海报';
+}
+
+function showPreview(url) {
+    document.getElementById('previewPlaceholder').style.display = 'none';
+    const iframe = document.getElementById('previewIframe');
+    iframe.src = '/output/' + url;
+    iframe.style.display = 'block';
+}
+
+function hidePreview() {
+    document.getElementById('previewPlaceholder').style.display = 'flex';
+    document.getElementById('previewIframe').style.display = 'none';
+    document.getElementById('generateBtn').disabled = true;
+    document.getElementById('downloadPngBtn').style.display = 'none';
+    document.getElementById('downloadHtmlBtn').style.display = 'none';
+    updateStep(1);
+}
+
+async function downloadPng() {
+    if (!currentFile) return;
+    const btn = document.getElementById('downloadPngBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 截图中...';
+    try {
+        const apiBase = location.protocol + '//' + location.host;
+        const autoHeight = document.getElementById('autoHeightCheck').checked;
+        const resp = await fetch(apiBase + '/api/screenshot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file: currentFile, canvas: selectedSize, auto_height: autoHeight })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            // 触发浏览器下载
+            const a = document.createElement('a');
+            a.href = '/' + result.url;
+            a.download = '海报_' + new Date().toISOString().slice(0,10) + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showStatus('✅ PNG 下载完成', 'ok');
+        } else {
+            showStatus('❌ 截图失败：' + (result.error || ''), 'err');
+        }
+    } catch (e) {
+        showStatus('❌ 截图失败：' + e.message, 'err');
+    }
+    btn.disabled = false;
+    btn.textContent = '📥 下载 PNG';
+}
+
+function downloadHtml() {
+    if (!currentFile) return;
+    const a = document.createElement('a');
+    a.href = '/' + currentFile;
+    a.download = '海报_' + new Date().toISOString().slice(0,10) + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showStatus('✅ HTML 下载完成', 'ok');
+}
+
+// ========== 内容详略控制 ==========
+let selectedDetailLevel = 'medium';
+async function setDetailLevel(level) {
+    selectedDetailLevel = level;
+    document.querySelectorAll('.detail-btn').forEach(b => b.classList.toggle('active', b.dataset.level === level));
+    const labels = { compact: '简洁', medium: '适中', detailed: '详细' };
+    document.getElementById('detailLabel').textContent = labels[level];
+    // 只在已有卡片的基础上调整内容详略，不重新拆卡
+    if (!cards || cards.length === 0) {
+        showStatus('内容详略设为: ' + labels[level] + '（请先分析文章）', 'ok');
+        return;
+    }
+    showStatus('⏳ 内容详略设为: ' + labels[level] + '，处理中...', 'info');
+    try {
+        const apiBase = location.protocol + '//' + location.host;
+        const resp = await fetch(apiBase + '/api/enrich_all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cards: cards, level: level })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            cards = result.cards;
+            renderCards();
+            showStatus('✅ 所有卡片已设为: ' + labels[level] + '（卡片数量不变：' + cards.length + '张）', 'ok');
+        } else {
+            showStatus('❌ ' + (result.error || '处理失败'), 'err');
+        }
+    } catch (e) {
+        showStatus('❌ 网络错误: ' + e.message, 'err');
+    }
+}
+
+// ========== 单卡片内容详略 ==========
+async function enrichCardLevel(idx, level) {
+    const labels = { compact: '简洁', medium: '适中', detailed: '详细' };
+    showStatus('⏳ 第' + (idx+1) + '张卡片设为: ' + labels[level] + '...', 'info');
+    try {
+        const apiBase = location.protocol + '//' + location.host;
+        const resp = await fetch(apiBase + '/api/enrich', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ card: cards[idx], level: level })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            cards[idx] = result.card;
+            renderCards();
+            // 保持编辑区展开
+            setTimeout(() => {
+                const el = document.getElementById('edit' + idx);
+                if (el) el.style.display = 'block';
+            }, 0);
+            showStatus('✅ 第' + (idx+1) + '张卡片已设为: ' + labels[level], 'ok');
+        } else {
+            showStatus('❌ ' + (result.error || '失败'), 'err');
+        }
+    } catch(e) {
+        showStatus('❌ ' + e.message, 'err');
+    }
+}
+</script>
+</body>
+</html>
