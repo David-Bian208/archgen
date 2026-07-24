@@ -1,0 +1,33 @@
+# 排布 (PaiBu) 配置文件
+app:
+  name: "排布 PaiBu"
+  host: "0.0.0.0"
+  port: 8090
+  debug: false
+  output_dir: "output"
+  log_dir: "logs"
+
+llm:
+  # DeepSeek API 密钥（优先从环境变量 DEEPSEEK_API_KEY 读取）
+  # api_key: "sk-xxxxx"
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-v4-flash"
+  timeout: 120
+  retry_times: 3
+  temperature: 0.1
+
+cors:
+  allow_origins:
+    - "*"
+
+# 卡片排版限制
+canvas:
+  portrait:
+    width: 750
+    max_rows: 16
+  landscape:
+    width: 1200
+    max_rows: 5
+  square:
+    width: 800
+    max_rows: 6
